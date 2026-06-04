@@ -499,27 +499,54 @@ h1 {
   filter: drop-shadow(0 2px 6px #0004);
 }
 
+/* ---- always-reachable Stop bar while live (no scrolling up needed) ---- */
+.stopbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  background: linear-gradient(0deg, var(--bg) 72%, transparent);
+  pointer-events: none; /* let taps through the transparent fade… */
+}
+.stopbar-btn {
+  width: 100%;
+  max-width: calc(var(--maxw) - 32px);
+  min-height: 56px;
+  font-size: 16px;
+  pointer-events: auto; /* …but the button is tappable */
+  box-shadow: 0 8px 24px -8px #000a;
+}
+
 /* ---- transcript ---- */
 .transcript {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
 }
 .turn {
   display: flex;
   gap: 10px;
-  font-size: 15.5px;
+  font-size: 16px;
   align-items: baseline;
 }
 .turn-who {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.06em;
   color: var(--faint);
-  min-width: 38px;
-  padding-top: 2px;
+  min-width: 36px;
+  padding-top: 3px;
+}
+/* Roomy line spacing so mixed 日本語＋中文 isn't a dense wall of text. */
+.turn-text {
+  line-height: 1.9;
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
 }
 .turn--you .turn-text {
   color: var(--you);

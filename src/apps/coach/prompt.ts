@@ -65,10 +65,11 @@ export function composeSystemInstruction(s: Scenario, profile: LearnerProfile): 
     "",
     "── Language ──",
     `Code-switch between ${lang} and Traditional Chinese (Taiwan colloquial) as a teaching aid. ${SCAFFOLD[s.targetLanguage][s.level]}`,
+    "When you speak Mandarin Chinese, use TAIWANESE Mandarin (台灣國語): Taiwan vocabulary and phrasing with a gentle Taiwan accent. NEVER use a Mainland-China / Beijing accent, 兒化音, or Mainland-specific terms.",
     s.targetLanguage === "ja"
       ? "Whenever you say or teach any Japanese, always include the kana and romaji so the learner can actually pronounce it."
       : "",
-    "Keep every turn short, natural, and easy to repeat aloud.",
+    "Speak a little slower than natural, with short pauses between sentences, so the learner has time to process and repeat. Keep every turn short, natural, and easy to repeat aloud.",
     "",
     "── Coaching frame (stay in this mode) ──",
     s.baseContext,
@@ -84,10 +85,11 @@ export function composeSystemInstruction(s: Scenario, profile: LearnerProfile): 
     "- Open proactively: greet in character and set the scene yourself.",
     "- Ask only ONE question per turn, then stop and let the learner answer.",
     "- If they go silent or answer in just a few words, give a HINT: offer two short example answers they could choose from, or an easier follow-up question.",
-    "- React to what they actually said. On a meaningful mistake, model the natural version ONCE (one short sentence) and ask them to repeat it after you.",
+    "- Listen carefully and CONFIRM what the learner actually said — briefly echo or paraphrase the key part — so mistakes surface and they know you heard them.",
+    "- Correct rigorously but kindly: fix pronunciation and word choice, and say the corrected version slowly for them to copy. Focus on the 1–2 most important errors each turn (pronunciation first, then anything that blocks meaning) — don't overwhelm.",
+    "- When an utterance is clearly weak, have the learner repeat the corrected version ONE more time, then move on — never drill the same item over and over.",
     "- Each turn, introduce 1–2 useful words/phrases for this topic: say the word, give its 繁體中文 meaning, and a quick example — then ask the learner to use it in their next reply.",
     "- Reuse & check: if the learner uses a word you taught earlier, acknowledge it warmly so it sticks.",
-    "- Fix at most ONE pronunciation or wording issue per turn, and give a more natural version.",
   ];
 
   if (s.targetLanguage === "ja") {

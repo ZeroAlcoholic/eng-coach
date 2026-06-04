@@ -13,6 +13,7 @@ import { putItems, putScenario, putSession } from "../../kernel/db";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
 import { extractLearnedItems, summariseSession, type SessionReview } from "./ai";
 import { composeSystemInstruction } from "./prompt";
+import { pickVoice } from "./voices";
 
 const LIVE_MODEL = "gemini-3.1-flash-live-preview";
 
@@ -85,6 +86,7 @@ export function Practice(props: {
       apiKey,
       model: LIVE_MODEL,
       systemInstruction: composeSystemInstruction(scenario, profile),
+      voiceName: pickVoice(scenario.targetLanguage),
       handlers: {
         onOpen: () => setStatus("live"),
         onAudio: (pcm) => engineRef.current?.playPcm(pcm),
@@ -200,9 +202,15 @@ export function Practice(props: {
           {status === "saving" ? (
             <p className="muted">正在分析本次練習…</p>
           ) : status === "live" ? (
-            <button className="mic-btn mic-btn--stop mic-btn--live" onClick={stopAndFinalize}>
-              <span className="mic-emoji">⏹</span>
-              停止並儲存
+            // Green pulsing orb = "listening" (status). Stopping is the red bar
+            // pinned at the bottom; tapping the orb also stops, as a backup.
+            <button
+              className="mic-btn mic-btn--live"
+              onClick={stopAndFinalize}
+              aria-label="聆聽中，點擊或用下方按鈕停止"
+            >
+              <span className="mic-emoji">👂</span>
+              聆聽中…
             </button>
           ) : (
             <button className="mic-btn" onClick={start} disabled={status === "connecting"}>
@@ -244,6 +252,18 @@ export function Practice(props: {
           </div>
         ))}
       </div>
+
+      {/* Always-reachable Stop while live — no scrolling back up to the orb. */}
+      {status === "live" && (
+        <>
+          <div style={{ height: 96 }} aria-hidden />
+          <div className="stopbar">
+            <button className="btn btn--danger stopbar-btn" onClick={stopAndFinalize}>
+              ■ 停止並儲存
+            </button>
+          </div>
+        </>
+      )}
     </main>
   );
 }

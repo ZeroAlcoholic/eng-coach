@@ -32,6 +32,7 @@ export interface GeminiDirectOptions {
   apiKey: string;
   model: string;
   systemInstruction: string;
+  voiceName?: string; // prebuilt Gemini voice; omitted = API default (Puck)
   handlers: GeminiDirectHandlers;
 }
 
@@ -57,11 +58,15 @@ export class GeminiLiveDirect {
       model: this.opts.model,
       config: {
         responseModalities: [Modality.AUDIO],
-        // Ask the API to transcribe both sides so the spike can prove the loop
-        // visually, not just audibly.
+        // Transcribe both sides so the UI can show the conversation.
         inputAudioTranscription: {},
         outputAudioTranscription: {},
         systemInstruction: this.opts.systemInstruction,
+        // Pick the speaker voice. Native-audio model => no languageCode (accent
+        // is voice + prompt driven). Omit speechConfig entirely if no voice.
+        ...(this.opts.voiceName
+          ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: this.opts.voiceName } } } }
+          : {}),
       },
       callbacks: {
         onopen: () => handlers.onOpen?.(),
