@@ -16,9 +16,14 @@ export function CoachApp() {
   const [practicing, setPracticing] = useState<Scenario | null>(null);
 
   async function reload() {
-    const [p, s] = await Promise.all([getProfile(), listScenarios()]);
-    setProfile(p);
-    setScenarios(s);
+    try {
+      const [p, s] = await Promise.all([getProfile(), listScenarios()]);
+      setProfile(p);
+      setScenarios(s);
+    } catch (e) {
+      // IndexedDB unavailable (e.g. storage blocked) — keep defaults, don't crash.
+      console.warn("kernel reload failed", e);
+    }
   }
 
   useEffect(() => {
@@ -32,7 +37,7 @@ export function CoachApp() {
 
   function onProfile(p: LearnerProfile) {
     setProfile(p);
-    void putProfile(p);
+    putProfile(p).catch((e) => console.warn("save profile failed", e));
   }
 
   if (practicing) {

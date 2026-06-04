@@ -5,7 +5,7 @@
 // In-car UX: one big circular mic button is the whole control surface — start
 // is a large green target, stop is a large red one, status is glanceable.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AudioEngine } from "../../audio/AudioEngine";
 import { GeminiLiveDirect } from "../../api/gemini-direct";
@@ -42,7 +42,19 @@ export function Practice(props: {
   const clientRef = useRef<GeminiLiveDirect | null>(null);
   const startedAtRef = useRef<string>("");
   const finalizingRef = useRef(false);
+  const startingRef = useRef(false); // guards the async start() window against re-entry
   const turnsRef = useRef<TranscriptTurn[]>([]);
+
+  // Authoritative safety net: tear down mic + WebSocket if the screen unmounts
+  // for any reason (not just the guarded Back button). finalizingRef is set so
+  // the resulting onClose doesn't try to setState on an unmounted component.
+  useEffect(() => {
+    return () => {
+      finalizingRef.current = true;
+      void teardown();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function pushDelta(who: TranscriptTurn["who"], text: string) {
     setTranscript((prev) => {
@@ -61,6 +73,8 @@ export function Practice(props: {
       setNotice("No API key — set it on the home screen first.");
       return;
     }
+    if (startingRef.current || clientRef.current) return; // ignore double taps / re-entry
+    startingRef.current = true;
     setStatus("connecting");
     setNotice("");
     setTranscript([]);
@@ -99,9 +113,14 @@ export function Practice(props: {
       await engine.start();
       engineRef.current = engine;
     } catch (err) {
-      setNotice(`Couldn't start: ${err instanceof Error ? err.message : String(err)}`);
+      // Silence the onClose our own teardown triggers, so the REAL cause
+      // (mic denied, bad key…) survives instead of "Connection closed".
+      finalizingRef.current = true;
       await teardown();
       setStatus("ready");
+      setNotice(`Couldn't start: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      startingRef.current = false;
     }
   }
 
@@ -113,40 +132,42 @@ export function Practice(props: {
   }
 
   async function stopAndFinalize() {
+    if (finalizingRef.current) return; // ignore double taps
     finalizingRef.current = true;
     await teardown();
+    setStatus("saving");
+
     const turns = turnsRef.current;
     const sessionId = crypto.randomUUID();
-    await putSession({
-      id: sessionId,
-      scenarioId: scenario.id,
-      startedAt: startedAtRef.current,
-      transcript: turns,
-    });
-
     const emptyReview: SessionReview = {
       cefr: scenario.level,
       reviewEn: "",
       reviewZh: "",
       progressNote: scenario.progressNote ?? "",
     };
-    if (!turns.length) {
-      setSummary({ items: 0, review: emptyReview });
-      setStatus("done");
-      return;
-    }
 
-    setStatus("saving");
     try {
-      const [items, review] = await Promise.all([
-        extractLearnedItems(apiKey, { scenario, sessionId, transcript: turns }),
-        summariseSession(apiKey, { transcript: turns, level: scenario.level, previous: scenario.progressNote }),
-      ]);
-      if (items.length) await putItems(items);
-      await putScenario({ ...scenario, progressNote: review.progressNote });
-      setSummary({ items: items.length, review });
+      // Save the transcript first (cheap, local) so a later AI/analysis failure
+      // never loses the session.
+      await putSession({
+        id: sessionId,
+        scenarioId: scenario.id,
+        startedAt: startedAtRef.current,
+        transcript: turns,
+      });
+      if (turns.length) {
+        const [items, review] = await Promise.all([
+          extractLearnedItems(apiKey, { scenario, sessionId, transcript: turns }),
+          summariseSession(apiKey, { transcript: turns, level: scenario.level, previous: scenario.progressNote }),
+        ]);
+        if (items.length) await putItems(items);
+        await putScenario({ ...scenario, progressNote: review.progressNote });
+        setSummary({ items: items.length, review });
+      } else {
+        setSummary({ items: 0, review: emptyReview });
+      }
     } catch (err) {
-      setNotice(`Saved, but analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`Saved with issues: ${err instanceof Error ? err.message : String(err)}`);
       setSummary({ items: 0, review: emptyReview });
     }
     setStatus("done");
