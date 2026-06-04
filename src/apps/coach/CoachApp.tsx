@@ -27,6 +27,9 @@ export function CoachApp() {
   }
 
   useEffect(() => {
+    // Initial async load from IndexedDB. setState runs after the await (a later
+    // microtask), so this is not the synchronous cascading-render the rule guards.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void reload();
   }, []);
 

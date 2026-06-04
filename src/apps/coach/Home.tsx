@@ -5,7 +5,7 @@
 //   4. settings / data — export, import, change key (lower priority)
 // Scenario + level editing is front-and-centre; it's the most important control.
 
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import {
   CEFR_LEVELS,
@@ -34,6 +34,9 @@ export function Home(props: {
   const [brief, setBrief] = useState("");
   const [busy, setBusy] = useState("");
   const [editing, setEditing] = useState<Scenario | null>(null);
+  const newLangId = useId();
+  const newLevelId = useId();
+  const briefId = useId();
 
   async function withBusy(label: string, fn: () => Promise<void>) {
     setBusy(label);
@@ -188,15 +191,31 @@ export function Home(props: {
       <div className="card">
         <div className="row" style={{ marginBottom: 10 }}>
           <div className="grow">
-            <label className="label">Language</label>
-            <LangSelect value={profile.language} onChange={(language) => props.onProfile({ ...profile, language })} />
+            <label className="label" htmlFor={newLangId}>
+              Language
+            </label>
+            <LangSelect
+              id={newLangId}
+              value={profile.language}
+              onChange={(language) => props.onProfile({ ...profile, language })}
+            />
           </div>
           <div style={{ width: 96 }}>
-            <label className="label">Level</label>
-            <LevelSelect value={profile.level} onChange={(level) => props.onProfile({ ...profile, level })} />
+            <label className="label" htmlFor={newLevelId}>
+              Level
+            </label>
+            <LevelSelect
+              id={newLevelId}
+              value={profile.level}
+              onChange={(level) => props.onProfile({ ...profile, level })}
+            />
           </div>
         </div>
+        <label className="label" htmlFor={briefId}>
+          Brief
+        </label>
         <textarea
+          id={briefId}
           className="textarea"
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
@@ -246,9 +265,9 @@ export function Home(props: {
 
 // --- building blocks ---
 
-function LangSelect(props: { value: TargetLanguage; onChange: (v: TargetLanguage) => void }) {
+function LangSelect(props: { value: TargetLanguage; onChange: (v: TargetLanguage) => void; id?: string }) {
   return (
-    <select className="select" value={props.value} onChange={(e) => props.onChange(e.target.value as TargetLanguage)}>
+    <select id={props.id} className="select" value={props.value} onChange={(e) => props.onChange(e.target.value as TargetLanguage)}>
       {TARGET_LANGUAGES.map((l) => (
         <option key={l.id} value={l.id}>
           {l.label} ({l.hint})
@@ -258,9 +277,9 @@ function LangSelect(props: { value: TargetLanguage; onChange: (v: TargetLanguage
   );
 }
 
-function LevelSelect(props: { value: CEFRLevel; onChange: (v: CEFRLevel) => void }) {
+function LevelSelect(props: { value: CEFRLevel; onChange: (v: CEFRLevel) => void; id?: string }) {
   return (
-    <select className="select" value={props.value} onChange={(e) => props.onChange(e.target.value as CEFRLevel)}>
+    <select id={props.id} className="select" value={props.value} onChange={(e) => props.onChange(e.target.value as CEFRLevel)}>
       {CEFR_LEVELS.map((l) => (
         <option key={l} value={l}>
           {l}
@@ -298,51 +317,74 @@ function ScenarioEditor(props: {
   const set = (patch: Partial<Scenario>) => props.onChange({ ...s, ...patch });
   const lines = (v: string[]) => v.join("\n");
   const toLines = (t: string) => t.split("\n");
+  const f = useId(); // base id; each field derives `${f}-<name>`
 
   return (
     <div className="card" style={{ borderColor: "var(--primary)" }}>
-      <label className="label">Title</label>
-      <input className="input" value={s.title} onChange={(e) => set({ title: e.target.value })} />
+      <label className="label" htmlFor={`${f}-title`}>
+        Title
+      </label>
+      <input id={`${f}-title`} className="input" value={s.title} onChange={(e) => set({ title: e.target.value })} />
       <div className="row" style={{ margin: "10px 0" }}>
         <div className="grow">
-          <label className="label">Language</label>
-          <LangSelect value={s.targetLanguage} onChange={(targetLanguage) => set({ targetLanguage })} />
+          <label className="label" htmlFor={`${f}-lang`}>
+            Language
+          </label>
+          <LangSelect id={`${f}-lang`} value={s.targetLanguage} onChange={(targetLanguage) => set({ targetLanguage })} />
         </div>
         <div style={{ width: 96 }}>
-          <label className="label">Level</label>
-          <LevelSelect value={s.level} onChange={(level) => set({ level })} />
+          <label className="label" htmlFor={`${f}-level`}>
+            Level
+          </label>
+          <LevelSelect id={`${f}-level`} value={s.level} onChange={(level) => set({ level })} />
         </div>
       </div>
-      <label className="label">Layer 1 — coaching frame</label>
-      <textarea className="textarea" value={s.baseContext} onChange={(e) => set({ baseContext: e.target.value })} />
-      <label className="label" style={{ marginTop: 10 }}>
+      <label className="label" htmlFor={`${f}-base`}>
+        Layer 1 — coaching frame
+      </label>
+      <textarea
+        id={`${f}-base`}
+        className="textarea"
+        value={s.baseContext}
+        onChange={(e) => set({ baseContext: e.target.value })}
+      />
+      <label className="label" htmlFor={`${f}-content`} style={{ marginTop: 10 }}>
         Layer 2 — this session's context
       </label>
       <textarea
+        id={`${f}-content`}
         className="textarea"
         value={s.contentContext}
         onChange={(e) => set({ contentContext: e.target.value })}
       />
       <div className="row" style={{ margin: "10px 0" }}>
         <div className="grow">
-          <label className="label">Coach plays</label>
-          <input className="input" value={s.coachRole} onChange={(e) => set({ coachRole: e.target.value })} />
+          <label className="label" htmlFor={`${f}-coach`}>
+            Coach plays
+          </label>
+          <input id={`${f}-coach`} className="input" value={s.coachRole} onChange={(e) => set({ coachRole: e.target.value })} />
         </div>
         <div className="grow">
-          <label className="label">Learner plays</label>
-          <input className="input" value={s.userRole} onChange={(e) => set({ userRole: e.target.value })} />
+          <label className="label" htmlFor={`${f}-user`}>
+            Learner plays
+          </label>
+          <input id={`${f}-user`} className="input" value={s.userRole} onChange={(e) => set({ userRole: e.target.value })} />
         </div>
       </div>
-      <label className="label">Objectives (one per line)</label>
+      <label className="label" htmlFor={`${f}-obj`}>
+        Objectives (one per line)
+      </label>
       <textarea
+        id={`${f}-obj`}
         className="textarea"
         value={lines(s.objectives)}
         onChange={(e) => set({ objectives: toLines(e.target.value) })}
       />
-      <label className="label" style={{ marginTop: 10 }}>
+      <label className="label" htmlFor={`${f}-phrases`} style={{ marginTop: 10 }}>
         Target phrases (one per line)
       </label>
       <textarea
+        id={`${f}-phrases`}
         className="textarea"
         value={lines(s.targetPhrases)}
         onChange={(e) => set({ targetPhrases: toLines(e.target.value) })}

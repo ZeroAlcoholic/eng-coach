@@ -10,29 +10,29 @@
 @import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Hanken+Grotesk:wght@400;500;600;700&display=swap");
 
 :root {
-  /* surfaces — deep forest floor at night */
-  --bg: #08120d;
-  --bg-2: #0a1712;
-  --surface: #0f1f18;
-  --surface-2: #0b1813; /* input wells */
-  --surface-3: #16322426; /* raised tint */
-  --border: #1d3a2bcc;
-  --border-strong: #2c5740;
-  --hairline: #ffffff0f; /* top highlight on cards */
+  /* surfaces — near-black moss; contrast ratios (vs --bg) noted, WCAG checked */
+  --bg: #050b08; /* near-black forest floor (L≈0.003) */
+  --bg-2: #07110c;
+  --surface: #0e1c16; /* cards — clearly raised above bg */
+  --surface-2: #0a1610; /* input wells */
+  --surface-3: #16302339; /* raised tint (ghost btn) */
+  --border: #21402e;
+  --border-strong: #315f47; /* visible field edges in a bright car */
+  --hairline: #ffffff10; /* top highlight on cards */
 
-  /* text */
-  --text: #e9f1ea;
-  --muted: #93a99c;
-  --faint: #5f7568;
+  /* text — all AA+ on --bg */
+  --text: #eaf2ec; /* ~17:1 (AAA) */
+  --muted: #9bb0a3; /* ~8.6:1 (AAA) secondary */
+  --faint: #708877; /* ~5.2:1 (AA) placeholders / tiny labels */
 
   /* bioluminescent emerald */
-  --primary: #43d98a;
-  --primary-2: #6ff0ab;
-  --primary-ink: #042114;
+  --primary: #3fd384;
+  --primary-2: #62e6a0;
+  --primary-ink: #03160d; /* dark ink on the bright button — ~9.6:1 */
   --danger: #e08a76;
   --danger-ink: #240e08;
   --warn: #e7c266;
-  --you: #6fd6c4;
+  --you: #79d4c2;
   --coach: #8fe9ad;
 
   /* shadows / glow */
@@ -83,8 +83,8 @@ body {
   /* grain (cheap, baked-opacity layer) over layered emerald light + base */
   background-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E"),
-    radial-gradient(130% 70% at 85% -10%, #1f7a4e2e 0%, transparent 55%),
-    radial-gradient(120% 60% at -10% 108%, #0c5a3a2b 0%, transparent 55%),
+    radial-gradient(120% 65% at 88% -12%, #1f7a4e16 0%, transparent 52%),
+    radial-gradient(110% 55% at -12% 110%, #0c5a3a14 0%, transparent 52%),
     linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
   background-repeat: repeat, no-repeat, no-repeat, no-repeat;
   background-size: 140px 140px, auto, auto, auto;

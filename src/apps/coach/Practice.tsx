@@ -53,7 +53,6 @@ export function Practice(props: {
       finalizingRef.current = true;
       void teardown();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function pushDelta(who: TranscriptTurn["who"], text: string) {
