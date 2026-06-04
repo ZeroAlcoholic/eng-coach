@@ -19,11 +19,11 @@ const LIVE_MODEL = "gemini-3.1-flash-live-preview";
 type Status = "ready" | "connecting" | "live" | "saving" | "done";
 
 const STATUS_LABEL: Record<Status, string> = {
-  ready: "Ready",
-  connecting: "Connecting…",
-  live: "Listening",
-  saving: "Analysing…",
-  done: "Done",
+  ready: "準備好",
+  connecting: "連線中…",
+  live: "聆聽中",
+  saving: "分析中…",
+  done: "完成",
 };
 
 export function Practice(props: {
@@ -69,7 +69,7 @@ export function Practice(props: {
 
   async function start() {
     if (!apiKey) {
-      setNotice("No API key — set it on the home screen first.");
+      setNotice("尚未設定金鑰 — 請先在首頁設定。");
       return;
     }
     if (startingRef.current || clientRef.current) return; // ignore double taps / re-entry
@@ -91,12 +91,12 @@ export function Practice(props: {
         onInterrupted: () => engineRef.current?.flushPlayback(),
         onUserTranscript: (t) => pushDelta("user", t),
         onAssistantTranscript: (t) => pushDelta("coach", t),
-        onError: (m) => setNotice(`Error: ${m}`),
+        onError: (m) => setNotice(`錯誤：${m}`),
         onClose: () => {
           if (finalizingRef.current) return;
           void teardown();
           setStatus("ready");
-          setNotice("Connection closed — tap to resume.");
+          setNotice("連線中斷 — 點一下重新開始。");
         },
       },
     });
@@ -117,7 +117,7 @@ export function Practice(props: {
       finalizingRef.current = true;
       await teardown();
       setStatus("ready");
-      setNotice(`Couldn't start: ${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`無法開始：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       startingRef.current = false;
     }
@@ -166,7 +166,7 @@ export function Practice(props: {
         setSummary({ items: 0, review: emptyReview });
       }
     } catch (err) {
-      setNotice(`Saved with issues: ${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`已儲存，但分析失敗：${err instanceof Error ? err.message : String(err)}`);
       setSummary({ items: 0, review: emptyReview });
     }
     setStatus("done");
@@ -178,7 +178,7 @@ export function Practice(props: {
     <main className="app">
       <div className="topbar">
         <button className="btn btn--ghost btn--sm" onClick={props.onExit} disabled={busy}>
-          ← Back
+          ← 返回
         </button>
         <span className="grow" />
         <span className={`pill ${status === "live" ? "pill--live" : "pill--neutral"}`}>
@@ -198,16 +198,16 @@ export function Practice(props: {
       {status !== "done" && (
         <div className="practice-hero">
           {status === "saving" ? (
-            <p className="muted">Analysing your session…</p>
+            <p className="muted">正在分析本次練習…</p>
           ) : status === "live" ? (
             <button className="mic-btn mic-btn--stop mic-btn--live" onClick={stopAndFinalize}>
               <span className="mic-emoji">⏹</span>
-              Stop &amp; save
+              停止並儲存
             </button>
           ) : (
             <button className="mic-btn" onClick={start} disabled={status === "connecting"}>
               <span className="mic-emoji">🎙️</span>
-              {status === "connecting" ? "Connecting…" : "Start"}
+              {status === "connecting" ? "連線中…" : "開始"}
             </button>
           )}
         </div>
@@ -217,29 +217,29 @@ export function Practice(props: {
       {status === "done" && summary && (
         <div className="card" style={{ marginTop: 16 }}>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <b>Session saved</b>
+            <b>已儲存本次練習</b>
             <span className="pill pill--neutral">CEFR {summary.review.cefr}</span>
           </div>
           <p className="muted" style={{ marginTop: 8 }}>
-            {summary.items} vocabulary / phrase items added to your library.
+            已新增 {summary.items} 個單字／語句到你的詞庫。
           </p>
-          {summary.review.reviewEn && <p className="muted">{summary.review.reviewEn}</p>}
           {summary.review.reviewZh && <p className="muted">{summary.review.reviewZh}</p>}
+          {summary.review.reviewEn && <p className="muted">{summary.review.reviewEn}</p>}
           {summary.review.progressNote && (
-            <p className="muted">↪ Next time: {summary.review.progressNote}</p>
+            <p className="muted">↪ 下次重點：{summary.review.progressNote}</p>
           )}
           <button className="btn btn--primary btn--block" style={{ marginTop: 12 }} onClick={props.onExit}>
-            Done
+            完成
           </button>
         </div>
       )}
 
-      <div className="section-title">Transcript</div>
+      <div className="section-title">逐字稿</div>
       <div className="card transcript">
-        {transcript.length === 0 && <span className="muted">Your conversation will appear here…</span>}
+        {transcript.length === 0 && <span className="muted">對話會顯示在這裡…</span>}
         {transcript.map((t, i) => (
           <div key={i} className={`turn ${t.who === "user" ? "turn--you" : "turn--coach"}`}>
-            <span className="turn-who">{t.who === "user" ? "you" : "coach"}</span>
+            <span className="turn-who">{t.who === "user" ? "你" : "教練"}</span>
             <span className="turn-text">{t.text}</span>
           </div>
         ))}

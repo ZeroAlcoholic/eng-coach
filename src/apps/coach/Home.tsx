@@ -1,9 +1,9 @@
-// Home screen. Information architecture, mobile-first:
-//   1. (first run) connect the Gemini key
-//   2. your scenarios — the main content; Practice is a big full-width target
-//   3. create a new scenario from a brief (language + level live right here)
-//   4. settings / data — export, import, change key (lower priority)
-// Scenario + level editing is front-and-centre; it's the most important control.
+// 首頁（介面繁中；教學內容為英 / 日）。資訊架構，行動優先：
+//   1.（首次）連結 Gemini 金鑰
+//   2. 你的情境 — 主內容；依「最上角語言切換」過濾，整頁跟著切避免搞錯
+//   3. 範例情境 — 沒自建也能直接代入開練
+//   4. 新增情境（語言由切換決定，這裡選程度）
+//   5. 設定與資料
 
 import { useId, useState } from "react";
 
@@ -19,6 +19,9 @@ import {
 import { deleteScenario, putScenario } from "../../kernel/db";
 import { buildPack, buildScenarioPack, downloadFile, importPack, itemsToCsv, readTextFile } from "../../kernel/pack";
 import { generateScenario } from "./ai";
+import { DEFAULT_SCENARIOS } from "./defaults";
+
+const LANG_LABEL: Record<TargetLanguage, string> = { en: "英文", ja: "日本語" };
 
 export function Home(props: {
   apiKey: string;
@@ -30,13 +33,16 @@ export function Home(props: {
   onChanged: () => void;
 }) {
   const { apiKey, profile, scenarios } = props;
+  const lang = profile.language; // the active "mode" — set by the top toggle
   const [keyInput, setKeyInput] = useState("");
   const [brief, setBrief] = useState("");
   const [busy, setBusy] = useState("");
   const [editing, setEditing] = useState<Scenario | null>(null);
-  const newLangId = useId();
-  const newLevelId = useId();
+  const levelId = useId();
   const briefId = useId();
+
+  const mine = scenarios.filter((s) => s.targetLanguage === lang);
+  const samples = DEFAULT_SCENARIOS[lang].filter((d) => !scenarios.some((s) => s.id === d.id));
 
   async function withBusy(label: string, fn: () => Promise<void>) {
     setBusy(label);
@@ -44,19 +50,15 @@ export function Home(props: {
       await fn();
       setBusy("");
     } catch (err) {
-      setBusy(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setBusy(`錯誤：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   async function build() {
-    if (!apiKey) return setBusy("Connect your API key first.");
-    if (!brief.trim()) return setBusy("Paste a brief or import a Markdown file first.");
-    await withBusy("Building scenario…", async () => {
-      const sc = await generateScenario(apiKey, {
-        brief: brief.trim(),
-        language: profile.language,
-        level: profile.level,
-      });
+    if (!apiKey) return setBusy("請先連結 API 金鑰。");
+    if (!brief.trim()) return setBusy("請先貼上簡報或匯入 Markdown。");
+    await withBusy("建立情境中…", async () => {
+      const sc = await generateScenario(apiKey, { brief: brief.trim(), language: lang, level: profile.level });
       await putScenario(sc);
       setBrief("");
       props.onChanged();
@@ -68,7 +70,7 @@ export function Home(props: {
   }
 
   async function importPackFile(file: File) {
-    await withBusy("Importing pack…", async () => {
+    await withBusy("匯入中…", async () => {
       const pack = JSON.parse(await readTextFile(file)) as LearningPack;
       await importPack(pack);
       props.onChanged();
@@ -91,18 +93,27 @@ export function Home(props: {
   return (
     <main className="app">
       <div className="topbar">
-        <h1 style={{ fontSize: 18 }}>🎙️ Speaking Coach</h1>
+        <h1 style={{ fontSize: 18 }}>🎙️ 口說教練</h1>
         <span className="grow" />
-        <a className="btn btn--ghost btn--sm" href="index.html">
-          ← Tools
-        </a>
+        <div className="seg" role="group" aria-label="教學語言">
+          {TARGET_LANGUAGES.map((l) => (
+            <button
+              key={l.id}
+              className={`seg-btn ${lang === l.id ? "seg-on" : ""}`}
+              aria-pressed={lang === l.id}
+              onClick={() => props.onProfile({ ...profile, language: l.id })}
+            >
+              {l.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* 1. first-run key */}
+      {/* 1. 首次：金鑰 */}
       {!apiKey && (
         <div className="card" style={{ marginTop: 16 }}>
           <label className="label" htmlFor="key">
-            Connect your Gemini API key — stored only on this device
+            連結你的 Gemini API 金鑰 — 只存在這台裝置
           </label>
           <div className="row">
             <input
@@ -111,23 +122,25 @@ export function Home(props: {
               type="password"
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
-              placeholder="paste key"
+              placeholder="貼上金鑰"
             />
             <button className="btn btn--primary" onClick={() => props.onApiKey(keyInput)}>
-              Save
+              儲存
             </button>
           </div>
         </div>
       )}
 
-      {/* 2. scenarios */}
-      <div className="section-title">Your scenarios ({scenarios.length})</div>
-      {scenarios.length === 0 && (
+      {/* 2. 你的情境（依語言過濾） */}
+      <div className="section-title">
+        你的情境 · {LANG_LABEL[lang]}（{mine.length}）
+      </div>
+      {mine.length === 0 && (
         <div className="card">
-          <span className="muted">No scenarios yet — create your first one below ↓</span>
+          <span className="muted">還沒有{LANG_LABEL[lang]}情境 — 直接試下方範例，或在最下方建立。</span>
         </div>
       )}
-      {scenarios.map((sc) =>
+      {mine.map((sc) =>
         editing?.id === sc.id ? (
           <ScenarioEditor
             key={sc.id}
@@ -136,83 +149,61 @@ export function Home(props: {
             onCancel={() => setEditing(null)}
             onSave={async () => {
               const clean = (xs: string[]) => xs.map((x) => x.trim()).filter(Boolean);
-              await putScenario({
-                ...editing,
-                objectives: clean(editing.objectives),
-                targetPhrases: clean(editing.targetPhrases),
-              });
+              await putScenario({ ...editing, objectives: clean(editing.objectives), targetPhrases: clean(editing.targetPhrases) });
               setEditing(null);
               props.onChanged();
             }}
           />
         ) : (
-          <div key={sc.id} className="card">
-            <div className="scenario-title">{sc.title}</div>
-            <div className="row" style={{ marginBottom: 8 }}>
-              <span className="pill pill--neutral">{sc.targetLanguage.toUpperCase()}</span>
-              <span className="pill pill--neutral">CEFR {sc.level}</span>
-            </div>
-            <p className="scenario-ctx">{sc.contentContext}</p>
-            {sc.progressNote && (
-              <p className="muted" style={{ margin: "0 0 10px" }}>
-                ↪ {sc.progressNote}
-              </p>
-            )}
-            <button className="btn btn--primary btn--block" onClick={() => props.onPractice(sc)}>
-              ▶ Practice
-            </button>
-            <div className="row" style={{ marginTop: 8 }}>
-              <button className="btn btn--ghost btn--sm" onClick={() => setEditing(sc)}>
-                Edit
-              </button>
-              <button className="btn btn--ghost btn--sm" onClick={() => exportScenario(sc)}>
-                Export
-              </button>
-              <span className="grow" />
-              <button
-                className="btn btn--ghost btn--sm"
-                style={{ color: "var(--danger)", borderColor: "var(--danger)" }}
-                onClick={() =>
-                  withBusy("", async () => {
-                    await deleteScenario(sc.id);
-                    props.onChanged();
-                  })
-                }
-              >
-                Delete
-              </button>
-            </div>
-          </div>
+          <ScenarioCard
+            key={sc.id}
+            sc={sc}
+            onPractice={() => props.onPractice(sc)}
+            onEdit={() => setEditing(sc)}
+            onExport={() => exportScenario(sc)}
+            onDelete={() =>
+              withBusy("", async () => {
+                await deleteScenario(sc.id);
+                props.onChanged();
+              })
+            }
+          />
         ),
       )}
 
-      {/* 3. new from brief */}
-      <div className="section-title">New scenario</div>
+      {/* 3. 範例情境（直接代入開練） */}
+      {samples.length > 0 && (
+        <>
+          <div className="section-title">範例情境 · 直接開練</div>
+          {samples.map((sc) => (
+            <div key={sc.id} className="card">
+              <div className="scenario-title">{sc.title}</div>
+              <div className="row" style={{ marginBottom: 8 }}>
+                <span className="pill pill--neutral">CEFR {sc.level}</span>
+                <span className="pill pill--neutral">範例</span>
+              </div>
+              <p className="scenario-ctx">{sc.contentContext}</p>
+              <button className="btn btn--primary btn--block" onClick={() => props.onPractice(sc)}>
+                ▶ 開始練習
+              </button>
+            </div>
+          ))}
+        </>
+      )}
+
+      {/* 4. 新增情境（語言＝目前模式） */}
+      <div className="section-title">新增{LANG_LABEL[lang]}情境</div>
       <div className="card">
         <div className="row" style={{ marginBottom: 10 }}>
-          <div className="grow">
-            <label className="label" htmlFor={newLangId}>
-              Language
+          <div style={{ width: 110 }}>
+            <label className="label" htmlFor={levelId}>
+              程度
             </label>
-            <LangSelect
-              id={newLangId}
-              value={profile.language}
-              onChange={(language) => props.onProfile({ ...profile, language })}
-            />
-          </div>
-          <div style={{ width: 96 }}>
-            <label className="label" htmlFor={newLevelId}>
-              Level
-            </label>
-            <LevelSelect
-              id={newLevelId}
-              value={profile.level}
-              onChange={(level) => props.onProfile({ ...profile, level })}
-            />
+            <LevelSelect id={levelId} value={profile.level} onChange={(level) => props.onProfile({ ...profile, level })} />
           </div>
         </div>
         <label className="label" htmlFor={briefId}>
-          Brief
+          練習簡報
         </label>
         <textarea
           id={briefId}
@@ -220,42 +211,45 @@ export function Home(props: {
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
           placeholder={
-            profile.language === "ja"
+            lang === "ja"
               ? "例：京都の旅館にチェックイン。予約あり、夕食の時間を相談したい。"
-              : "e.g. Quarterly budget review with the US team; defend a 10% increase."
+              : "例：和美國團隊的季度預算檢討，要為 10% 增幅辯護。"
           }
         />
         <p className="muted" style={{ margin: "8px 0" }}>
-          Tip: tidy a messy report into Markdown in ChatGPT/Gemini web, then import it.
+          小技巧：先在 ChatGPT／Gemini 網頁把雜亂資料整理成 Markdown，再匯入。
         </p>
         <div className="row">
           <button className="btn btn--primary grow" onClick={build}>
-            Build scenario
+            建立情境
           </button>
-          <FileButton accept=".md,.txt,text/markdown,text/plain" label="Import .md" onFile={importBriefFile} />
+          <FileButton accept=".md,.txt,text/markdown,text/plain" label="匯入 .md" onFile={importBriefFile} />
         </div>
       </div>
 
-      {/* 4. settings / data */}
-      <div className="section-title">Settings &amp; data</div>
+      {/* 5. 設定與資料 */}
+      <div className="section-title">設定與資料</div>
       <div className="card">
         <div className="row">
           <button className="btn btn--ghost btn--sm" onClick={exportAll}>
-            Export pack
+            匯出資料包
           </button>
           <button className="btn btn--ghost btn--sm" onClick={exportCsv}>
-            Export vocab (CSV)
+            匯出單字（CSV）
           </button>
-          <FileButton accept=".json,application/json" label="Import pack" onFile={importPackFile} small />
+          <FileButton accept=".json,application/json" label="匯入資料包" onFile={importPackFile} small />
         </div>
-        {apiKey && (
-          <div className="row" style={{ marginTop: 12 }}>
-            <span className="muted grow">✓ Gemini key set on this device</span>
+        <div className="row" style={{ marginTop: 12 }}>
+          {apiKey && <span className="muted grow">✓ 金鑰已設定於本機</span>}
+          {apiKey && (
             <button className="btn btn--ghost btn--sm" onClick={() => props.onApiKey("")}>
-              Change key
+              更換金鑰
             </button>
-          </div>
-        )}
+          )}
+          <a className="btn btn--ghost btn--sm" href="index.html">
+            ← 工具
+          </a>
+        </div>
       </div>
 
       {busy && <p className="notice">{busy}</p>}
@@ -265,12 +259,55 @@ export function Home(props: {
 
 // --- building blocks ---
 
+function ScenarioCard(props: {
+  sc: Scenario;
+  onPractice: () => void;
+  onEdit: () => void;
+  onExport: () => void;
+  onDelete: () => void;
+}) {
+  const { sc } = props;
+  return (
+    <div className="card">
+      <div className="scenario-title">{sc.title}</div>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <span className="pill pill--neutral">CEFR {sc.level}</span>
+      </div>
+      <p className="scenario-ctx">{sc.contentContext}</p>
+      {sc.progressNote && (
+        <p className="muted" style={{ margin: "0 0 10px" }}>
+          ↪ {sc.progressNote}
+        </p>
+      )}
+      <button className="btn btn--primary btn--block" onClick={props.onPractice}>
+        ▶ 開始練習
+      </button>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="btn btn--ghost btn--sm" onClick={props.onEdit}>
+          編輯
+        </button>
+        <button className="btn btn--ghost btn--sm" onClick={props.onExport}>
+          匯出
+        </button>
+        <span className="grow" />
+        <button
+          className="btn btn--ghost btn--sm"
+          style={{ color: "var(--danger)", borderColor: "var(--danger)" }}
+          onClick={props.onDelete}
+        >
+          刪除
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LangSelect(props: { value: TargetLanguage; onChange: (v: TargetLanguage) => void; id?: string }) {
   return (
     <select id={props.id} className="select" value={props.value} onChange={(e) => props.onChange(e.target.value as TargetLanguage)}>
       {TARGET_LANGUAGES.map((l) => (
         <option key={l.id} value={l.id}>
-          {l.label} ({l.hint})
+          {l.label}（{l.hint}）
         </option>
       ))}
     </select>
@@ -317,39 +354,34 @@ function ScenarioEditor(props: {
   const set = (patch: Partial<Scenario>) => props.onChange({ ...s, ...patch });
   const lines = (v: string[]) => v.join("\n");
   const toLines = (t: string) => t.split("\n");
-  const f = useId(); // base id; each field derives `${f}-<name>`
+  const f = useId();
 
   return (
     <div className="card" style={{ borderColor: "var(--primary)" }}>
       <label className="label" htmlFor={`${f}-title`}>
-        Title
+        標題
       </label>
       <input id={`${f}-title`} className="input" value={s.title} onChange={(e) => set({ title: e.target.value })} />
       <div className="row" style={{ margin: "10px 0" }}>
         <div className="grow">
           <label className="label" htmlFor={`${f}-lang`}>
-            Language
+            語言
           </label>
           <LangSelect id={`${f}-lang`} value={s.targetLanguage} onChange={(targetLanguage) => set({ targetLanguage })} />
         </div>
         <div style={{ width: 96 }}>
           <label className="label" htmlFor={`${f}-level`}>
-            Level
+            程度
           </label>
           <LevelSelect id={`${f}-level`} value={s.level} onChange={(level) => set({ level })} />
         </div>
       </div>
       <label className="label" htmlFor={`${f}-base`}>
-        Layer 1 — coaching frame
+        第一層 — 教練框架
       </label>
-      <textarea
-        id={`${f}-base`}
-        className="textarea"
-        value={s.baseContext}
-        onChange={(e) => set({ baseContext: e.target.value })}
-      />
+      <textarea id={`${f}-base`} className="textarea" value={s.baseContext} onChange={(e) => set({ baseContext: e.target.value })} />
       <label className="label" htmlFor={`${f}-content`} style={{ marginTop: 10 }}>
-        Layer 2 — this session's context
+        第二層 — 本次情境內容
       </label>
       <textarea
         id={`${f}-content`}
@@ -360,19 +392,19 @@ function ScenarioEditor(props: {
       <div className="row" style={{ margin: "10px 0" }}>
         <div className="grow">
           <label className="label" htmlFor={`${f}-coach`}>
-            Coach plays
+            教練扮演
           </label>
           <input id={`${f}-coach`} className="input" value={s.coachRole} onChange={(e) => set({ coachRole: e.target.value })} />
         </div>
         <div className="grow">
           <label className="label" htmlFor={`${f}-user`}>
-            Learner plays
+            你扮演
           </label>
           <input id={`${f}-user`} className="input" value={s.userRole} onChange={(e) => set({ userRole: e.target.value })} />
         </div>
       </div>
       <label className="label" htmlFor={`${f}-obj`}>
-        Objectives (one per line)
+        練習目標（每行一個）
       </label>
       <textarea
         id={`${f}-obj`}
@@ -381,7 +413,7 @@ function ScenarioEditor(props: {
         onChange={(e) => set({ objectives: toLines(e.target.value) })}
       />
       <label className="label" htmlFor={`${f}-phrases`} style={{ marginTop: 10 }}>
-        Target phrases (one per line)
+        目標語句（每行一個）
       </label>
       <textarea
         id={`${f}-phrases`}
@@ -391,10 +423,10 @@ function ScenarioEditor(props: {
       />
       <div className="row" style={{ marginTop: 12 }}>
         <button className="btn btn--primary grow" onClick={props.onSave}>
-          Save
+          儲存
         </button>
         <button className="btn btn--ghost" onClick={props.onCancel}>
-          Cancel
+          取消
         </button>
       </div>
     </div>

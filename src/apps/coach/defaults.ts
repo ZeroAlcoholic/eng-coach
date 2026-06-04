@@ -1,0 +1,111 @@
+// Built-in starter scenarios so the user can practise immediately without
+// authoring anything ("無劇情也能代入"). Titles/descriptions are in the UI
+// language (繁中); target phrases are in the practice language. Stable ids: once
+// a default is practised it is saved under the same id and then drops out of the
+// "範例情境" list (no duplicate).
+
+import { FRAME_PRESETS } from "./frames";
+import type { Scenario, TargetLanguage } from "../../kernel/types";
+
+export const DEFAULT_SCENARIOS: Record<TargetLanguage, Scenario[]> = {
+  en: [
+    {
+      id: "def-en-1on1",
+      title: "和美國同事一對一",
+      targetLanguage: "en",
+      level: "B1",
+      baseContext: FRAME_PRESETS.en,
+      contentContext: "你和一位美國同事進行每週一對一，要更新工作進度並提出一個遇到的問題。",
+      coachRole: "美國同事 Alex",
+      userRole: "你（台灣團隊成員）",
+      objectives: ["清楚更新本週進度", "提出並說明一個問題", "回答後續提問"],
+      targetPhrases: ["Let me walk you through…", "I'm running into an issue with…", "Could we sync on…?"],
+    },
+    {
+      id: "def-en-client",
+      title: "向客戶說明方案",
+      targetLanguage: "en",
+      level: "B1",
+      baseContext: FRAME_PRESETS.en,
+      contentContext: "電話會議中向外國客戶說明你的提案並處理疑問。",
+      coachRole: "外國客戶",
+      userRole: "你（提案方）",
+      objectives: ["說明方案重點", "處理反對意見", "確認下一步"],
+      targetPhrases: ["The key benefit is…", "I understand your concern, however…", "Let's align on next steps."],
+    },
+    {
+      id: "def-en-deadline",
+      title: "協商交付期限",
+      targetLanguage: "en",
+      level: "B1",
+      baseContext: FRAME_PRESETS.en,
+      contentContext: "和海外 PM 協商一個比較緊的交付期限。",
+      coachRole: "海外專案經理",
+      userRole: "你",
+      objectives: ["說明現實限制", "提出替代方案", "達成共識"],
+      targetPhrases: ["Realistically, we can…", "Would it work if…?", "Let's find a middle ground."],
+    },
+    {
+      id: "def-en-standup",
+      title: "每日站會更新",
+      targetLanguage: "en",
+      level: "B1",
+      baseContext: FRAME_PRESETS.en,
+      contentContext: "英文 standup，簡短報告昨天做了什麼、今天要做什麼、有什麼阻礙。",
+      coachRole: "Scrum master",
+      userRole: "你",
+      objectives: ["三段式簡短報告", "用過去式講昨天", "清楚說出阻礙"],
+      targetPhrases: ["Yesterday I…", "Today I'm going to…", "I'm blocked on…"],
+    },
+  ],
+  ja: [
+    {
+      id: "def-ja-conbini",
+      title: "便利商店結帳",
+      targetLanguage: "ja",
+      level: "A2",
+      baseContext: FRAME_PRESETS.ja,
+      contentContext: "コンビニで会計をする。袋の要否や温めを確認される。",
+      coachRole: "店員",
+      userRole: "旅行者（你）",
+      objectives: ["会計をする", "袋を断る／もらう", "温めを頼む"],
+      targetPhrases: ["お会計お願いします", "袋は大丈夫です", "温めてください"],
+    },
+    {
+      id: "def-ja-station",
+      title: "車站問路",
+      targetLanguage: "ja",
+      level: "A2",
+      baseContext: FRAME_PRESETS.ja,
+      contentContext: "駅で目的地への行き方を尋ねる。",
+      coachRole: "駅員",
+      userRole: "旅行者",
+      objectives: ["行き方を聞く", "乗り換えを確認する", "料金を聞く"],
+      targetPhrases: ["〜はどこですか", "乗り換えは必要ですか", "いくらですか"],
+    },
+    {
+      id: "def-ja-ryokan",
+      title: "旅館 check-in",
+      targetLanguage: "ja",
+      level: "A2",
+      baseContext: FRAME_PRESETS.ja,
+      contentContext: "旅館でチェックインし、夕食の時間を相談する。",
+      coachRole: "宿のスタッフ",
+      userRole: "宿泊客",
+      objectives: ["チェックインする", "夕食の時間を伝える", "お風呂の場所を聞く"],
+      targetPhrases: ["チェックインお願いします", "夕食は〜時でお願いします", "お風呂はどこですか"],
+    },
+    {
+      id: "def-ja-restaurant",
+      title: "餐廳點餐",
+      targetLanguage: "ja",
+      level: "A2",
+      baseContext: FRAME_PRESETS.ja,
+      contentContext: "レストランでおすすめを聞いてから注文する。",
+      coachRole: "店員",
+      userRole: "客",
+      objectives: ["おすすめを聞く", "注文する", "会計を頼む"],
+      targetPhrases: ["おすすめは何ですか", "これをください", "お会計お願いします"],
+    },
+  ],
+};

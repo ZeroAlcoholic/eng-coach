@@ -260,6 +260,34 @@ h1 {
   box-shadow: var(--ring);
 }
 
+/* ---- segmented language toggle (top corner) ---- */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.seg-btn {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.seg-on {
+  background: var(--primary);
+  color: var(--primary-ink);
+}
+
 /* ---- forms (16px => no iOS zoom) ---- */
 .field {
   display: block;
