@@ -38,6 +38,7 @@ export function Practice(props: {
   const [transcript, setTranscript] = useState<TranscriptTurn[]>([]);
   const [notice, setNotice] = useState("");
   const [summary, setSummary] = useState<{ items: number; review: SessionReview } | null>(null);
+  const [phase, setPhase] = useState<"coach" | "you">("coach"); // whose turn (voice UX)
 
   const engineRef = useRef<AudioEngine | null>(null);
   const clientRef = useRef<GeminiLiveDirect | null>(null);
@@ -45,6 +46,7 @@ export function Practice(props: {
   const finalizingRef = useRef(false);
   const startingRef = useRef(false); // guards the async start() window against re-entry
   const turnsRef = useRef<TranscriptTurn[]>([]);
+  const endRef = useRef<HTMLDivElement>(null);
 
   // Authoritative safety net: tear down mic + WebSocket if the screen unmounts
   // for any reason (not just the guarded Back button). finalizingRef is set so
@@ -55,6 +57,15 @@ export function Practice(props: {
       void teardown();
     };
   }, []);
+
+  // Keep the latest line in view during a live session, but don't fight the user
+  // if they've scrolled up to re-read.
+  useEffect(() => {
+    const el = endRef.current;
+    if (!el) return;
+    const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 200;
+    if (nearBottom) el.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [transcript]);
 
   function pushDelta(who: TranscriptTurn["who"], text: string) {
     setTranscript((prev) => {
@@ -80,6 +91,7 @@ export function Practice(props: {
     setTranscript([]);
     turnsRef.current = [];
     finalizingRef.current = false;
+    setPhase("coach"); // coach greets first
     startedAtRef.current = new Date().toISOString();
 
     const client = new GeminiLiveDirect({
@@ -89,9 +101,16 @@ export function Practice(props: {
       voiceName: pickVoice(scenario.targetLanguage),
       handlers: {
         onOpen: () => setStatus("live"),
-        onAudio: (pcm) => engineRef.current?.playPcm(pcm),
+        onAudio: (pcm) => {
+          setPhase("coach"); // coach is speaking
+          engineRef.current?.playPcm(pcm);
+        },
         onInterrupted: () => engineRef.current?.flushPlayback(),
-        onUserTranscript: (t) => pushDelta("user", t),
+        onModelTurnComplete: () => setPhase("you"), // coach finished → your turn
+        onUserTranscript: (t) => {
+          setPhase("you");
+          pushDelta("user", t);
+        },
         onAssistantTranscript: (t) => pushDelta("coach", t),
         onError: (m) => setNotice(`錯誤：${m}`),
         onClose: () => {
@@ -202,21 +221,25 @@ export function Practice(props: {
           {status === "saving" ? (
             <p className="muted">正在分析本次練習…</p>
           ) : status === "live" ? (
-            // Green pulsing orb = "listening" (status). Stopping is the red bar
-            // pinned at the bottom; tapping the orb also stops, as a backup.
+            // Green pulsing orb shows whose turn it is (the core voice-chat cue).
+            // Stopping is the red bar pinned at the bottom; tapping the orb also
+            // stops, as a backup.
             <button
               className="mic-btn mic-btn--live"
               onClick={stopAndFinalize}
-              aria-label="聆聽中，點擊或用下方按鈕停止"
+              aria-label="練習進行中，點擊或用下方按鈕停止"
             >
-              <span className="mic-emoji">👂</span>
-              聆聽中…
+              <span className="mic-emoji">{phase === "coach" ? "🔊" : "🎤"}</span>
+              {phase === "coach" ? "教練說話中" : "換你說"}
             </button>
           ) : (
-            <button className="mic-btn" onClick={start} disabled={status === "connecting"}>
-              <span className="mic-emoji">🎙️</span>
-              {status === "connecting" ? "連線中…" : "開始"}
-            </button>
+            <>
+              <button className="mic-btn" onClick={start} disabled={status === "connecting"}>
+                <span className="mic-emoji">🎙️</span>
+                {status === "connecting" ? "連線中…" : "開始"}
+              </button>
+              {status === "connecting" && <p className="muted">會請求麥克風權限，請允許</p>}
+            </>
           )}
         </div>
       )}
@@ -251,6 +274,7 @@ export function Practice(props: {
             <span className="turn-text">{t.text}</span>
           </div>
         ))}
+        <div ref={endRef} aria-hidden />
       </div>
 
       {/* Always-reachable Stop while live — no scrolling back up to the orb. */}

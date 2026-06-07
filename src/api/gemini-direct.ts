@@ -23,6 +23,7 @@ export interface GeminiDirectHandlers {
   onUserTranscript?: (text: string) => void;
   onAssistantTranscript?: (text: string) => void;
   onInterrupted?: () => void; // barge-in: model was cut off, flush playback
+  onModelTurnComplete?: () => void; // model finished its turn → learner's turn
   onOpen?: () => void;
   onClose?: (reason: string) => void;
   onError?: (message: string) => void;
@@ -114,6 +115,7 @@ export class GeminiLiveDirect {
       if (sc.outputTranscription?.text) {
         handlers.onAssistantTranscript?.(sc.outputTranscription.text);
       }
+      if (sc.turnComplete) handlers.onModelTurnComplete?.();
     }
 
     // `.data` concatenates all inline-data (audio) parts of this message.

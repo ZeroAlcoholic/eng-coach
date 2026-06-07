@@ -220,8 +220,8 @@ export function Home(props: {
           小技巧：先在 ChatGPT／Gemini 網頁把雜亂資料整理成 Markdown，再匯入。
         </p>
         <div className="row">
-          <button className="btn btn--primary grow" onClick={build}>
-            建立情境
+          <button className="btn btn--primary grow" onClick={build} disabled={busy === "建立情境中…"}>
+            {busy === "建立情境中…" ? "建立中…" : "建立情境"}
           </button>
           <FileButton accept=".md,.txt,text/markdown,text/plain" label="匯入 .md" onFile={importBriefFile} />
         </div>
