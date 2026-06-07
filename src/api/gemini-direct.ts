@@ -23,7 +23,9 @@ export interface GeminiDirectHandlers {
   onUserTranscript?: (text: string) => void;
   onAssistantTranscript?: (text: string) => void;
   onInterrupted?: () => void; // barge-in: model was cut off, flush playback
-  onModelTurnComplete?: () => void; // model finished its turn → learner's turn
+  // Authoritative "whose turn" — the transport owns this so the UI never has to
+  // race raw signals. "coach" = model speaking, "you" = learner's turn.
+  onTurnState?: (turn: "coach" | "you") => void;
   onOpen?: () => void;
   onClose?: (reason: string) => void;
   onError?: (message: string) => void;
@@ -46,13 +48,22 @@ export class GeminiLiveDirect {
   // streamed before that can be silently dropped, so we buffer and flush on ready.
   private ready = false;
   private readonly pendingAudio: ArrayBuffer[] = [];
+  private turn: "coach" | "you" = "you"; // coach greets first; first audio flips to "coach"
   private readonly opts: GeminiDirectOptions;
 
   constructor(opts: GeminiDirectOptions) {
     this.opts = opts;
   }
 
+  /** Emit a turn transition once (no spam while a turn continues). */
+  private setTurn(t: "coach" | "you"): void {
+    if (this.turn === t) return;
+    this.turn = t;
+    this.opts.handlers.onTurnState?.(t);
+  }
+
   async connect(): Promise<void> {
+    this.turn = "you";
     const ai = new GoogleGenAI({ apiKey: this.opts.apiKey });
     const { handlers } = this.opts;
     this.session = await ai.live.connect({
@@ -110,17 +121,25 @@ export class GeminiLiveDirect {
 
     const sc = m.serverContent;
     if (sc) {
-      if (sc.interrupted) handlers.onInterrupted?.();
+      if (sc.interrupted) {
+        handlers.onInterrupted?.();
+        this.setTurn("you"); // model was cut off → learner's turn
+      }
       if (sc.inputTranscription?.text) handlers.onUserTranscript?.(sc.inputTranscription.text);
       if (sc.outputTranscription?.text) {
         handlers.onAssistantTranscript?.(sc.outputTranscription.text);
       }
-      if (sc.turnComplete) handlers.onModelTurnComplete?.();
     }
 
     // `.data` concatenates all inline-data (audio) parts of this message.
     const audioB64 = m.data;
-    if (audioB64) handlers.onAudio(base64ToArrayBuffer(audioB64));
+    if (audioB64) {
+      handlers.onAudio(base64ToArrayBuffer(audioB64));
+      this.setTurn("coach"); // model is speaking
+    }
+    // turnComplete is evaluated AFTER audio: Gemini often carries the final audio
+    // chunk in the SAME message as turnComplete, so this must win → learner's turn.
+    if (sc?.turnComplete) this.setTurn("you");
   }
 
   close(): void {
@@ -135,6 +154,7 @@ export class GeminiLiveDirect {
     } finally {
       this.session = null;
       this.ready = false;
+      this.turn = "you";
       this.pendingAudio.length = 0;
     }
   }

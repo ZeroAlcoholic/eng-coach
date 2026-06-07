@@ -22,7 +22,7 @@ type Status = "ready" | "connecting" | "live" | "saving" | "done";
 const STATUS_LABEL: Record<Status, string> = {
   ready: "準備好",
   connecting: "連線中…",
-  live: "聆聽中",
+  live: "練習中",
   saving: "分析中…",
   done: "完成",
 };
@@ -64,7 +64,7 @@ export function Practice(props: {
     const el = endRef.current;
     if (!el) return;
     const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 200;
-    if (nearBottom) el.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (nearBottom) el.scrollIntoView({ behavior: "auto", block: "end" });
   }, [transcript]);
 
   function pushDelta(who: TranscriptTurn["who"], text: string) {
@@ -94,35 +94,31 @@ export function Practice(props: {
     setPhase("coach"); // coach greets first
     startedAtRef.current = new Date().toISOString();
 
-    const client = new GeminiLiveDirect({
-      apiKey,
-      model: LIVE_MODEL,
-      systemInstruction: composeSystemInstruction(scenario, profile),
-      voiceName: pickVoice(scenario.targetLanguage),
-      handlers: {
-        onOpen: () => setStatus("live"),
-        onAudio: (pcm) => {
-          setPhase("coach"); // coach is speaking
-          engineRef.current?.playPcm(pcm);
-        },
-        onInterrupted: () => engineRef.current?.flushPlayback(),
-        onModelTurnComplete: () => setPhase("you"), // coach finished → your turn
-        onUserTranscript: (t) => {
-          setPhase("you");
-          pushDelta("user", t);
-        },
-        onAssistantTranscript: (t) => pushDelta("coach", t),
-        onError: (m) => setNotice(`錯誤：${m}`),
-        onClose: () => {
-          if (finalizingRef.current) return;
-          void teardown();
-          setStatus("ready");
-          setNotice("連線中斷 — 點一下重新開始。");
-        },
-      },
-    });
-
     try {
+      // Build inside the try: composeSystemInstruction/pickVoice run here, so a
+      // synchronous throw (e.g. a malformed imported scenario) is caught and the
+      // finally still resets startingRef — otherwise Start would wedge.
+      const client = new GeminiLiveDirect({
+        apiKey,
+        model: LIVE_MODEL,
+        systemInstruction: composeSystemInstruction(scenario, profile),
+        voiceName: pickVoice(scenario.targetLanguage),
+        handlers: {
+          onOpen: () => setStatus("live"),
+          onAudio: (pcm) => engineRef.current?.playPcm(pcm),
+          onInterrupted: () => engineRef.current?.flushPlayback(),
+          onTurnState: (t) => setPhase(t), // transport is the single source of truth
+          onUserTranscript: (t) => pushDelta("user", t),
+          onAssistantTranscript: (t) => pushDelta("coach", t),
+          onError: (m) => setNotice(`錯誤：${m}`),
+          onClose: () => {
+            if (finalizingRef.current) return;
+            void teardown();
+            setStatus("ready");
+            setNotice("連線中斷 — 點一下重新開始。");
+          },
+        },
+      });
       await client.connect();
       clientRef.current = client;
       const engine = new AudioEngine({
@@ -221,17 +217,12 @@ export function Practice(props: {
           {status === "saving" ? (
             <p className="muted">正在分析本次練習…</p>
           ) : status === "live" ? (
-            // Green pulsing orb shows whose turn it is (the core voice-chat cue).
-            // Stopping is the red bar pinned at the bottom; tapping the orb also
-            // stops, as a backup.
-            <button
-              className="mic-btn mic-btn--live"
-              onClick={stopAndFinalize}
-              aria-label="練習進行中，點擊或用下方按鈕停止"
-            >
+            // Pure status indicator (whose turn). NOT a button — stopping is the
+            // red bar pinned at the bottom, so a tap here can't end the session.
+            <div className="mic-btn mic-btn--live mic-btn--status" role="status" aria-live="polite">
               <span className="mic-emoji">{phase === "coach" ? "🔊" : "🎤"}</span>
               {phase === "coach" ? "教練說話中" : "換你說"}
-            </button>
+            </div>
           ) : (
             <>
               <button className="mic-btn" onClick={start} disabled={status === "connecting"}>

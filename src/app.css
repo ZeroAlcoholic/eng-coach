@@ -457,15 +457,12 @@ h1 {
 .mic-btn:active {
   transform: scale(0.96);
 }
-.mic-btn--stop {
-  color: var(--danger-ink);
-  background: radial-gradient(circle at 50% 36%, #efa996 0%, var(--danger) 60%, #c56b56 100%);
-  box-shadow:
-    0 0 0 1px #efa99666,
-    0 0 36px 4px #e08a7655,
-    0 0 90px 10px #e08a7633,
-    inset 0 -10px 30px #0003,
-    inset 0 12px 26px #ffffff33;
+/* Live orb is a pure status indicator, not a button: no pointer affordance. */
+.mic-btn--status {
+  cursor: default;
+}
+.mic-btn--status:active {
+  transform: none;
 }
 @keyframes breathe {
   0%,

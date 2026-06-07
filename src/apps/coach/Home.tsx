@@ -37,6 +37,7 @@ export function Home(props: {
   const [keyInput, setKeyInput] = useState("");
   const [brief, setBrief] = useState("");
   const [busy, setBusy] = useState("");
+  const [building, setBuilding] = useState(false); // dedicated flag — not a magic busy string
   const [editing, setEditing] = useState<Scenario | null>(null);
   const levelId = useId();
   const briefId = useId();
@@ -57,12 +58,15 @@ export function Home(props: {
   async function build() {
     if (!apiKey) return setBusy("請先連結 API 金鑰。");
     if (!brief.trim()) return setBusy("請先貼上簡報或匯入 Markdown。");
+    if (building) return; // guard double-submit
+    setBuilding(true);
     await withBusy("建立情境中…", async () => {
       const sc = await generateScenario(apiKey, { brief: brief.trim(), language: lang, level: profile.level });
       await putScenario(sc);
       setBrief("");
       props.onChanged();
     });
+    setBuilding(false);
   }
 
   async function importBriefFile(file: File) {
@@ -220,8 +224,8 @@ export function Home(props: {
           小技巧：先在 ChatGPT／Gemini 網頁把雜亂資料整理成 Markdown，再匯入。
         </p>
         <div className="row">
-          <button className="btn btn--primary grow" onClick={build} disabled={busy === "建立情境中…"}>
-            {busy === "建立情境中…" ? "建立中…" : "建立情境"}
+          <button className="btn btn--primary grow" onClick={build} disabled={building}>
+            {building ? "建立中…" : "建立情境"}
           </button>
           <FileButton accept=".md,.txt,text/markdown,text/plain" label="匯入 .md" onFile={importBriefFile} />
         </div>
