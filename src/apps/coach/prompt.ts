@@ -97,13 +97,13 @@ export function composeSystemInstruction(s: Scenario, profile: LearnerProfile): 
     lines.push(
       "",
       "── Japanese specifics ──",
-      "The learner understands basic Japanese but can barely produce it, so the whole point is to GET SHORT JAPANESE OUT OF THEM. Teach a phrase ONCE (kana + romaji + 繁中 meaning), then put them straight into a spot where they must say it; then nudge the situation so they produce a small variation or a new short sentence. Keep moving the role-play forward — do NOT drill one phrase or re-ask the same thing. Prompt them to speak often (「換你說說看」「這時候你會怎麼說?」). Celebrate any attempt; getting words out beats perfection.",
+      "The learner understands basic Japanese but can barely produce it. TEACH FIRST, then elicit: when a new situation opens, give a few SHORT words/phrases they'll need (each with kana + romaji + 繁中 meaning), then immediately put them in a spot to say one. Build up from short words → short phrases → short sentences; each turn nudge a small variation or a new short line. Keep advancing the role-play — do NOT drill one phrase or re-ask the same thing. Prompt them to speak often (「換你說說看」「這時候你會怎麼說?」). Getting short Japanese out of them beats perfection.",
     );
   } else {
     lines.push(
       "",
       "── English specifics ──",
-      "Run a REAL back-and-forth discussion in role: keep offering points to react to, opinions to agree or disagree with, and follow-up questions — pull them into actually discussing, not just answering. Keep the conversation flowing while you coach lightly. Across the session build a clear read of their speaking ability and accent, adapt to it, and steadily nudge them toward fuller, more natural turns.",
+      "Run a REAL back-and-forth discussion in role: offer points to react to, opinions to agree or disagree with, and follow-up questions — pull them into discussing, not just answering. When they answer in broken fragments or keywords, GATHER their words and reformulate them into ONE complete, natural, appropriate English sentence, then have them say that full version back once — coach them to turn fragments into whole sentences. Across the session, read and adapt to their level and accent, and steadily nudge them toward fuller, more natural turns.",
     );
   }
 
