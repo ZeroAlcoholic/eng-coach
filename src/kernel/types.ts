@@ -60,11 +60,33 @@ export interface TranscriptTurn {
   text: string;
 }
 
+/** Per-skill CEFR band as an integer 1–6 (A1=1 … C2=6) — numeric so it can feed
+ *  an EWMA level estimate later, while still reading as a CEFR band. */
+export interface SkillScores {
+  grammar: number;
+  vocab: number;
+  fluency: number;
+  interaction: number;
+}
+
+/** End-of-session recap produced by gemini-3.5-flash over the transcript. */
+export interface SessionReview {
+  cefr: string; // overall CEFR estimate of THIS session, e.g. "B1"
+  subscores?: SkillScores;
+  reviewEn: string; // 1 encouraging English sentence
+  reviewZh: string; // 1 Traditional Chinese (Taiwan) sentence
+  progressNote: string; // concrete things to target next time (fed into next prompt)
+  wins?: string[]; // what went well
+  fixes?: string[]; // top things to fix, with the natural correction
+  objectivesMet?: { objective: string; met: boolean }[]; // per scenario objective
+}
+
 export interface SessionRecord {
   id: string;
   scenarioId: string;
   startedAt: string; // ISO timestamp
   transcript: TranscriptTurn[];
+  review?: SessionReview; // filled in once the end-of-session analysis succeeds
 }
 
 /**

@@ -11,10 +11,13 @@ import type {
   CEFRLevel,
   LearnedItem,
   Scenario,
+  SessionReview,
   TargetLanguage,
   TranscriptTurn,
 } from "../../kernel/types";
 import { FRAME_PRESETS } from "./frames";
+
+export type { SessionReview };
 
 const TEXT_MODEL = "gemini-3.5-flash";
 
@@ -123,28 +126,44 @@ export async function extractLearnedItems(
   }));
 }
 
-// 3. transcript → bilingual review + CEFR + rolling progress note ----------
+// 3. transcript → end-of-session recap (CEFR + per-skill + wins/fixes/objectives)
+// This is the "learning payload": an LLM-as-rubric judge over the stored
+// transcript. cefr/subscores use few-shot-free but explicit rubric wording;
+// objectivesMet grades the scenario's own objectives.
 const REVIEW_SCHEMA = {
   type: Type.OBJECT,
   properties: {
-    cefr: { type: Type.STRING }, // estimated CEFR shown this session, e.g. "B1"
-    reviewEn: { type: Type.STRING }, // one English sentence of progress review
-    reviewZh: { type: Type.STRING }, // one Traditional Chinese sentence
-    progressNote: { type: Type.STRING }, // one English sentence: what to work on next
+    cefr: { type: Type.STRING },
+    subscores: {
+      type: Type.OBJECT,
+      properties: {
+        grammar: { type: Type.INTEGER },
+        vocab: { type: Type.INTEGER },
+        fluency: { type: Type.INTEGER },
+        interaction: { type: Type.INTEGER },
+      },
+      required: ["grammar", "vocab", "fluency", "interaction"],
+    },
+    reviewEn: { type: Type.STRING },
+    reviewZh: { type: Type.STRING },
+    progressNote: { type: Type.STRING },
+    wins: { type: Type.ARRAY, items: { type: Type.STRING } },
+    fixes: { type: Type.ARRAY, items: { type: Type.STRING } },
+    objectivesMet: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: { objective: { type: Type.STRING }, met: { type: Type.BOOLEAN } },
+        required: ["objective", "met"],
+      },
+    },
   },
   required: ["cefr", "reviewEn", "reviewZh", "progressNote"],
 };
 
-export interface SessionReview {
-  cefr: string; // estimated CEFR for this session
-  reviewEn: string; // 1-sentence English review
-  reviewZh: string; // 1-sentence 繁中 review
-  progressNote: string; // fed into the next session's system instruction
-}
-
 export async function summariseSession(
   apiKey: string,
-  opts: { transcript: TranscriptTurn[]; level: CEFRLevel; previous?: string },
+  opts: { transcript: TranscriptTurn[]; level: CEFRLevel; previous?: string; objectives?: string[] },
 ): Promise<SessionReview> {
   const fallback: SessionReview = {
     cefr: opts.level,
@@ -154,14 +173,21 @@ export async function summariseSession(
   };
   if (!opts.transcript.length) return fallback;
   const convo = opts.transcript.map((t) => `${t.who}: ${t.text}`).join("\n");
+  const objectivesBlock = opts.objectives?.length
+    ? ` The session objectives were:\n${opts.objectives.map((o) => `- ${o}`).join("\n")}\n` +
+      `For objectivesMet, judge each objective above as met true/false from the learner's actual speech.`
+    : "";
   const prompt =
-    `Review this speaking-practice transcript. The learner's target level is CEFR ${opts.level}` +
-    `${opts.previous ? ` and the previous note was "${opts.previous}"` : ""}. Return: ` +
-    `cefr (your honest CEFR estimate of THIS conversation, e.g. "B1"); reviewEn (ONE encouraging ` +
-    `English sentence on how they did); reviewZh (ONE Traditional Chinese sentence, Taiwan ` +
-    `colloquial, same gist); progressNote (ONE or two concrete English sentences naming the SPECIFIC ` +
-    `things to target next time — e.g. a recurring pronunciation/accent issue, a grammar slip, or a ` +
-    `phrase to reuse — so the next session can coach them directly).\n\nTRANSCRIPT:\n${convo}`;
+    `You are a CEFR speaking examiner. Review this practice transcript; the learner's target level is ` +
+    `CEFR ${opts.level}${opts.previous ? ` and the previous note was "${opts.previous}"` : ""}.` +
+    objectivesBlock +
+    `\nReason from the LEARNER's turns only. Return JSON: cefr (honest CEFR of this session, e.g. "B1"); ` +
+    `subscores as integers 1–6 (1=A1 … 6=C2) for grammar, vocab, fluency, interaction; reviewEn (ONE ` +
+    `encouraging English sentence); reviewZh (ONE Taiwan-colloquial Traditional Chinese sentence, same ` +
+    `gist); wins (1–3 short things they did well); fixes (1–3 short items to fix, each WITH the natural ` +
+    `corrected version); progressNote (one or two concrete English sentences naming the specific ` +
+    `pronunciation/grammar/phrase points to target next time so the next session can coach them ` +
+    `directly).\n\nTRANSCRIPT:\n${convo}`;
   const out = await generateJson<Partial<SessionReview>>(apiKey, prompt, REVIEW_SCHEMA);
   return { ...fallback, ...out };
 }

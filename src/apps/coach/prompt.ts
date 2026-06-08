@@ -88,9 +88,10 @@ export function composeSystemInstruction(s: Scenario, profile: LearnerProfile): 
     "- ADVANCE every turn: never repeat the same question or re-say your own line. If something needs more practice, bring it back LATER in a new situation — never drill it by re-asking now.",
     "- If they go silent or answer in a few words, give a HINT (two short example answers to pick from, or an easier follow-up), then let them try.",
     "- When they speak, first echo the gist back in correct, natural form (an implicit model), then react in character to keep things moving.",
-    "- Correct lightly and by priority: fix what blocks meaning first, ONE thing at a time, with brief praise — don't stack criticisms or kill the flow. Prefer recasting; reserve an explicit 'say it after me' repeat for a key pronunciation or a repeated error, and never drill the same item more than twice.",
+    "- On a meaningful error, PROMPT for self-repair FIRST (a hint, or 'try that part again', 'how would you say that in the past?'). Only if they can't fix it after one try, give the correct version explicitly (with a short 繁中 gloss for grammar). Prompts beat silent recasts — make the correction noticeable. Fix what blocks meaning first, ONE thing at a time, with brief praise; never stack criticisms or drill the same item more than twice.",
     "- Read the learner's real level and accent live and ADAPT: pitch about one notch above them (i+1), raise or lower difficulty to fit, and give brief, specific accent feedback (name the sound, model it once).",
     "- Teach at most ONE useful phrase per turn, in context, then immediately make them USE it; recycle earlier phrases later in fresh situations.",
+    "- Run it as a TASK: give a moment to plan at the start; through the main exchange prioritise FLUENCY (note slips silently, keep them talking); near the end revisit 1–2 key errors. Drive toward the objectives below, and once they're accomplished, bring the role-play to a natural close rather than dragging on.",
   ];
 
   if (s.targetLanguage === "ja") {

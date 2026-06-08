@@ -27,6 +27,10 @@ const STATUS_LABEL: Record<Status, string> = {
   done: "完成",
 };
 
+// Per-skill subscore (1–6) → CEFR band for display.
+const BANDS = ["—", "A1", "A2", "B1", "B2", "C1", "C2"];
+const band = (n: number): string => BANDS[n] ?? "—";
+
 export function Practice(props: {
   apiKey: string;
   scenario: Scenario;
@@ -165,19 +169,27 @@ export function Practice(props: {
     try {
       // Save the transcript first (cheap, local) so a later AI/analysis failure
       // never loses the session.
-      await putSession({
+      // Transcript first (cheap, local) so a later AI failure never loses it.
+      const session = {
         id: sessionId,
         scenarioId: scenario.id,
         startedAt: startedAtRef.current,
         transcript: turns,
-      });
+      };
+      await putSession(session);
       if (turns.length) {
         const [items, review] = await Promise.all([
           extractLearnedItems(apiKey, { scenario, sessionId, transcript: turns }),
-          summariseSession(apiKey, { transcript: turns, level: scenario.level, previous: scenario.progressNote }),
+          summariseSession(apiKey, {
+            transcript: turns,
+            level: scenario.level,
+            previous: scenario.progressNote,
+            objectives: scenario.objectives,
+          }),
         ]);
         if (items.length) await putItems(items);
         await putScenario({ ...scenario, progressNote: review.progressNote });
+        await putSession({ ...session, review }); // persist the recap on the session
         setSummary({ items: items.length, review });
       } else {
         setSummary({ items: 0, review: emptyReview });
@@ -242,11 +254,36 @@ export function Practice(props: {
             <b>已儲存本次練習</b>
             <span className="pill pill--neutral">CEFR {summary.review.cefr}</span>
           </div>
+          {summary.review.subscores && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              文法 {band(summary.review.subscores.grammar)}・詞彙 {band(summary.review.subscores.vocab)}・
+              流暢 {band(summary.review.subscores.fluency)}・互動 {band(summary.review.subscores.interaction)}
+            </p>
+          )}
+          {summary.review.reviewZh && <p className="muted">{summary.review.reviewZh}</p>}
+          {summary.review.reviewEn && <p className="muted">{summary.review.reviewEn}</p>}
+          {summary.review.objectivesMet && summary.review.objectivesMet.length > 0 && (
+            <div style={{ margin: "10px 0" }}>
+              {summary.review.objectivesMet.map((o, i) => (
+                <div key={i} className="muted">
+                  {o.met ? "✅" : "⬜"} {o.objective}
+                </div>
+              ))}
+            </div>
+          )}
+          {summary.review.wins?.map((w, i) => (
+            <div key={`w${i}`} className="muted">
+              👍 {w}
+            </div>
+          ))}
+          {summary.review.fixes?.map((f, i) => (
+            <div key={`f${i}`} className="muted">
+              🔧 {f}
+            </div>
+          ))}
           <p className="muted" style={{ marginTop: 8 }}>
             已新增 {summary.items} 個單字／語句到你的詞庫。
           </p>
-          {summary.review.reviewZh && <p className="muted">{summary.review.reviewZh}</p>}
-          {summary.review.reviewEn && <p className="muted">{summary.review.reviewEn}</p>}
           {summary.review.progressNote && (
             <p className="muted">↪ 下次重點：{summary.review.progressNote}</p>
           )}
