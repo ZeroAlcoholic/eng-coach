@@ -9,9 +9,17 @@ import { useEffect, useRef, useState } from "react";
 
 import { AudioEngine } from "../../audio/AudioEngine";
 import { GeminiLiveDirect } from "../../api/gemini-direct";
-import { putItems, putScenario, putSession } from "../../kernel/db";
+import { putItems, putProfile, putScenario, putSession } from "../../kernel/db";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
-import { extractLearnedItems, summariseSession, type SessionReview } from "./ai";
+import {
+  extractLearnedItems,
+  suggestReplies,
+  summariseSession,
+  translateLine,
+  type ReplySuggestion,
+  type SessionReview,
+} from "./ai";
+import { applySessionToProfile } from "./progress";
 import { composeSystemInstruction } from "./prompt";
 import { pickVoice } from "./voices";
 
@@ -43,8 +51,17 @@ export function Practice(props: {
   const [notice, setNotice] = useState("");
   const [summary, setSummary] = useState<{ items: number; review: SessionReview } | null>(null);
   const [phase, setPhase] = useState<"coach" | "you">("coach"); // whose turn (voice UX)
+  const [paused, setPaused] = useState(false);
+  const [suggestions, setSuggestions] = useState<ReplySuggestion[] | null>(null);
+  const [helping, setHelping] = useState(false);
+  const [slow, setSlow] = useState(!!profile.prefs?.slowSpeech);
+  // tapped-line translations, keyed by index but tagged with the source text so a
+  // still-growing streamed line doesn't show a stale partial translation.
+  const [tx, setTx] = useState<Record<number, { src: string; zh: string }>>({});
 
   const engineRef = useRef<AudioEngine | null>(null);
+  const pausedRef = useRef(false);
+  const resumingRef = useRef(false); // guards double-tap on ▶ 接續
   const clientRef = useRef<GeminiLiveDirect | null>(null);
   const startedAtRef = useRef<string>("");
   const finalizingRef = useRef(false);
@@ -96,6 +113,10 @@ export function Practice(props: {
     turnsRef.current = [];
     finalizingRef.current = false;
     setPhase("coach"); // coach greets first
+    pausedRef.current = false;
+    setPaused(false);
+    setSuggestions(null);
+    setTx({});
     startedAtRef.current = new Date().toISOString();
 
     try {
@@ -109,7 +130,10 @@ export function Practice(props: {
         voiceName: pickVoice(scenario.targetLanguage),
         handlers: {
           onOpen: () => setStatus("live"),
-          onAudio: (pcm) => engineRef.current?.playPcm(pcm),
+          onAudio: (pcm) => {
+            if (pausedRef.current) return; // ignore late audio while paused
+            engineRef.current?.playPcm(pcm);
+          },
           onInterrupted: () => engineRef.current?.flushPlayback(),
           onTurnState: (t) => setPhase(t), // transport is the single source of truth
           onUserTranscript: (t) => pushDelta("user", t),
@@ -117,20 +141,22 @@ export function Practice(props: {
           onError: (m) => setNotice(`錯誤：${m}`),
           onClose: () => {
             if (finalizingRef.current) return;
+            if (pausedRef.current) return; // paused: keep state; resume() will reconnect
             void teardown();
             setStatus("ready");
             setNotice("連線中斷 — 點一下重新開始。");
           },
         },
       });
-      await client.connect();
-      clientRef.current = client;
+      clientRef.current = client; // hold the ref BEFORE connecting so an unmount
+      await client.connect(); //     during connect can still tear the socket down
       const engine = new AudioEngine({
         inputSampleRate: GeminiLiveDirect.INPUT_SAMPLE_RATE,
         outputSampleRate: GeminiLiveDirect.OUTPUT_SAMPLE_RATE,
         onChunk: (pcm) => clientRef.current?.sendAudio(pcm),
       });
       await engine.start();
+      engine.setPlaybackRate(slow ? 0.85 : 1);
       engineRef.current = engine;
     } catch (err) {
       // Silence the onClose our own teardown triggers, so the REAL cause
@@ -151,6 +177,69 @@ export function Practice(props: {
     engineRef.current = null;
   }
 
+  function pauseSession() {
+    if (pausedRef.current) return;
+    pausedRef.current = true;
+    setPaused(true);
+    engineRef.current?.pauseMic(); // mic off + silence coach; live socket stays open
+    // keep any 卡住 suggestions visible so the learner can rehearse them while paused
+  }
+
+  async function resumeSession() {
+    if (!pausedRef.current || resumingRef.current) return; // guard double-tap
+    resumingRef.current = true;
+    setNotice("");
+    try {
+      // If the socket dropped during a long pause, reconnect & continue the
+      // same conversation via the resumption handle.
+      if (clientRef.current && !clientRef.current.isOpen()) await clientRef.current.reconnect();
+      pausedRef.current = false; // let resumed coach audio through before mic is back
+      await engineRef.current?.resumeMic();
+      setPaused(false);
+    } catch (err) {
+      pausedRef.current = true; // stay paused so the user can retry or stop
+      setNotice(`無法接續：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      resumingRef.current = false;
+    }
+  }
+
+  async function helpMe() {
+    if (helping || !apiKey) return;
+    setHelping(true);
+    try {
+      setSuggestions(await suggestReplies(apiKey, { scenario, transcript: turnsRef.current }));
+    } catch {
+      setNotice("提示載入失敗，請再試一次。");
+    }
+    setHelping(false);
+  }
+
+  function toggleSpeed() {
+    const next = !slow;
+    setSlow(next);
+    engineRef.current?.setPlaybackRate(next ? 0.85 : 1);
+    void putProfile({ ...profile, prefs: { ...profile.prefs, slowSpeech: next } });
+  }
+
+  async function translateAt(i: number, text: string) {
+    if (tx[i]?.src === text) {
+      setTx((m) => {
+        const c = { ...m };
+        delete c[i];
+        return c;
+      });
+      return;
+    }
+    if (!apiKey) return;
+    try {
+      const zh = await translateLine(apiKey, text);
+      setTx((m) => ({ ...m, [i]: { src: text, zh } }));
+    } catch {
+      /* ignore translate failures */
+    }
+  }
+
   async function stopAndFinalize() {
     if (finalizingRef.current) return; // ignore double taps
     finalizingRef.current = true;
@@ -167,8 +256,6 @@ export function Practice(props: {
     };
 
     try {
-      // Save the transcript first (cheap, local) so a later AI/analysis failure
-      // never loses the session.
       // Transcript first (cheap, local) so a later AI failure never loses it.
       const session = {
         id: sessionId,
@@ -190,6 +277,15 @@ export function Practice(props: {
         if (items.length) await putItems(items);
         await putScenario({ ...scenario, progressNote: review.progressNote });
         await putSession({ ...session, review }); // persist the recap on the session
+        // W1 — fold this session's subscores into the remembered per-skill level
+        // (merge the current slow-speech pref so it isn't clobbered).
+        await putProfile(
+          applySessionToProfile(
+            { ...profile, prefs: { ...profile.prefs, slowSpeech: slow } },
+            review,
+            new Date().toISOString(),
+          ),
+        );
         setSummary({ items: items.length, review });
       } else {
         setSummary({ items: 0, review: emptyReview });
@@ -210,8 +306,8 @@ export function Practice(props: {
           ← 返回
         </button>
         <span className="grow" />
-        <span className={`pill ${status === "live" ? "pill--live" : "pill--neutral"}`}>
-          {STATUS_LABEL[status]}
+        <span className={`pill ${paused ? "pill--warn" : status === "live" ? "pill--live" : "pill--neutral"}`}>
+          {paused ? "已暫停" : STATUS_LABEL[status]}
         </span>
       </div>
 
@@ -229,12 +325,35 @@ export function Practice(props: {
           {status === "saving" ? (
             <p className="muted">正在分析本次練習…</p>
           ) : status === "live" ? (
-            // Pure status indicator (whose turn). NOT a button — stopping is the
-            // red bar pinned at the bottom, so a tap here can't end the session.
-            <div className="mic-btn mic-btn--live mic-btn--status" role="status" aria-live="polite">
-              <span className="mic-emoji">{phase === "coach" ? "🔊" : "🎤"}</span>
-              {phase === "coach" ? "教練說話中" : "換你說"}
-            </div>
+            // Pure status indicator (whose turn / paused). NOT a button — controls
+            // live in the pinned bottom bar so a tap here can't end the session.
+            <>
+              <div className="mic-btn mic-btn--live mic-btn--status" role="status" aria-live="polite">
+                <span className="mic-emoji">{paused ? "⏸" : phase === "coach" ? "🔊" : "🎤"}</span>
+                {paused ? "已暫停" : phase === "coach" ? "教練說話中" : "換你說"}
+              </div>
+              {!paused && (
+                <div className="row" style={{ justifyContent: "center", marginTop: 4 }}>
+                  <button className="btn btn--ghost btn--sm" onClick={helpMe} disabled={helping}>
+                    💡 {helping ? "想一下…" : "卡住?"}
+                  </button>
+                  <button className="btn btn--ghost btn--sm" onClick={toggleSpeed} aria-pressed={slow}>
+                    🐢 {slow ? "慢速 ✓" : "慢速"}
+                  </button>
+                </div>
+              )}
+              {suggestions && suggestions.length > 0 && (
+                <div className="card" style={{ width: "100%", marginTop: 8 }}>
+                  <div className="muted" style={{ marginBottom: 6 }}>可以這樣說：</div>
+                  {suggestions.map((s, i) => (
+                    <div key={i} style={{ marginBottom: i < suggestions.length - 1 ? 8 : 0 }}>
+                      <div style={{ color: "var(--coach)" }}>{s.say}</div>
+                      <div className="muted">{s.gloss}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           ) : (
             <>
               <button className="mic-btn" onClick={start} disabled={status === "connecting"}>
@@ -293,26 +412,45 @@ export function Practice(props: {
         </div>
       )}
 
-      <div className="section-title">逐字稿</div>
+      <div className="section-title">逐字稿{transcript.length > 0 && <span className="muted"> · 點句翻中文</span>}</div>
       <div className="card transcript">
         {transcript.length === 0 && <span className="muted">對話會顯示在這裡…</span>}
         {transcript.map((t, i) => (
-          <div key={i} className={`turn ${t.who === "user" ? "turn--you" : "turn--coach"}`}>
-            <span className="turn-who">{t.who === "user" ? "你" : "教練"}</span>
-            <span className="turn-text">{t.text}</span>
+          <div key={i}>
+            <div className={`turn ${t.who === "user" ? "turn--you" : "turn--coach"}`}>
+              <span className="turn-who">{t.who === "user" ? "你" : "教練"}</span>
+              <button
+                type="button"
+                className="turn-text turn-text--tap"
+                aria-label="點擊翻成中文"
+                onClick={() => translateAt(i, t.text)}
+              >
+                {t.text}
+              </button>
+            </div>
+            {tx[i]?.src === t.text && (
+              <div className="muted" style={{ paddingLeft: 48 }}>
+                ↳ {tx[i].zh}
+              </div>
+            )}
           </div>
         ))}
         <div ref={endRef} aria-hidden />
       </div>
 
-      {/* Always-reachable Stop while live — no scrolling back up to the orb. */}
+      {/* Always-reachable controls while live — no scrolling back up. */}
       {status === "live" && (
         <>
-          <div style={{ height: 96 }} aria-hidden />
+          <div style={{ height: 132 }} aria-hidden />
           <div className="stopbar">
-            <button className="btn btn--danger stopbar-btn" onClick={stopAndFinalize}>
-              ■ 停止並儲存
-            </button>
+            <div className="stopbar-row">
+              <button className="btn btn--ghost" onClick={paused ? resumeSession : pauseSession}>
+                {paused ? "▶ 接續" : "⏸ 暫停"}
+              </button>
+              <button className="btn btn--danger grow" onClick={stopAndFinalize}>
+                ■ 停止並儲存
+              </button>
+            </div>
           </div>
         </>
       )}

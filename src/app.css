@@ -181,6 +181,19 @@ h1 {
   margin: 8px 0;
 }
 
+/* W6 — glanceable progress strip (not a dashboard) */
+.statbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 14px 2px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.statbar b {
+  color: var(--text);
+}
+
 /* ---- cards ---- */
 .card {
   position: relative;
@@ -509,12 +522,17 @@ h1 {
   background: linear-gradient(0deg, var(--bg) 72%, transparent);
   pointer-events: none; /* let taps through the transparent fade… */
 }
-.stopbar-btn {
+.stopbar-row {
+  display: flex;
+  gap: 8px;
   width: 100%;
   max-width: calc(var(--maxw) - 32px);
+  pointer-events: auto; /* …but the controls are tappable */
+}
+.stopbar-row .btn {
   min-height: 56px;
+  min-width: 0; /* allow the grow button to shrink instead of overflowing */
   font-size: 16px;
-  pointer-events: auto; /* …but the button is tappable */
   box-shadow: 0 8px 24px -8px #000a;
 }
 
@@ -550,6 +568,17 @@ h1 {
 }
 .turn--coach .turn-text {
   color: var(--coach);
+}
+/* tap-to-translate: a button that reads as inline text */
+.turn-text--tap {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
 }
 
 .sr-only {

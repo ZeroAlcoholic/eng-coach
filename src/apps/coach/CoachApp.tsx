@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 
 import { getApiKey, setApiKey } from "../../kernel/apikey";
-import { getProfile, listScenarios, putProfile } from "../../kernel/db";
+import { getProfile, listItems, listScenarios, listSessions, putProfile } from "../../kernel/db";
 import { DEFAULT_PROFILE, type LearnerProfile, type Scenario } from "../../kernel/types";
 import { Home } from "./Home";
 import { Practice } from "./Practice";
@@ -13,13 +13,20 @@ export function CoachApp() {
   const [apiKey, setKey] = useState(getApiKey());
   const [profile, setProfile] = useState<LearnerProfile>(DEFAULT_PROFILE);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [stats, setStats] = useState({ items: 0, sessions: 0 }); // W6 glanceable counts
   const [practicing, setPracticing] = useState<Scenario | null>(null);
 
   async function reload() {
     try {
-      const [p, s] = await Promise.all([getProfile(), listScenarios()]);
+      const [p, s, items, sessions] = await Promise.all([
+        getProfile(),
+        listScenarios(),
+        listItems(),
+        listSessions(),
+      ]);
       setProfile(p);
       setScenarios(s);
+      setStats({ items: items.length, sessions: sessions.length });
     } catch (e) {
       // IndexedDB unavailable (e.g. storage blocked) — keep defaults, don't crash.
       console.warn("kernel reload failed", e);
@@ -62,6 +69,7 @@ export function CoachApp() {
       apiKey={apiKey}
       profile={profile}
       scenarios={scenarios}
+      stats={stats}
       onApiKey={onApiKey}
       onProfile={onProfile}
       onPractice={setPracticing}

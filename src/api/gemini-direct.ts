@@ -49,6 +49,7 @@ export class GeminiLiveDirect {
   private ready = false;
   private readonly pendingAudio: ArrayBuffer[] = [];
   private turn: "coach" | "you" = "you"; // coach greets first; first audio flips to "coach"
+  private resumeHandle: string | null = null; // for resuming after a pause/drop
   private readonly opts: GeminiDirectOptions;
 
   constructor(opts: GeminiDirectOptions) {
@@ -64,6 +65,7 @@ export class GeminiLiveDirect {
 
   async connect(): Promise<void> {
     this.turn = "you";
+    this.ready = false;
     const ai = new GoogleGenAI({ apiKey: this.opts.apiKey });
     const { handlers } = this.opts;
     this.session = await ai.live.connect({
@@ -73,6 +75,9 @@ export class GeminiLiveDirect {
         // Transcribe both sides so the UI can show the conversation.
         inputAudioTranscription: {},
         outputAudioTranscription: {},
+        // Enable resumption so a pause that outlives the socket can reconnect and
+        // continue the same conversation (resumeHandle is captured from updates).
+        sessionResumption: this.resumeHandle ? { handle: this.resumeHandle } : {},
         systemInstruction: this.opts.systemInstruction,
         // Pick the speaker voice. Native-audio model => no languageCode (accent
         // is voice + prompt driven). Omit speechConfig entirely if no voice.
@@ -84,7 +89,10 @@ export class GeminiLiveDirect {
         onopen: () => handlers.onOpen?.(),
         onmessage: (m: LiveServerMessage) => this.handleMessage(m),
         onerror: (e: ErrorEvent) => handlers.onError?.(e?.message ?? "live error"),
-        onclose: (e: CloseEvent) => handlers.onClose?.(e?.reason ?? "closed"),
+        onclose: (e: CloseEvent) => {
+          this.session = null; // so isOpen() is accurate and reconnect() can fire
+          handlers.onClose?.(e?.reason ?? "closed");
+        },
       },
     });
   }
@@ -114,6 +122,10 @@ export class GeminiLiveDirect {
   private handleMessage(m: LiveServerMessage): void {
     const { handlers } = this.opts;
 
+    if (m.sessionResumptionUpdate?.resumable && m.sessionResumptionUpdate.newHandle) {
+      this.resumeHandle = m.sessionResumptionUpdate.newHandle;
+    }
+
     if (m.setupComplete && !this.ready) {
       this.ready = true;
       for (const chunk of this.pendingAudio.splice(0)) this.pushAudio(chunk);
@@ -140,6 +152,18 @@ export class GeminiLiveDirect {
     // turnComplete is evaluated AFTER audio: Gemini often carries the final audio
     // chunk in the SAME message as turnComplete, so this must win → learner's turn.
     if (sc?.turnComplete) this.setTurn("you");
+  }
+
+  /** Is the live socket still open? */
+  isOpen(): boolean {
+    return this.session !== null;
+  }
+
+  /** Re-open after the socket dropped during a pause, resuming the SAME
+   *  conversation via the stored resumption handle. */
+  async reconnect(): Promise<void> {
+    if (this.session) return; // already open
+    await this.connect();
   }
 
   close(): void {

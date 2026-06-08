@@ -11,6 +11,7 @@
 // (No gamification, no forced scenario-narrowing — the scenario is user-defined.)
 
 import type { CEFRLevel, LearnerProfile, Scenario, TargetLanguage } from "../../kernel/types";
+import { cefrToNum, coachPolicy } from "./progress";
 
 const LANGUAGE_NAME: Record<TargetLanguage, string> = { en: "English", ja: "Japanese" };
 
@@ -93,6 +94,40 @@ export function composeSystemInstruction(s: Scenario, profile: LearnerProfile): 
     "- Teach at most ONE useful phrase per turn, in context, then immediately make them USE it; recycle earlier phrases later in fresh situations.",
     "- Run it as a TASK: give a moment to plan at the start; through the main exchange prioritise FLUENCY (note slips silently, keep them talking); near the end revisit 1–2 key errors. Drive toward the objectives below, and once they're accomplished, bring the role-play to a natural close rather than dragging on.",
   ];
+
+  // W3 — when we have measured ability for this language, tune the communication
+  // mode to it (expertise-reversal: lighten correction + fade scaffolding as the
+  // level rises). With no data yet, the scenario-level baseline above applies.
+  if (profile.levels?.[s.targetLanguage]) {
+    const pol = coachPolicy(profile, s.targetLanguage, cefrToNum(s.level));
+    const L1 = {
+      high: "lean on Traditional Chinese a lot",
+      medium: "use a fair amount of Traditional Chinese",
+      low: "mostly the target language, occasional Chinese",
+      minimal: "almost no Chinese",
+    }[pol.l1];
+    const CORR = {
+      explicit: "correct explicitly and model the right form",
+      prompt: "prompt them to self-repair first; correct explicitly only if they can't fix it",
+      recast: "mostly recast naturally; flag only repeated or meaning-breaking errors",
+    }[pol.correction];
+    const SCAF = {
+      model: "give a model line, then have them say it",
+      elicit: "elicit production with hints; give the line only if they stall",
+      extend: "push them to extend and elaborate; minimal support",
+    }[pol.scaffold];
+    const slow = pol.speed === "slow" || profile.prefs?.slowSpeech;
+    lines.push(
+      "",
+      "── Tune to the learner's CURRENT measured ability (from recent sessions) ──",
+      `- Chinese scaffolding: ${L1}.`,
+      `- Pace: ${slow ? "noticeably slower, with clear pauses" : "natural pace"}.`,
+      `- Correction: ${CORR}.`,
+      `- Scaffolding: ${SCAF}.`,
+    );
+  } else if (profile.prefs?.slowSpeech) {
+    lines.push("", "The learner prefers slower speech — speak noticeably slower with clear pauses.");
+  }
 
   if (s.targetLanguage === "ja") {
     lines.push(

@@ -20,6 +20,7 @@ import { deleteScenario, putScenario } from "../../kernel/db";
 import { buildPack, buildScenarioPack, downloadFile, importPack, itemsToCsv, readTextFile } from "../../kernel/pack";
 import { generateScenario } from "./ai";
 import { DEFAULT_SCENARIOS } from "./defaults";
+import { levelSummary } from "./progress";
 
 const LANG_LABEL: Record<TargetLanguage, string> = { en: "英文", ja: "日本語" };
 
@@ -27,23 +28,28 @@ export function Home(props: {
   apiKey: string;
   profile: LearnerProfile;
   scenarios: Scenario[];
+  stats: { items: number; sessions: number };
   onApiKey: (key: string) => void;
   onProfile: (p: LearnerProfile) => void;
   onPractice: (s: Scenario) => void;
   onChanged: () => void;
 }) {
-  const { apiKey, profile, scenarios } = props;
+  const { apiKey, profile, scenarios, stats } = props;
   const lang = profile.language; // the active "mode" — set by the top toggle
   const [keyInput, setKeyInput] = useState("");
   const [brief, setBrief] = useState("");
   const [busy, setBusy] = useState("");
   const [building, setBuilding] = useState(false); // dedicated flag — not a magic busy string
   const [editing, setEditing] = useState<Scenario | null>(null);
+  const [showSettings, setShowSettings] = useState(false); // W5: settings tucked away
+  const [showSamples, setShowSamples] = useState(false); // W5: samples collapsed once you have own
   const levelId = useId();
   const briefId = useId();
 
   const mine = scenarios.filter((s) => s.targetLanguage === lang);
   const samples = DEFAULT_SCENARIOS[lang].filter((d) => !scenarios.some((s) => s.id === d.id));
+  const lvl = levelSummary(profile, lang); // W6
+  const TREND = { up: "↗", flat: "→", down: "↘" } as const;
 
   async function withBusy(label: string, fn: () => Promise<void>) {
     setBusy(label);
@@ -111,7 +117,33 @@ export function Home(props: {
             </button>
           ))}
         </div>
+        <button
+          className="btn btn--ghost btn--sm"
+          aria-label="設定與資料"
+          aria-pressed={showSettings}
+          onClick={() => setShowSettings((v) => !v)}
+        >
+          ⚙️
+        </button>
       </div>
+
+      {/* W6 — glanceable progress strip (only once there's something to show).
+          Band + practice count are per-language; the vocab library is shared. */}
+      {(lvl || stats.sessions > 0) && (
+        <div className="statbar">
+          {lvl ? (
+            <>
+              <span>
+                {LANG_LABEL[lang]} <b>{lvl.band}</b> {TREND[lvl.trend]}
+              </span>
+              <span>練習 {lvl.sessions} 次</span>
+            </>
+          ) : (
+            <span>練習 {stats.sessions} 次</span>
+          )}
+          <span>詞庫 {stats.items}</span>
+        </div>
+      )}
 
       {/* 1. 首次：金鑰 */}
       {!apiKey && (
@@ -175,25 +207,30 @@ export function Home(props: {
         ),
       )}
 
-      {/* 3. 範例情境（直接代入開練） */}
-      {samples.length > 0 && (
-        <>
-          <div className="section-title">範例情境 · 直接開練</div>
-          {samples.map((sc) => (
-            <div key={sc.id} className="card">
-              <div className="scenario-title">{sc.title}</div>
-              <div className="row" style={{ marginBottom: 8 }}>
-                <span className="pill pill--neutral">CEFR {sc.level}</span>
-                <span className="pill pill--neutral">範例</span>
+      {/* 3. 範例情境 — 自動展開（沒有自建時）；有自建則收合成一顆按鈕（W5 減法） */}
+      {samples.length > 0 &&
+        (mine.length === 0 || showSamples ? (
+          <>
+            <div className="section-title">範例情境 · 直接開練</div>
+            {samples.map((sc) => (
+              <div key={sc.id} className="card">
+                <div className="scenario-title">{sc.title}</div>
+                <div className="row" style={{ marginBottom: 8 }}>
+                  <span className="pill pill--neutral">CEFR {sc.level}</span>
+                  <span className="pill pill--neutral">範例</span>
+                </div>
+                <p className="scenario-ctx">{sc.contentContext}</p>
+                <button className="btn btn--primary btn--block" onClick={() => props.onPractice(sc)}>
+                  ▶ 開始練習
+                </button>
               </div>
-              <p className="scenario-ctx">{sc.contentContext}</p>
-              <button className="btn btn--primary btn--block" onClick={() => props.onPractice(sc)}>
-                ▶ 開始練習
-              </button>
-            </div>
-          ))}
-        </>
-      )}
+            ))}
+          </>
+        ) : (
+          <button className="btn btn--ghost btn--sm" style={{ marginTop: 8 }} onClick={() => setShowSamples(true)}>
+            顯示範例情境（{samples.length}）
+          </button>
+        ))}
 
       {/* 4. 新增情境（語言＝目前模式） */}
       <div className="section-title">新增{LANG_LABEL[lang]}情境</div>
@@ -231,30 +268,34 @@ export function Home(props: {
         </div>
       </div>
 
-      {/* 5. 設定與資料 */}
-      <div className="section-title">設定與資料</div>
-      <div className="card">
-        <div className="row">
-          <button className="btn btn--ghost btn--sm" onClick={exportAll}>
-            匯出資料包
-          </button>
-          <button className="btn btn--ghost btn--sm" onClick={exportCsv}>
-            匯出單字（CSV）
-          </button>
-          <FileButton accept=".json,application/json" label="匯入資料包" onFile={importPackFile} small />
-        </div>
-        <div className="row" style={{ marginTop: 12 }}>
-          {apiKey && <span className="muted grow">✓ 金鑰已設定於本機</span>}
-          {apiKey && (
-            <button className="btn btn--ghost btn--sm" onClick={() => props.onApiKey("")}>
-              更換金鑰
-            </button>
-          )}
-          <a className="btn btn--ghost btn--sm" href="index.html">
-            ← 工具
-          </a>
-        </div>
-      </div>
+      {/* 5. 設定與資料 — tucked behind ⚙️ (W5 minimalism) */}
+      {showSettings && (
+        <>
+          <div className="section-title">設定與資料</div>
+          <div className="card">
+            <div className="row">
+              <button className="btn btn--ghost btn--sm" onClick={exportAll}>
+                匯出資料包
+              </button>
+              <button className="btn btn--ghost btn--sm" onClick={exportCsv}>
+                匯出單字（CSV）
+              </button>
+              <FileButton accept=".json,application/json" label="匯入資料包" onFile={importPackFile} small />
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              {apiKey && <span className="muted grow">✓ 金鑰已設定於本機</span>}
+              {apiKey && (
+                <button className="btn btn--ghost btn--sm" onClick={() => props.onApiKey("")}>
+                  更換金鑰
+                </button>
+              )}
+              <a className="btn btn--ghost btn--sm" href="index.html">
+                ← 工具
+              </a>
+            </div>
+          </div>
+        </>
+      )}
 
       {busy && <p className="notice">{busy}</p>}
     </main>

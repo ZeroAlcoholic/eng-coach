@@ -48,11 +48,27 @@ export interface Scenario {
   source?: string; // the original brief/markdown this scenario was built from
 }
 
-/** The learner's standing settings — defaults applied to new scenarios. */
+/** Smoothed per-skill level (EWMA), stored as a float on the 1–6 (A1–C2) scale. */
+export interface SkillLevels {
+  grammar: number;
+  vocab: number;
+  fluency: number;
+  interaction: number;
+}
+
+/** The learner's standing settings — defaults applied to new scenarios, plus the
+ *  remembered, smoothed ability used to adapt the coach (W1/W3). */
 export interface LearnerProfile {
   language: TargetLanguage; // default target language for new scenarios
   level: CEFRLevel; // default level for new scenarios
   focus: string[]; // recurring weakness areas to gently correct
+  // W1 — remembered ability per target language. EWMA of session subscores;
+  // never overwritten wholesale. Keyed by language so en/ja track separately.
+  levels?: Partial<Record<TargetLanguage, SkillLevels>>;
+  // W6 — compact history for the trend sparkline (cap ~30 entries / language).
+  levelHistory?: Partial<Record<TargetLanguage, { at: string; cefr: string; overall: number }[]>>;
+  // W4 — UX preferences.
+  prefs?: { slowSpeech?: boolean };
 }
 
 export interface TranscriptTurn {

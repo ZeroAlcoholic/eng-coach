@@ -16,6 +16,7 @@ import type {
   TranscriptTurn,
 } from "../../kernel/types";
 import { FRAME_PRESETS } from "./frames";
+import { medianReview } from "./progress";
 
 export type { SessionReview };
 
@@ -188,6 +189,71 @@ export async function summariseSession(
     `corrected version); progressNote (one or two concrete English sentences naming the specific ` +
     `pronunciation/grammar/phrase points to target next time so the next session can coach them ` +
     `directly).\n\nTRANSCRIPT:\n${convo}`;
-  const out = await generateJson<Partial<SessionReview>>(apiKey, prompt, REVIEW_SCHEMA);
-  return { ...fallback, ...out };
+  // Self-consistency: sample a few times and median the numeric fields (W2).
+  // Tolerant of partial failures — use whatever samples succeed.
+  const SAMPLES = 3;
+  const results = await Promise.all(
+    Array.from({ length: SAMPLES }, () =>
+      generateJson<Partial<SessionReview>>(apiKey, prompt, REVIEW_SCHEMA).catch(() => null),
+    ),
+  );
+  const valid = results
+    .filter((r): r is Partial<SessionReview> => !!r)
+    .map((r) => ({ ...fallback, ...r }) as SessionReview);
+  if (!valid.length) return fallback;
+  return valid.length >= 2 ? medianReview(valid) : valid[0];
+}
+
+// 4. anti-stuck: suggest a few things the learner could say next (W4) ---------
+const SUGGEST_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    suggestions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: { say: { type: Type.STRING }, gloss: { type: Type.STRING } },
+        required: ["say", "gloss"],
+      },
+    },
+  },
+  required: ["suggestions"],
+};
+
+export interface ReplySuggestion {
+  say: string; // what to say, in the target language (ja includes kana/romaji)
+  gloss: string; // 繁體中文 meaning
+}
+
+export async function suggestReplies(
+  apiKey: string,
+  opts: { scenario: Scenario; transcript: TranscriptTurn[] },
+): Promise<ReplySuggestion[]> {
+  const langName = opts.scenario.targetLanguage === "ja" ? "Japanese" : "English";
+  const tail = opts.transcript.slice(-6).map((t) => `${t.who}: ${t.text}`).join("\n") || "(just starting)";
+  const prompt =
+    `The learner is stuck in a ${langName} role-play and needs help knowing what to say next. ` +
+    `Given the recent turns, suggest 2–3 SHORT, natural things THEY (the learner) could say next, at ` +
+    `CEFR ${opts.scenario.level}.` +
+    (opts.scenario.targetLanguage === "ja" ? " For Japanese include kana + romaji in `say`." : "") +
+    ` Each item: say (in ${langName}) + gloss (Traditional Chinese meaning).\n\nRECENT:\n${tail}`;
+  const out = await generateJson<{ suggestions?: ReplySuggestion[] }>(apiKey, prompt, SUGGEST_SCHEMA);
+  return out.suggestions ?? [];
+}
+
+// translate one transcript line to Traditional Chinese (W4 tap-to-translate) ---
+const TRANSLATE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: { zh: { type: Type.STRING } },
+  required: ["zh"],
+};
+
+export async function translateLine(apiKey: string, text: string): Promise<string> {
+  if (!text.trim()) return "";
+  const out = await generateJson<{ zh?: string }>(
+    apiKey,
+    `Translate this into natural Traditional Chinese (Taiwan). Return only the translation.\n\n${text}`,
+    TRANSLATE_SCHEMA,
+  );
+  return out.zh ?? "";
 }

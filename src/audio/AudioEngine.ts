@@ -11,6 +11,10 @@
 
 import { float32ToPcm16, pcm16ToFloat32, resampleLinear } from "./pcm";
 
+const MIC_CONSTRAINTS: MediaStreamConstraints = {
+  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+};
+
 export interface AudioEngineOptions {
   inputSampleRate: number; // provider expects (e.g. 16000 for Gemini)
   outputSampleRate: number; // provider produces (e.g. 24000 for Gemini)
@@ -27,10 +31,16 @@ export class AudioEngine {
   // silence the assistant — resetting playHead alone leaves already-started
   // BufferSources audible.
   private scheduled: AudioBufferSourceNode[] = [];
+  private rate = 1; // playback speed (W4 slow-speech toggle); <1 = slower
   private readonly opts: AudioEngineOptions;
 
   constructor(opts: AudioEngineOptions) {
     this.opts = opts;
+  }
+
+  /** Playback speed for the coach's voice (1 = normal, 0.85 = slower). */
+  setPlaybackRate(rate: number): void {
+    this.rate = rate;
   }
 
   /** Must be called from a user gesture (autoplay policy). */
@@ -39,9 +49,7 @@ export class AudioEngine {
     await this.ctx.resume();
     this.playHead = this.ctx.currentTime;
 
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
+    this.stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
     // Base-relative (NOT "/capture-worklet.js") so it resolves under a project
     // subpath like https://user.github.io/<repo>/ — an absolute path would 404
     // there and the mic would never start.
@@ -68,11 +76,14 @@ export class AudioEngine {
     buffer.getChannelData(0).set(samples);
     const node = this.ctx.createBufferSource();
     node.buffer = buffer;
+    node.playbackRate.value = this.rate;
     node.connect(this.ctx.destination);
     const now = this.ctx.currentTime;
     if (this.playHead < now) this.playHead = now;
     node.start(this.playHead);
-    this.playHead += buffer.duration;
+    // Wall-clock playback time scales with rate (<1 = longer), so advance the
+    // gapless play-head by the real duration or chunks overlap in slow mode.
+    this.playHead += buffer.duration / this.rate;
     this.scheduled.push(node);
     node.onended = () => {
       const i = this.scheduled.indexOf(node);
@@ -93,6 +104,27 @@ export class AudioEngine {
     }
     this.scheduled = [];
     this.playHead = this.ctx.currentTime;
+  }
+
+  /** Pause: stop the mic (light off) + silence playback, but keep the
+   *  AudioContext and worklet so resume is cheap. The live session stays open. */
+  pauseMic(): void {
+    this.source?.disconnect();
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.source = null;
+    this.flushPlayback();
+  }
+
+  /** Resume after pauseMic: re-acquire the mic and re-wire it to the worklet.
+   *  Must be called from a user gesture. */
+  async resumeMic(): Promise<void> {
+    if (!this.ctx || !this.workletNode) return;
+    await this.ctx.resume();
+    this.playHead = this.ctx.currentTime;
+    this.stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+    this.source = this.ctx.createMediaStreamSource(this.stream);
+    this.source.connect(this.workletNode);
   }
 
   async stop(): Promise<void> {
