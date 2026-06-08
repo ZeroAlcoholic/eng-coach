@@ -5,7 +5,9 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 // Multi-page: one static build, several pure-browser tools sharing one origin
-// (so they share IndexedDB). Launcher at /, coach at /coach.html, spike kept.
+// (so they share IndexedDB). Launcher at /, coach at /coach.html. spike.html is
+// a local-only proof-of-concept and is deliberately NOT a build input, so the
+// debug page is never published to the public Pages site.
 const page = (name: string) => fileURLToPath(new URL(`./${name}`, import.meta.url));
 
 // Relative base in production so the build works under a GitHub Pages project
@@ -19,7 +21,6 @@ export default defineConfig(({ mode }) => ({
       input: {
         main: page("index.html"),
         coach: page("coach.html"),
-        spike: page("spike.html"),
       },
     },
   },
