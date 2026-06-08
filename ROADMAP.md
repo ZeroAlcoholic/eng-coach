@@ -1,42 +1,52 @@
-# Roadmap — pure-browser voice coach
+# Worklist — pure-browser voice coach
 
-**Definition of "long-term":** an hours-of-continuous-dev backlog of concrete,
-shippable increments. **Locked constraints:** no server (GitHub Pages static),
-all data local-first (IndexedDB / localStorage / portable LearningPack), simple
-architecture — everything below is prompt logic + local state + the
-`gemini-3.5-flash` calls already in the pipeline. Synthesised from a 5-agent
-web research pass (apps + SLA pedagogy + curriculum + assessment/adaptivity).
+A single, ordered backlog of shippable work items (hours-of-continuous-dev scale).
+Synthesised from a 5-agent research pass, then consolidated under the design
+principles below.
 
-## Phase 0 — Close the learning loop (the missing payload) · P0
-- **Richer end-of-session recap**: one `gemini-3.5-flash` call → `{cefr, subscores{grammar,vocab,fluency,interaction}, wins[], fixes[], reformulations[], objectivesMet[], reviewZh, progressNote}`; persist on `SessionRecord`, show in the done card, emit `LearnedItem` rows. *(extends current `summariseSession` + `extractLearnedItems`.)*
-- **Feedback decision-tree (prompt-first)**: on error, PROMPT for self-repair first; explicit/metalinguistic only if they can't fix it after one try; type-by-error; cap per turn. *(Research: prompts give the most durable gains; default-recast is the weakest option.)*
-- **Pushed-output core policy**: short coach turns, learner talk-time ≥60%, end most turns with a produce-request, pre-surface the gap for the A2 JA learner. *(mostly already in the prompt — reinforce.)*
-- **Task-bounded sessions**: drive toward the scenario's 2–3 objectives; PLANNING → FLUENCY (withhold correction) → ACCURACY (revisit 1–2 errors) phases; wrap up when objectives are met.
+## Design principles (apply to EVERY item)
+- **極簡 UI**: one primary action per screen; secondary/advanced functions live
+  behind a single **settings sheet** or a collapsible row — never on the main
+  surface. Default to hidden; reveal on demand (progressive disclosure).
+- **輕鬆 UX**: low-friction, glanceable, one-tap; phone- and car-friendly; never
+  interrupt the conversation flow. New data (level, progress, review) shows as a
+  small badge / mini-trend, **not** a dashboard or a table of numbers.
+- **Locked constraints**: no server (GitHub Pages static); all data local-first
+  (IndexedDB / localStorage / portable LearningPack); simple architecture —
+  everything is prompt logic + local state + the existing `gemini-3.5-flash` calls.
 
-## Phase 1 — Remember & adapt · P0
-- **LLM-as-rubric judge** (rubric + few-shot anchors + reason-before-number + median of 2–3): per-session CEFR + per-skill subscores. *(reuse the recap call.)*
-- **Per-skill level state** on `LearnerProfile` `{estimateMean, estimateVar, history[]}`, EWMA (α≈0.25) — never overwrite; render a progress chart.
-- **Adaptivity policy table**: smoothed level + subscores → `{l1Ratio, speechRate, lexicalCeiling, correctionMode, scaffoldStyle}` rendered into the coach prompt each session (expertise-reversal: lighten correction as level rises).
-- **Anti-stuck UX**: "help me" suggestions, tap-to-translate, ask-in-Mandarin, adjustable speech speed (`playbackRate`); persist preferences.
+## ✅ Done
+- Two-layer scenarios, EN(business)/JA(travel) tracks + built-in defaults; 繁中 UI
+  with top EN/日 toggle; live voice (Gemini direct), turn-taking cue, fixed Stop bar.
+- **Recap & scoring**: end-of-session LLM-rubric judge → CEFR + per-skill subscores
+  (1–6) + wins/fixes + objectivesMet + progressNote (feeds next session); vocab →
+  LearnedItem; prompt-first correction; task phases (plan→fluency→accuracy).
+- Quality gate (eslint+tsc+build) wired into CI; black-forest theme.
 
-## Phase 2 — Real review & contextual recall · P0/P1
-- **ts-fsrs over LearnedItem** (zero-dep, client-side) + 4-button post-session review; keep Anki-CSV aligned; FSRS defaults (no optimizer < 1000 reviews).
-- **Live recycle + Pimsleur anticipation**: warm-up surfaces due items; coach elicits them in a fresh scene; outcome updates the FSRS schedule.
-- **Scaffolding-then-fading** tied to per-item mastery (full scaffold → leading cue → independent).
-- **Intrinsic progress counters** (objectives met, phrases used, recall hit-rate). No streaks/XP.
+## Worklist (ordered; each item is independently shippable)
 
-## Phase 3 — Curriculum depth & placement · P1/P2
-- **Optional spoken placement** (1–2 min Live + comprehension probes) → per-skill CEFR + goal/interests.
-- **Target-situation inventories** per track (editable JSON) → deficiency-based scenario generation.
-- **SSARC complexity dials** on the Layer-1 frame; re-run the same frame harder with fresh Layer-2 content.
-- **Bayesian Knowledge Tracing** per objective (productive mastery), retire mastered, surface weak.
+| # | size | item | what / why | minimal-UX treatment |
+|---|---|---|---|---|
+| **W1** | S | **Per-skill level memory** | EWMA(α≈0.25) per skill on LearnerProfile `{mean,var,history}` — remember & smooth, never overwrite. Foundation for adapting. | Invisible by default; surfaces only as W6's tiny badge. |
+| **W2** | S | **Steadier judge** | self-consistency: sample the CEFR judge 2–3×, take the median (cuts run-to-run drift). | Fully invisible. |
+| **W3** | M | **Adapt to ability** | client policy table: smoothed level → `{中文比例, 語速, 糾正強度, 鷹架}` rendered into the coach prompt each session (lighten correction as level rises). | Invisible — the coach just "feels right"; at most a one-line「目前模式」hint. |
+| **W4** | M | **Anti-stuck help (live)** | 「卡住?」→ 2–3 say-this suggestions (gloss); tap-to-translate a line; ask-in-Mandarin; adjustable speech speed. | ONE small button on the live screen; a sheet opens on demand; speed = a tiny toggle. Orb stays clean. |
+| **W5** | S | **UX subtraction — declutter Home** | move 匯出/匯入/CSV/換金鑰 into a single ⚙️ settings sheet; collapse 範例情境 once the user has own scenarios; keep one primary CTA. | This IS the minimalism item — fewer things on screen. |
+| **W6** | S | **Glanceable progress** | objectives-met, phrases-used, level trend as small chips / a sparkline. | A single compact strip on Home; no dashboard, no tables. |
+| **W7** | M | **FSRS review + warm-up recycle** | ts-fsrs (zero-dep) over LearnedItem; coach weaves due items into the next scene; outcome updates schedule. | A small「複習 N」chip on Home → a 4-button sheet; recycle handled by the coach (no new screen). |
+| **W8** | M | **Scaffolding that fades** | per-item mastery: full model → leading cue → independent; drives the A2→production move. | Invisible; just changes how much the coach hands you. |
+| **W9** | M | **Shadow micro-mode (prosody)** | optional「跟讀」: coach models a phrase, you echo, qualitative stress/rhythm feedback (intelligibility, not an accent score). | A small optional affordance inside a turn; off the critical path. |
 
-## Phase 4 — Pronunciation (scope honestly) · P1/P2
-- **Shadow micro-mode** with qualitative prosody/comprehensibility feedback (intelligibility, not accent elimination).
-- **Optional Gemini-multimodal** word-level stress/mispronunciation flags + red highlight + "hear it" — coaching guidance, NOT a calibrated score.
-- **Deterministic lexical metrics** (type-token + frequency bands; JLPT list for JA) to stabilise the level estimate.
+## Later / optional (only if a real need shows)
+- Spoken placement (1–2 min) → per-skill CEFR + goal; SSARC complexity ramp on the
+  Layer-1 frame; Bayesian Knowledge Tracing per objective; deterministic lexical
+  metrics (type-token / frequency bands, JLPT list) as a 2nd opinion to the judge.
 
 ## Deliberately NOT building (lean, no-server)
-No backend; no ELSA-style phoneme alignment / calibrated pronunciation score
-(needs a server acoustic model); no IRT/CAT placement machinery (only pays off at
-many-user scale); no streaks/XP/leaderboards; no FSRS optimizer < 1000 reviews.
+No backend; no ELSA-style phoneme/calibrated pronunciation score (needs a server
+acoustic model); no IRT/CAT placement machinery; no streaks/XP/leaderboards
+(erodes intrinsic motivation for a solo learner); no FSRS optimizer < 1000 reviews.
+
+---
+**Suggested order:** W5 (declutter first, so new features land on a clean surface)
+→ W1 → W2 → W3 → W6 → W4 → W7 → W8 → W9.
