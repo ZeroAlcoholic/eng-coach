@@ -159,8 +159,9 @@ export async function summariseSession(
     `${opts.previous ? ` and the previous note was "${opts.previous}"` : ""}. Return: ` +
     `cefr (your honest CEFR estimate of THIS conversation, e.g. "B1"); reviewEn (ONE encouraging ` +
     `English sentence on how they did); reviewZh (ONE Traditional Chinese sentence, Taiwan ` +
-    `colloquial, same gist); progressNote (ONE concrete English sentence on what to work on next ` +
-    `time).\n\nTRANSCRIPT:\n${convo}`;
+    `colloquial, same gist); progressNote (ONE or two concrete English sentences naming the SPECIFIC ` +
+    `things to target next time — e.g. a recurring pronunciation/accent issue, a grammar slip, or a ` +
+    `phrase to reuse — so the next session can coach them directly).\n\nTRANSCRIPT:\n${convo}`;
   const out = await generateJson<Partial<SessionReview>>(apiKey, prompt, REVIEW_SCHEMA);
   return { ...fallback, ...out };
 }
