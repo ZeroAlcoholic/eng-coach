@@ -9,21 +9,17 @@ import { useEffect, useRef, useState } from "react";
 
 import { AudioEngine } from "../../audio/AudioEngine";
 import { GeminiLiveDirect } from "../../api/gemini-direct";
-import { putItems, putProfile, putScenario, putSession } from "../../kernel/db";
+import { listItems, putDraft, putProfile } from "../../kernel/db";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
-import {
-  extractLearnedItems,
-  suggestReplies,
-  summariseSession,
-  translateLine,
-  type ReplySuggestion,
-  type SessionReview,
-} from "./ai";
-import { applySessionToProfile } from "./progress";
+import { suggestReplies, translateLine, type ReplySuggestion, type SessionReview } from "./ai";
+import { emptyReview, finalizeSession, PersistError, ResultsPersistError } from "./finalize";
+import { band } from "./progress";
 import { composeSystemInstruction } from "./prompt";
+import { dueQueue } from "./srs";
 import { pickVoice } from "./voices";
 
 const LIVE_MODEL = "gemini-3.1-flash-live-preview";
+const RECYCLE_CAP = 5; // W7 — due items woven into a session: recycle, not drill
 
 type Status = "ready" | "connecting" | "live" | "saving" | "done";
 
@@ -34,10 +30,6 @@ const STATUS_LABEL: Record<Status, string> = {
   saving: "分析中…",
   done: "完成",
 };
-
-// Per-skill subscore (1–6) → CEFR band for display.
-const BANDS = ["—", "A1", "A2", "B1", "B2", "C1", "C2"];
-const band = (n: number): string => BANDS[n] ?? "—";
 
 export function Practice(props: {
   apiKey: string;
@@ -64,10 +56,15 @@ export function Practice(props: {
   const resumingRef = useRef(false); // guards double-tap on ▶ 接續
   const clientRef = useRef<GeminiLiveDirect | null>(null);
   const startedAtRef = useRef<string>("");
+  const sessionIdRef = useRef<string>("");
   const finalizingRef = useRef(false);
   const startingRef = useRef(false); // guards the async start() window against re-entry
   const turnsRef = useRef<TranscriptTurn[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const draftTimerRef = useRef<number | null>(null);
+  const draftFailsRef = useRef(0); // consecutive backup failures
+  const [draftWarning, setDraftWarning] = useState(false);
 
   // Authoritative safety net: tear down mic + WebSocket if the screen unmounts
   // for any reason (not just the guarded Back button). finalizingRef is set so
@@ -78,6 +75,59 @@ export function Practice(props: {
       void teardown();
     };
   }, []);
+
+  // Keep the screen awake during a session — hands-off phone/car practice dies
+  // the moment the screen locks (mic + WebSocket get suspended). Best-effort:
+  // unsupported browsers / battery-saver refusals are non-fatal.
+  async function acquireWakeLock() {
+    try {
+      wakeLockRef.current = (await navigator.wakeLock?.request("screen")) ?? null;
+    } catch {
+      wakeLockRef.current = null;
+    }
+  }
+
+  // The OS silently releases the wake lock whenever the page is hidden —
+  // re-acquire on return while a session is still running.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && clientRef.current) void acquireWakeLock();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
+  // Crash-safety: persist the in-progress transcript (throttled) so a reaped
+  // mobile tab never loses the conversation. Home offers recovery on next open.
+  // Gated on finalizingRef: a transcript event buffered during teardown must
+  // not re-arm the timer after finalize cleared the draft (phantom recovery).
+  function scheduleDraftSave() {
+    if (finalizingRef.current || draftTimerRef.current != null) return;
+    draftTimerRef.current = window.setTimeout(() => {
+      draftTimerRef.current = null;
+      if (finalizingRef.current) return;
+      putDraft(currentDraft())
+        .then(() => {
+          draftFailsRef.current = 0;
+          setDraftWarning(false);
+        })
+        .catch(() => {
+          // Never disturb the live session, but repeated failures mean the
+          // advertised crash protection doesn't exist — say so, quietly.
+          draftFailsRef.current += 1;
+          if (draftFailsRef.current >= 3) setDraftWarning(true);
+        });
+    }, 1200);
+  }
+
+  function currentDraft() {
+    return {
+      id: sessionIdRef.current,
+      scenarioId: scenario.id,
+      startedAt: startedAtRef.current,
+      transcript: turnsRef.current,
+    };
+  }
 
   // Keep the latest line in view during a live session, but don't fight the user
   // if they've scrolled up to re-read.
@@ -98,6 +148,7 @@ export function Practice(props: {
       turnsRef.current = next;
       return next;
     });
+    scheduleDraftSave();
   }
 
   async function start() {
@@ -118,15 +169,22 @@ export function Practice(props: {
     setSuggestions(null);
     setTx({});
     startedAtRef.current = new Date().toISOString();
+    sessionIdRef.current = crypto.randomUUID();
+    void acquireWakeLock();
 
     try {
+      // W7 — read due items NOW (not at render): the app can sit open for hours
+      // and reviews/deletes may happen meanwhile. Best-effort: no items, no recycle.
+      const dueItems = await listItems()
+        .then((its) => dueQueue(its, scenario.targetLanguage, new Date(), RECYCLE_CAP))
+        .catch(() => []);
       // Build inside the try: composeSystemInstruction/pickVoice run here, so a
       // synchronous throw (e.g. a malformed imported scenario) is caught and the
       // finally still resets startingRef — otherwise Start would wedge.
       const client = new GeminiLiveDirect({
         apiKey,
         model: LIVE_MODEL,
-        systemInstruction: composeSystemInstruction(scenario, profile),
+        systemInstruction: composeSystemInstruction(scenario, profile, dueItems),
         voiceName: pickVoice(scenario.targetLanguage),
         handlers: {
           onOpen: () => setStatus("live"),
@@ -173,6 +231,8 @@ export function Practice(props: {
   async function teardown() {
     clientRef.current?.close();
     clientRef.current = null;
+    wakeLockRef.current?.release().catch(() => {});
+    wakeLockRef.current = null;
     await engineRef.current?.stop();
     engineRef.current = null;
   }
@@ -243,56 +303,44 @@ export function Practice(props: {
   async function stopAndFinalize() {
     if (finalizingRef.current) return; // ignore double taps
     finalizingRef.current = true;
+    if (draftTimerRef.current != null) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
+    // Flush (not just cancel) the pending backup: if the save below fails, the
+    // surviving draft must hold the FULL conversation, not one 1.2s short.
+    await putDraft(currentDraft()).catch(() => {});
     await teardown();
     setStatus("saving");
 
-    const turns = turnsRef.current;
-    const sessionId = crypto.randomUUID();
-    const emptyReview: SessionReview = {
-      cefr: scenario.level,
-      reviewEn: "",
-      reviewZh: "",
-      progressNote: scenario.progressNote ?? "",
-    };
-
     try {
-      // Transcript first (cheap, local) so a later AI failure never loses it.
-      const session = {
-        id: sessionId,
-        scenarioId: scenario.id,
+      // Shared pipeline: transcript first, then judge + items + profile fold.
+      // Merge the current slow-speech pref so it isn't clobbered.
+      const outcome = await finalizeSession(apiKey, {
+        scenario,
+        profile: { ...profile, prefs: { ...profile.prefs, slowSpeech: slow } },
+        sessionId: sessionIdRef.current,
         startedAt: startedAtRef.current,
-        transcript: turns,
-      };
-      await putSession(session);
-      if (turns.length) {
-        const [items, review] = await Promise.all([
-          extractLearnedItems(apiKey, { scenario, sessionId, transcript: turns }),
-          summariseSession(apiKey, {
-            transcript: turns,
-            level: scenario.level,
-            previous: scenario.progressNote,
-            objectives: scenario.objectives,
-          }),
-        ]);
-        if (items.length) await putItems(items);
-        await putScenario({ ...scenario, progressNote: review.progressNote });
-        await putSession({ ...session, review }); // persist the recap on the session
-        // W1 — fold this session's subscores into the remembered per-skill level
-        // (merge the current slow-speech pref so it isn't clobbered).
-        await putProfile(
-          applySessionToProfile(
-            { ...profile, prefs: { ...profile.prefs, slowSpeech: slow } },
-            review,
-            new Date().toISOString(),
-          ),
-        );
-        setSummary({ items: items.length, review });
-      } else {
-        setSummary({ items: 0, review: emptyReview });
-      }
+        transcript: turnsRef.current,
+      });
+      setSummary(outcome);
     } catch (err) {
-      setNotice(`已儲存，但分析失敗：${err instanceof Error ? err.message : String(err)}`);
-      setSummary({ items: 0, review: emptyReview });
+      const msg = err instanceof Error ? err.message : String(err);
+      // Three honest cases: PersistError = NOTHING saved (draft survives for
+      // Home's recovery card); ResultsPersistError = transcript saved AND
+      // analysis done, but the results only partially stored (still show the
+      // recap we computed); anything else = saved, analysis failed.
+      if (err instanceof ResultsPersistError) {
+        setNotice(`分析完成，但部分結果未能寫入（等級／詞庫／下次重點可能沒更新）：${msg}`);
+        setSummary(err.outcome);
+      } else {
+        setNotice(
+          err instanceof PersistError
+            ? `儲存失敗 — 逐字稿暫存為草稿，回首頁可再「分析並儲存」：${msg}`
+            : `已儲存，但分析失敗：${msg}`,
+        );
+        setSummary({ items: 0, review: emptyReview(scenario) });
+      }
     }
     setStatus("done");
   }
@@ -318,6 +366,9 @@ export function Practice(props: {
       </div>
       <p className="muted">{scenario.contentContext}</p>
       {notice && <p className="notice">{notice}</p>}
+      {draftWarning && status === "live" && (
+        <p className="notice">⚠ 自動備份持續失敗 — 若這個分頁被中斷，可能遺失這段逐字稿。</p>
+      )}
 
       {/* Hero control */}
       {status !== "done" && (

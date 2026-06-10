@@ -10,6 +10,12 @@ backend.
   project.
 - **Data is local-first** (IndexedDB). Export/import a portable Learning Pack
   (JSON) to move between devices; export learned vocab as CSV for Anki.
+- **Phone-safe sessions**: the screen stays awake while practicing, and the live
+  transcript is saved as you speak — if the tab is killed, Home offers
+  「恢復上次未儲存的練習」.
+- **Your data is browsable**: tap the stat chips on Home for past recaps
+  (練習紀錄), the vocab library (詞庫), and FSRS spaced review (複習 N) — due
+  items are also recycled into your next live session.
 - **Folder of tools** sharing one kernel: the Speaking Coach is live; flashcards
   and grammar can plug into the same data later.
 

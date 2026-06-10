@@ -23,6 +23,12 @@ export function numToCefr(n: number): CEFRLevel {
   return CEFR_ORDER[Math.min(5, Math.max(0, Math.round(n) - 1))];
 }
 
+/** Per-skill subscore (1–6) → CEFR band label for DISPLAY: unlike numToCefr it
+ *  does not clamp — a missing/zero subscore reads as "—", not "A1". */
+export function band(n: number): string {
+  return CEFR_ORDER[n - 1] ?? "—";
+}
+
 export function median(nums: number[]): number {
   if (!nums.length) return 0;
   const s = [...nums].sort((a, b) => a - b);

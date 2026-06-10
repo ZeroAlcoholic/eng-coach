@@ -106,6 +106,19 @@ export interface SessionRecord {
 }
 
 /**
+ * An in-progress session, persisted incrementally while the learner speaks so a
+ * killed tab (mobile browsers reap backgrounded pages) never loses the
+ * conversation. Singleton in the kv store; promoted to a SessionRecord on a
+ * clean stop, or recovered from Home on next launch.
+ */
+export interface DraftSession {
+  id: string;
+  scenarioId: string;
+  startedAt: string; // ISO
+  transcript: TranscriptTurn[];
+}
+
+/**
  * The ECOSYSTEM INTEROP UNIT. The conversation coach extracts these at session
  * end (vocab/phrases/grammar the learner met or was corrected on); other static
  * tools in the same folder (flashcards, grammar drills) read them from the same
@@ -123,9 +136,15 @@ export interface LearnedItem {
   sourceScenarioId?: string;
   sourceSessionId?: string;
   firstSeenAt: string; // ISO
-  // SRS scheduling, owned by whatever flashcard tool consumes the item. The
-  // coach leaves this undefined; a card app fills it in.
-  srs?: { due?: string; intervalDays?: number; ease?: number; reps?: number };
+  // SRS scheduling (W7). due/intervalDays/reps are the stable interop surface;
+  // `fsrs` carries the full serialized ts-fsrs card (dates as ISO strings) so
+  // the scheduler can resume exactly. An item with no srs is a NEW card.
+  srs?: {
+    due?: string;
+    intervalDays?: number;
+    reps?: number;
+    fsrs?: Record<string, unknown>;
+  };
   tags?: string[];
 }
 

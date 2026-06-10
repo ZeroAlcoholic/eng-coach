@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 
-import { listItems, listScenarios, listSessions } from "../../kernel/db";
+import { countSessions, listItems, listScenarios } from "../../kernel/db";
 
 interface Counts {
   scenarios: number;
@@ -16,8 +16,9 @@ export function Launcher() {
 
   useEffect(() => {
     // 初次讀取（IndexedDB，非同步）；失敗就維持 0，不中斷畫面。
-    void Promise.all([listScenarios(), listItems(), listSessions()])
-      .then(([sc, it, se]) => setCounts({ scenarios: sc.length, items: it.length, sessions: se.length }))
+    // sessions 只要數量 — count() 不必反序列化整批逐字稿。
+    void Promise.all([listScenarios(), listItems(), countSessions()])
+      .then(([sc, it, se]) => setCounts({ scenarios: sc.length, items: it.length, sessions: se }))
       .catch((e) => console.warn("讀取資料失敗", e));
   }, []);
 

@@ -11,16 +11,23 @@ import {
   CEFR_LEVELS,
   TARGET_LANGUAGES,
   type CEFRLevel,
+  type DraftSession,
+  type LearnedItem,
   type LearnerProfile,
   type LearningPack,
   type Scenario,
   type TargetLanguage,
 } from "../../kernel/types";
-import { deleteScenario, putScenario } from "../../kernel/db";
+import { clearDraft, deleteScenario, putScenario, putSession } from "../../kernel/db";
 import { buildPack, buildScenarioPack, downloadFile, importPack, itemsToCsv, readTextFile } from "../../kernel/pack";
 import { generateScenario } from "./ai";
 import { DEFAULT_SCENARIOS } from "./defaults";
+import { finalizeSession, PersistError, ResultsPersistError } from "./finalize";
+import { HistorySheet } from "./HistorySheet";
 import { levelSummary } from "./progress";
+import { ReviewSheet } from "./ReviewSheet";
+import { countDue } from "./srs";
+import { VocabSheet } from "./VocabSheet";
 
 const LANG_LABEL: Record<TargetLanguage, string> = { en: "英文", ja: "日本語" };
 
@@ -28,27 +35,34 @@ export function Home(props: {
   apiKey: string;
   profile: LearnerProfile;
   scenarios: Scenario[];
-  stats: { items: number; sessions: number };
+  items: LearnedItem[];
+  sessionCount: number;
+  draft: DraftSession | null; // unsaved session left by a killed tab
+  lastPracticed: Scenario | null; // most recent scenario for the active language
+  loadFailed: boolean; // IndexedDB load failed — empty states below would lie
   onApiKey: (key: string) => void;
   onProfile: (p: LearnerProfile) => void;
   onPractice: (s: Scenario) => void;
   onChanged: () => void;
 }) {
-  const { apiKey, profile, scenarios, stats } = props;
+  const { apiKey, profile, scenarios, items, sessionCount, draft } = props;
   const lang = profile.language; // the active "mode" — set by the top toggle
   const [keyInput, setKeyInput] = useState("");
   const [brief, setBrief] = useState("");
   const [busy, setBusy] = useState("");
   const [building, setBuilding] = useState(false); // dedicated flag — not a magic busy string
+  const [recovering, setRecovering] = useState(false); // guard double-tap on 恢復
   const [editing, setEditing] = useState<Scenario | null>(null);
   const [showSettings, setShowSettings] = useState(false); // W5: settings tucked away
   const [showSamples, setShowSamples] = useState(false); // W5: samples collapsed once you have own
+  const [sheet, setSheet] = useState<"history" | "vocab" | "review" | null>(null);
   const levelId = useId();
   const briefId = useId();
 
   const mine = scenarios.filter((s) => s.targetLanguage === lang);
   const samples = DEFAULT_SCENARIOS[lang].filter((d) => !scenarios.some((s) => s.id === d.id));
   const lvl = levelSummary(profile, lang); // W6
+  const due = countDue(items, lang, new Date()); // W7
   const TREND = { up: "↗", flat: "→", down: "↘" } as const;
 
   async function withBusy(label: string, fn: () => Promise<void>) {
@@ -100,6 +114,56 @@ export function Home(props: {
     downloadFile(`${slug(sc.title)}.json`, JSON.stringify(pack, null, 2), "application/json");
   }
 
+  // Crash recovery — a draft means a live session never reached「停止並儲存」
+  // (the tab was killed or the page reloaded). Same finalize pipeline as a
+  // normal stop; without a key or scenario we still keep the raw transcript.
+  async function recoverDraft() {
+    if (!draft || recovering) return;
+    setRecovering(true);
+    const sc = scenarios.find((s) => s.id === draft.scenarioId);
+    setBusy("分析上次未儲存的練習中…");
+    try {
+      if (sc && apiKey) {
+        const out = await finalizeSession(apiKey, {
+          scenario: sc,
+          profile,
+          sessionId: draft.id,
+          startedAt: draft.startedAt,
+          transcript: draft.transcript,
+        });
+        setBusy(`已救回上次練習：CEFR ${out.review.cefr}，新增 ${out.items} 個詞彙。`);
+      } else {
+        await putSession({
+          id: draft.id,
+          scenarioId: draft.scenarioId,
+          startedAt: draft.startedAt,
+          transcript: draft.transcript,
+        });
+        await clearDraft();
+        setBusy(`已儲存逐字稿（${sc ? "未設定金鑰" : "原情境已刪除"}，未分析）。`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // PersistError → nothing saved, draft still here, retry is meaningful.
+      // ResultsPersistError → saved AND analysed, results partially stored.
+      // Anything else → the transcript IS saved; only the analysis failed.
+      setBusy(
+        err instanceof PersistError
+          ? `儲存失敗，草稿仍保留，可再試一次：${msg}`
+          : err instanceof ResultsPersistError
+            ? `已救回並分析（CEFR ${err.outcome.review.cefr}），但部分結果未能寫入：${msg}`
+            : `逐字稿已儲存（見「練習」紀錄），但分析失敗：${msg}`,
+      );
+    }
+    setRecovering(false);
+    props.onChanged();
+  }
+
+  async function discardDraft() {
+    await clearDraft().catch(() => {});
+    props.onChanged();
+  }
+
   return (
     <main className="app">
       <div className="topbar">
@@ -127,22 +191,62 @@ export function Home(props: {
         </button>
       </div>
 
+      {props.loadFailed && (
+        <p className="notice">⚠ 資料載入失敗 — 下方顯示的可能不是你的完整資料，請重新整理。</p>
+      )}
+
       {/* W6 — glanceable progress strip (only once there's something to show).
-          Band + practice count are per-language; the vocab library is shared. */}
-      {(lvl || stats.sessions > 0) && (
+          Band + practice count are per-language; the vocab library is shared.
+          The chips are tappable: 練習 → past recaps, 詞庫 → browse, 複習 → W7. */}
+      {(lvl || sessionCount > 0) && (
         <div className="statbar">
-          {lvl ? (
-            <>
-              <span>
-                {LANG_LABEL[lang]} <b>{lvl.band}</b> {TREND[lvl.trend]}
-              </span>
-              <span>練習 {lvl.sessions} 次</span>
-            </>
-          ) : (
-            <span>練習 {stats.sessions} 次</span>
+          {lvl && (
+            <span>
+              {LANG_LABEL[lang]} <b>{lvl.band}</b> {TREND[lvl.trend]}
+            </span>
           )}
-          <span>詞庫 {stats.items}</span>
+          <button type="button" className="statbtn" onClick={() => setSheet("history")}>
+            練習 {lvl ? lvl.sessions : sessionCount} 次
+          </button>
+          <button type="button" className="statbtn" onClick={() => setSheet("vocab")}>
+            詞庫 {items.length}
+          </button>
+          {due > 0 && (
+            <button type="button" className="statbtn statbtn--due" onClick={() => setSheet("review")}>
+              複習 {due > 20 ? "20+" : due}
+            </button>
+          )}
         </div>
+      )}
+
+      {/* Crash recovery — a session that never reached「停止並儲存」 */}
+      {draft && (
+        <div className="card" style={{ marginTop: 16, borderColor: "var(--warn)" }}>
+          <b>上次練習未儲存</b>
+          <p className="muted" style={{ margin: "6px 0 10px" }}>
+            {scenarios.find((s) => s.id === draft.scenarioId)?.title ?? "（情境已刪除）"} ·{" "}
+            {draft.transcript.length} 句對話
+          </p>
+          <div className="row">
+            <button className="btn btn--primary grow" onClick={recoverDraft} disabled={recovering}>
+              {recovering ? "分析中…" : "分析並儲存"}
+            </button>
+            <button className="btn btn--ghost" onClick={discardDraft} disabled={recovering}>
+              捨棄
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* One-tap continue — the most recently practiced scenario in this language */}
+      {props.lastPracticed && (
+        <button
+          className="btn btn--primary btn--block"
+          style={{ marginTop: 16 }}
+          onClick={() => props.onPractice(props.lastPracticed!)}
+        >
+          ▶ 繼續上次 · {props.lastPracticed.title}
+        </button>
       )}
 
       {/* 1. 首次：金鑰 */}
@@ -298,6 +402,16 @@ export function Home(props: {
       )}
 
       {busy && <p className="notice">{busy}</p>}
+
+      {sheet === "history" && (
+        <HistorySheet lang={lang} scenarios={scenarios} onClose={() => setSheet(null)} />
+      )}
+      {sheet === "vocab" && (
+        <VocabSheet lang={lang} items={items} onChanged={props.onChanged} onClose={() => setSheet(null)} />
+      )}
+      {sheet === "review" && (
+        <ReviewSheet lang={lang} items={items} onChanged={props.onChanged} onClose={() => setSheet(null)} />
+      )}
     </main>
   );
 }

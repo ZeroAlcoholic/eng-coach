@@ -10,7 +10,7 @@
 //     the learner repeat, introduce + reuse vocabulary, one pronunciation fix/turn.
 // (No gamification, no forced scenario-narrowing — the scenario is user-defined.)
 
-import type { CEFRLevel, LearnerProfile, Scenario, TargetLanguage } from "../../kernel/types";
+import type { CEFRLevel, LearnedItem, LearnerProfile, Scenario, TargetLanguage } from "../../kernel/types";
 import { cefrToNum, coachPolicy } from "./progress";
 
 const LANGUAGE_NAME: Record<TargetLanguage, string> = { en: "English", ja: "Japanese" };
@@ -57,7 +57,11 @@ const SCAFFOLD: Record<TargetLanguage, Record<CEFRLevel, string>> = {
   },
 };
 
-export function composeSystemInstruction(s: Scenario, profile: LearnerProfile): string {
+export function composeSystemInstruction(
+  s: Scenario,
+  profile: LearnerProfile,
+  dueItems?: LearnedItem[], // W7 — SRS items due for review, recycled in-scene
+): string {
   const lang = LANGUAGE_NAME[s.targetLanguage];
   const jlpt = s.targetLanguage === "ja" ? ` (${JLPT[s.level]})` : "";
 
@@ -149,6 +153,19 @@ export function composeSystemInstruction(s: Scenario, profile: LearnerProfile): 
   }
   if (s.targetPhrases.length) {
     lines.push("", `Weave in these expressions when they fit: ${s.targetPhrases.join("; ")}.`);
+  }
+  // Item text is LLM-extracted, not user-reviewed prose — flatten whitespace
+  // and cap length so a stray newline/oversized entry can't break the
+  // instruction's line structure, and drop entries that sanitise to nothing.
+  const dueTexts = (dueItems ?? [])
+    .map((i) => i.text.replace(/\s+/g, " ").trim().slice(0, 80))
+    .filter(Boolean);
+  if (dueTexts.length) {
+    lines.push(
+      "",
+      "── Spaced review (W7) — recycle, don't drill ──",
+      `These previously-learned items are due for review. Work each one naturally into the conversation and create a moment where the LEARNER has to use or respond to it (don't quiz them in a list): ${dueTexts.join("; ")}.`,
+    );
   }
   if (s.progressNote) {
     lines.push("", `Where the learner left off last time (build on it): ${s.progressNote}`);
