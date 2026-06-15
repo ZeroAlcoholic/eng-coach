@@ -37,23 +37,76 @@ principles below.
   hotel set. Objectives = observable task outcomes; targetPhrases = liftable
   chunks; frames recycle chunks + close with a can-do check.
 
-## Worklist (ordered; each item is independently shippable)
+## Worklist (W1–W7 shipped; W8+ below)
 
-| # | size | item | what / why | minimal-UX treatment |
+Synthesised from a 6-dimension research pass (vocab depth, learner memory,
+prosody, live scaffolding, learning theory, PWA/UX), then **verified twice**
+against this codebase and the no-server / mobile / no-gamification constraints.
+Items proven fragile or low-value were cut or deferred (see "Deliberately NOT
+building" and "Deferred — needs a missing precondition" below).
+
+**Definition of done — applies to EVERY batch:** quality gate green
+(`tsc -b` + `eslint` + `vitest run` + `vite build`) → real-browser E2E of the
+new behaviour (seed IndexedDB, exercise the flow, clear test data) → update this
+file → **commit & push** (CI re-runs the gate, then auto-deploys to Pages). Push
+is the last step of each batch, never mid-batch.
+
+### Batch A — data safety & return (do first; all S; one PR; no new data shapes)
+*Nothing below compounds if local data is silently evicted or the user never
+returns. These four are independent.*
+
+| # | item | value | stability | files / mechanism |
 |---|---|---|---|---|
-| ~~W1–W7~~ | — | **shipped** — see ✅ Done above. | | |
-| **W8** | M | **Scaffolding that fades** | per-item mastery: full model → leading cue → independent; drives the A2→production move. | Invisible; just changes how much the coach hands you. |
-| **W9** | M | **Shadow micro-mode (prosody)** | optional「跟讀」: coach models a phrase, you echo, qualitative stress/rhythm feedback (intelligibility, not an accent score). | A small optional affordance inside a turn; off the critical path. |
+| **A1** | `navigator.storage.persist()` on load; show state in ⚙️ | exempts IndexedDB from iOS ITP 7-day eviction | high (Baseline 2021 / Safari 17+) | `CoachApp` mount + `Home` settings |
+| **A2** | One-tap backup via `navigator.share({files})` + "last backup N days ago" nudge | makes backup a habit, not a chore | high (iOS 16.4+/Android); desktop adds FSA later | `pack.ts`, `Home` ⚙️; feature-detect, fall back to existing `<a download>` |
+| **A3** | PWA shell fix: 192/512 + maskable **PNG** icons, `apple-touch-icon`; verify precache covers worklet + fonts | offline Home/review/history in-car; real iOS icon/splash | high | `vite.config.ts` manifest, `public/` (iOS ignores SVG icons) |
+| **A4** | Due-review state as a prominent Home banner (not just the chip) | return-driver | high (in-app only) | `Home`. **No** Notification API — local web notifications are unreliable and there is no server-less background reminder |
 
-## Later / optional (only if a real need shows)
-- Spoken placement (1–2 min) → per-skill CEFR + goal; SSARC complexity ramp on the
-  Layer-1 frame; Bayesian Knowledge Tracing per objective; deterministic lexical
-  metrics (type-token / frequency bands, JLPT list) as a 2nd opinion to the judge.
+### Batch B — pedagogy as prompt logic (all S; zero new API, zero new screen)
+*Lowest-risk, highest minimal-UI fit: changes the coach's behaviour, not the UI.*
+
+| # | item | value | guard |
+|---|---|---|---|
+| **B1** | Voice-invoked repair: coach treats「這個怎麼說 / 慢一點 / 什麼意思」as in-character help | hands-free repair (car); replaces tap-only 卡住/translate | prompt-only; test mixed-language ASR of the trigger phrases |
+| **B2** | Pushed output on due items: engineer a slot, make the learner **produce unaided**, recast only on failure | testing effect (recall ≫ recognition) | "produced unaided" comes from the judge re-reading the transcript → treat as a **best-effort soft signal**, not ground truth |
+| **B3** | Pre-task planning beat: name the task in 繁中 + 1–2 chunks, then a 5–8s "想一下" pause before the first question | documented fluency/complexity gain | prompt-only; pure audio |
+
+### Batch C — objective-mastery ledger & its dependents (M)
+*C1 is the keystone; C2–C4 read from it.*
+
+| # | item | value | stability / dependency |
+|---|---|---|---|
+| **C1** | **Per-objective mastery ledger.** `objectivesMet` is **already stored on every session record** (`finalize` → `putSession({...session, review})`) but not queryable per objective. Aggregate it into a new IndexedDB `objectives` store keyed by `scenarioId + objective`. | unlocks C2–C4 | new store; **no cross-scenario matching** (objective text has no stable identity across regenerated scenarios) |
+| **C2** | **W8 — fading scaffold.** Derive a per-item tier (full model → leading cue → independent) and inject it into the due-items prompt block. | the A2→production driver; fully invisible | tier derives from the item's existing `srs.reps` / `srs.fsrs.state` (no new state). **Honest limit:** `reps` counts *flashcard* gradings, not unaided speech — start with reps as a coarse proxy, refine with B2's production signal |
+| **C3** | can-do self-check in recap: objectives as 3-state「我可以…」toggles; compare to the judge's `objectivesMet` → the gap is the calibration signal, feeds C1 | metacognition + SDT competence **without** gamification | one list in the existing recap sheet, not a new screen |
+| **C4** | Productive-direction review: a「複習方向」toggle in `ReviewSheet` (L1→L2 recall), reusing the same FSRS card | closes the "recognise-only" gap | flip front/back; do **not** double the schedule |
+
+### Batch D — minimal shadowing (the stable core of W9; M)
+| # | item | value | guard |
+|---|---|---|---|
+| **D1** | 跟讀 = coach models a phrase → learner records (MediaRecorder) → **A/B replay** (your clip ↔ coach clip) | self-comparison rebuilds prosody; rock-solid APIs | **no analysis, no score** (holds the ROADMAP line). Cost to scope: capturing the coach's modeled phrase needs a small playback-buffer tap in `AudioEngine` |
+
+### Batch E — optional, only if a real need shows
+- **E1** LLM error-log extraction (fixed error-type enum to bound noise) — extra Gemini call/session.
+- **E2** RMS stress/energy envelope viz — loudness ≠ stress; risks cluttering the clean orb.
+- **E3** LLM cloze cards + collocations/word-families — distractor quality ~50%; adds review-mode complexity; not the "speak more" core.
+
+## Deferred — needs a missing precondition
+- **Cross-scenario objective scheduler (interleaving across scenarios)** — needs a stable objective-identity / tagging scheme; objective free-text doesn't match across regenerated scenarios. Build C1's ledger first.
+- **Pitch-contour overlay & Gemini "spoken impression"** — phone-mic F0 is noisy (compare *shape* only, needs voiced-gating + smoothing); the LLM note is an *impression, not a score*. Experimental add-ons on top of D1, not core.
+- **Bayesian Knowledge Tracing** — Bayesian updates on the judge's noisy binary signal are precision-as-illusion; marginal value over EWMA + C1's ledger is low.
+- **Frequency/coverage % meter** — needs lemmatisation (hard for JP); a coverage % is effectively a score (conflicts with no-gamification). At most an approximate band tag, never a number claim.
+- Spoken placement test; SSARC complexity ramp (gate stage-3 behind B1+ — pushing beginners raises anxiety).
 
 ## Deliberately NOT building (lean, no-server)
 No backend; no ELSA-style phoneme/calibrated pronunciation score (needs a server
 acoustic model); no IRT/CAT placement machinery; no streaks/XP/leaderboards
-(erodes intrinsic motivation for a solo learner); no FSRS optimizer < 1000 reviews.
+(erodes intrinsic motivation for a solo learner); no FSRS optimizer < 1000
+reviews; no Web Push / Periodic Background Sync / Notification Triggers (server-
+bound or unsupported on iOS — no server-less background reminder exists); no
+WASM forced alignment (too heavy for mobile).
 
 ---
-**Suggested order:** W8 → W9 (W1–W7 shipped).
+**Suggested order:** A → B → C → D; E only on demand. A and B are all-S and touch
+no existing data shapes; C introduces the first new store. Each batch ends with
+the full gate + E2E + commit + push.
