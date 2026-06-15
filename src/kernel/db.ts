@@ -129,6 +129,21 @@ export const getObjective = (id: string) =>
   run<ObjectiveMastery | undefined>("objectives", "readonly", (s) => s.get(id));
 export const putObjective = (rec: ObjectiveMastery) =>
   run<IDBValidKey>("objectives", "readwrite", (s) => s.put(rec));
+/** Whole ledger — for pack export. */
+export const listObjectives = () =>
+  run<ObjectiveMastery[]>("objectives", "readonly", (s) => s.getAll());
+export async function putObjectives(recs: ObjectiveMastery[]): Promise<void> {
+  if (!recs.length) return;
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("objectives", "readwrite");
+    const store = tx.objectStore("objectives");
+    for (const rec of recs) store.put(rec);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
 /** All mastery records for one scenario — via the scenarioId index. */
 export async function listObjectivesFor(scenarioId: string): Promise<ObjectiveMastery[]> {
   const db = await openDB();

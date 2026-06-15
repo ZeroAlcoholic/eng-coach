@@ -7,20 +7,24 @@ import type { LearnedItem, LearningPack, Scenario } from "./types";
 import {
   getProfile,
   listItems,
+  listObjectives,
+  listObjectivesFor,
   listScenarios,
   listSessions,
   putItems,
+  putObjectives,
   putProfile,
   putScenario,
   putSession,
 } from "./db";
 
 export async function buildPack(): Promise<LearningPack> {
-  const [profile, scenarios, items, sessions] = await Promise.all([
+  const [profile, scenarios, items, sessions, objectives] = await Promise.all([
     getProfile(),
     listScenarios(),
     listItems(),
     listSessions(),
+    listObjectives(),
   ]);
   return {
     version: 1,
@@ -30,18 +34,20 @@ export async function buildPack(): Promise<LearningPack> {
     scenarios,
     items,
     sessions,
+    objectives,
   };
 }
 
 /** A single-scenario pack — the lightweight "progress file". */
 export async function buildScenarioPack(scenario: Scenario): Promise<LearningPack> {
-  const all = await listItems();
+  const [all, objectives] = await Promise.all([listItems(), listObjectivesFor(scenario.id)]);
   return {
     version: 1,
     kind: "learning-pack",
     exportedAt: new Date().toISOString(),
     scenarios: [scenario],
     items: all.filter((i) => i.sourceScenarioId === scenario.id),
+    objectives,
   };
 }
 
@@ -51,6 +57,7 @@ export async function importPack(pack: LearningPack): Promise<void> {
   for (const sc of pack.scenarios ?? []) await putScenario(sc);
   if (pack.items?.length) await putItems(pack.items);
   for (const s of pack.sessions ?? []) await putSession(s);
+  if (pack.objectives?.length) await putObjectives(pack.objectives);
 }
 
 // --- CSV (Anki/Quizlet): one row per item, header first ---

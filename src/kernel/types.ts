@@ -156,8 +156,10 @@ export interface LearnedItem {
  *
  * Keyed by `scenarioId::objective` — there is deliberately NO cross-scenario
  * objective identity (objective free-text doesn't survive scenario regeneration;
- * see ROADMAP "Deferred — cross-scenario scheduler"). Derived/auxiliary data:
- * it is rebuilt by accumulation and never the source of truth for a session.
+ * see ROADMAP "Deferred — cross-scenario scheduler"). It accumulates across
+ * sessions and is carried in the LearningPack so a backup/restore (or move to a
+ * new device) keeps the mastery history AND the learner's self-ratings — the
+ * latter can't be reconstructed from session transcripts.
  */
 export interface ObjectiveMastery {
   id: string; // `${scenarioId}::${objective}`
@@ -183,6 +185,7 @@ export interface LearningPack {
   scenarios: Scenario[];
   items: LearnedItem[];
   sessions?: SessionRecord[];
+  objectives?: ObjectiveMastery[]; // C1 ledger — optional; older packs simply omit it
 }
 
 export const DEFAULT_PROFILE: LearnerProfile = { language: "en", level: "B1", focus: [] };

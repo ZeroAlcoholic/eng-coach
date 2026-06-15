@@ -61,6 +61,7 @@ export function Home(props: {
   const [busy, setBusy] = useState("");
   const [building, setBuilding] = useState(false); // dedicated flag — not a magic busy string
   const [recovering, setRecovering] = useState(false); // guard double-tap on 恢復
+  const [backingUp, setBackingUp] = useState(false); // guard double-tap on 備份
   const [editing, setEditing] = useState<Scenario | null>(null);
   const [showSettings, setShowSettings] = useState(false); // W5: settings tucked away
   const [showSamples, setShowSamples] = useState(false); // W5: samples collapsed once you have own
@@ -113,6 +114,8 @@ export function Home(props: {
   // A2 — one-tap backup: shares the file to Files/NAS on phones, downloads on
   // desktop. User-initiated; no nag. The download fallback lives in backupPack.
   async function backup() {
+    if (backingUp) return; // guard double-tap → two share sheets / double build
+    setBackingUp(true);
     setBusy("準備備份…");
     try {
       const how = await backupPack();
@@ -126,6 +129,7 @@ export function Home(props: {
     } catch (err) {
       setBusy(`備份失敗：${err instanceof Error ? err.message : String(err)}`);
     }
+    setBackingUp(false);
   }
   function exportCsv() {
     downloadFile("learned-items.csv", itemsToCsv(items), "text/csv");
@@ -398,8 +402,8 @@ export function Home(props: {
         <>
           <div className="section-title">設定與資料</div>
           <div className="card">
-            <button className="btn btn--primary btn--block" onClick={backup}>
-              💾 備份資料（存到檔案／NAS）
+            <button className="btn btn--primary btn--block" onClick={backup} disabled={backingUp}>
+              💾 {backingUp ? "備份中…" : "備份資料（存到檔案／NAS）"}
             </button>
             <div className="row" style={{ marginTop: 8 }}>
               <button className="btn btn--ghost btn--sm" onClick={exportCsv}>

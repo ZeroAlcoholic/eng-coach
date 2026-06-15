@@ -57,6 +57,8 @@ principles below.
   「我可以…」per objective, revealing the judge verdict + a gentle over/under-
   confidence note, folded back into the ledger). C4 a「複習方向」toggle in
   ReviewSheet (認 term→meaning / 用 meaning→term) reusing the same FSRS card.
+  The ledger rides in the LearningPack (export + import round-trip) so a backup
+  carries the mastery history AND the un-reconstructable self-ratings.
 - **Batch A — data safety**: `navigator.storage.persist()` on load (exempts
   IndexedDB from iOS ITP eviction; state shown in ⚙️ as persisted / best-effort /
   unsupported); one-tap 備份資料 in ⚙️ via `navigator.share({files})` with a plain

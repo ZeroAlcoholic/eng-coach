@@ -23,13 +23,17 @@ export async function weakObjectives(scenarioId: string): Promise<string[]> {
   return recs.filter(isStillDeveloping).map((r) => r.objective);
 }
 
-/** C1 — fold one session's judge verdicts into the ledger (best-effort upsert). */
+/** C1 — fold one session's judge verdicts into the ledger (best-effort upsert).
+ *  Dedupes by objective text first (last verdict wins) so a judge that lists the
+ *  same objective twice in one session can't inflate attempts. */
 export async function recordJudgeOutcomes(
   scenarioId: string,
   objectivesMet: SessionReview["objectivesMet"],
   nowIso: string,
 ): Promise<void> {
-  for (const { objective, met } of objectivesMet ?? []) {
+  const verdicts = new Map<string, boolean>();
+  for (const o of objectivesMet ?? []) verdicts.set(o.objective, o.met);
+  for (const [objective, met] of verdicts) {
     const id = objectiveKey(scenarioId, objective);
     const prev = await getObjective(id);
     await putObjective({
