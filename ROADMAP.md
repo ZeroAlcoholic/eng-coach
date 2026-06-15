@@ -14,6 +14,11 @@ principles below.
 - **Locked constraints**: no server (GitHub Pages static); all data local-first
   (IndexedDB / localStorage / portable LearningPack); simple architecture —
   everything is prompt logic + local state + the existing `gemini-3.5-flash` calls.
+- **No schedule pressure**: usage is deliberately irregular. Build NO reminders,
+  "due now" nudges, "you've been away" prompts, streaks, or time-based nags. The
+  app must feel identical whether opened daily or once a month — value is there
+  when picked up, never demanded. FSRS already tolerates this: due items just
+  surface most-overdue-first when you happen to practise, with no penalty.
 
 ## ✅ Done
 - Two-layer scenarios, EN(business)/JA(travel) tracks + built-in defaults; 繁中 UI
@@ -51,16 +56,15 @@ new behaviour (seed IndexedDB, exercise the flow, clear test data) → update th
 file → **commit & push** (CI re-runs the gate, then auto-deploys to Pages). Push
 is the last step of each batch, never mid-batch.
 
-### Batch A — data safety & return (do first; all S; one PR; no new data shapes)
-*Nothing below compounds if local data is silently evicted or the user never
-returns. These four are independent.*
+### Batch A — data safety (do first; all S; one PR; no new data shapes)
+*Local data can be silently evicted (iOS ITP). These three are independent.
+No reminder/nudge mechanics — see the "no schedule pressure" principle above.*
 
 | # | item | value | stability | files / mechanism |
 |---|---|---|---|---|
 | **A1** | `navigator.storage.persist()` on load; show state in ⚙️ | exempts IndexedDB from iOS ITP 7-day eviction | high (Baseline 2021 / Safari 17+) | `CoachApp` mount + `Home` settings |
-| **A2** | One-tap backup via `navigator.share({files})` + "last backup N days ago" nudge | makes backup a habit, not a chore | high (iOS 16.4+/Android); desktop adds FSA later | `pack.ts`, `Home` ⚙️; feature-detect, fall back to existing `<a download>` |
+| **A2** | One-tap backup via `navigator.share({files})`, always available in ⚙️ | frictionless save to NAS/Files when the user chooses | high (iOS 16.4+/Android); desktop adds FSA later | `pack.ts`, `Home` ⚙️; feature-detect, fall back to existing `<a download>`. **No time-based "N days since backup" nag** — user-initiated only |
 | **A3** | PWA shell fix: 192/512 + maskable **PNG** icons, `apple-touch-icon`; verify precache covers worklet + fonts | offline Home/review/history in-car; real iOS icon/splash | high | `vite.config.ts` manifest, `public/` (iOS ignores SVG icons) |
-| **A4** | Due-review state as a prominent Home banner (not just the chip) | return-driver | high (in-app only) | `Home`. **No** Notification API — local web notifications are unreliable and there is no server-less background reminder |
 
 ### Batch B — pedagogy as prompt logic (all S; zero new API, zero new screen)
 *Lowest-risk, highest minimal-UI fit: changes the coach's behaviour, not the UI.*
@@ -103,8 +107,9 @@ No backend; no ELSA-style phoneme/calibrated pronunciation score (needs a server
 acoustic model); no IRT/CAT placement machinery; no streaks/XP/leaderboards
 (erodes intrinsic motivation for a solo learner); no FSRS optimizer < 1000
 reviews; no Web Push / Periodic Background Sync / Notification Triggers (server-
-bound or unsupported on iOS — no server-less background reminder exists); no
-WASM forced alignment (too heavy for mobile).
+bound or unsupported on iOS — and unwanted regardless: no reminders/nudges per
+the no-schedule-pressure principle); no WASM forced alignment (too heavy for
+mobile).
 
 ---
 **Suggested order:** A → B → C → D; E only on demand. A and B are all-S and touch
