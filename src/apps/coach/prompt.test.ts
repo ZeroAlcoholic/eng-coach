@@ -50,6 +50,28 @@ describe("composeSystemInstruction — due-item sanitisation", () => {
     expect(composeSystemInstruction(scenario, DEFAULT_PROFILE, [])).not.toContain("Spaced review");
     expect(composeSystemInstruction(scenario, DEFAULT_PROFILE)).not.toContain("Spaced review");
   });
+
+  it("B2 — frames due items as unaided production, recast only on failure", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE, [item("circle back")]);
+    expect(out).toContain("PRODUCE it");
+    expect(out).toContain("UNAIDED");
+    expect(out).toContain("Items due: circle back");
+  });
+});
+
+describe("composeSystemInstruction — coaching prompt logic (Batch B)", () => {
+  it("B1 — always includes hands-free voice-help handling", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(out).toContain("Hands-free help");
+    expect(out).toContain("慢一點");
+    expect(out).toContain("怎麼說");
+  });
+
+  it("B3 — always opens with a pre-task planning beat and a think pause", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(out).toContain("planning beat");
+    expect(out).toContain("給你幾秒想一下");
+  });
 });
 
 describe("band — display mapping for per-skill subscores", () => {

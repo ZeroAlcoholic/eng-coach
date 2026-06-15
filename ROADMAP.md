@@ -41,6 +41,12 @@ principles below.
   dinner; JA 10 defaults — train, directions, shopping, pharmacy + polished food/
   hotel set. Objectives = observable task outcomes; targetPhrases = liftable
   chunks; frames recycle chunks + close with a can-do check.
+- **Batch B — pedagogy as prompt logic** (no new API/screen): B1 hands-free
+  voice repair (coach treats spoken 「這個怎麼說／慢一點／什麼意思／卡住了」 as
+  in-character help and resumes); B2 spaced-review block reshaped to pushed
+  output — engineer a slot, elicit the due item UNAIDED, recast only on failure;
+  B3 a pre-task planning beat opens every session (名 task in 繁中 + 1–2 chunks,
+  then a ~5s 「給你幾秒想一下」 pause before the first question).
 - **Batch A — data safety**: `navigator.storage.persist()` on load (exempts
   IndexedDB from iOS ITP eviction; state shown in ⚙️ as persisted / best-effort /
   unsupported); one-tap 備份資料 in ⚙️ via `navigator.share({files})` with a plain
@@ -62,15 +68,6 @@ building" and "Deferred — needs a missing precondition" below).
 new behaviour (seed IndexedDB, exercise the flow, clear test data) → update this
 file → **commit & push** (CI re-runs the gate, then auto-deploys to Pages). Push
 is the last step of each batch, never mid-batch.
-
-### Batch B — pedagogy as prompt logic (all S; zero new API, zero new screen)
-*Lowest-risk, highest minimal-UI fit: changes the coach's behaviour, not the UI.*
-
-| # | item | value | guard |
-|---|---|---|---|
-| **B1** | Voice-invoked repair: coach treats「這個怎麼說 / 慢一點 / 什麼意思」as in-character help | hands-free repair (car); replaces tap-only 卡住/translate | prompt-only; test mixed-language ASR of the trigger phrases |
-| **B2** | Pushed output on due items: engineer a slot, make the learner **produce unaided**, recast only on failure | testing effect (recall ≫ recognition) | "produced unaided" comes from the judge re-reading the transcript → treat as a **best-effort soft signal**, not ground truth |
-| **B3** | Pre-task planning beat: name the task in 繁中 + 1–2 chunks, then a 5–8s "想一下" pause before the first question | documented fluency/complexity gain | prompt-only; pure audio |
 
 ### Batch C — objective-mastery ledger & its dependents (M)
 *C1 is the keystone; C2–C4 read from it.*

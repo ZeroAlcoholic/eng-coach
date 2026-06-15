@@ -14,6 +14,9 @@ import type { CEFRLevel, LearnedItem, LearnerProfile, Scenario, TargetLanguage }
 import { cefrToNum, coachPolicy } from "./progress";
 
 const LANGUAGE_NAME: Record<TargetLanguage, string> = { en: "English", ja: "Japanese" };
+// Traditional-Chinese name of the target language, for learner-facing example
+// phrases inside the prompt (e.g. the hands-free help triggers).
+const LANGUAGE_NAME_ZH: Record<TargetLanguage, string> = { en: "英文", ja: "日文" };
 
 // CEFR is the single scale; for Japanese we also surface the rough JLPT mapping.
 const JLPT: Record<CEFRLevel, string> = {
@@ -97,6 +100,14 @@ export function composeSystemInstruction(
     "- Read the learner's real level and accent live and ADAPT: pitch about one notch above them (i+1), raise or lower difficulty to fit, and give brief, specific accent feedback (name the sound, model it once).",
     "- Teach at most ONE useful phrase per turn, in context, then immediately make them USE it; recycle earlier phrases later in fresh situations.",
     "- Run it as a TASK: give a moment to plan at the start; through the main exchange prioritise FLUENCY (note slips silently, keep them talking); near the end revisit 1–2 key errors. Drive toward the objectives below, and once they're accomplished, bring the role-play to a natural close rather than dragging on.",
+    "",
+    "── Hands-free help — the learner can ask for help out loud (B1) ──",
+    "This is voice-only practice (they may be walking or driving), so the learner asks for help BY SPEAKING, usually in Traditional Chinese, mid-conversation. Treat these as help requests, not as part of the role-play, and answer immediately and briefly IN CHARACTER, then hand the turn back:",
+    `- 「這個（…）怎麼說?」/「__ 用${LANGUAGE_NAME_ZH[s.targetLanguage]}怎麼講?」 → give the natural ${lang} for it, have them repeat it once, then continue.`,
+    "- 「慢一點 / 再說一次 / 再講一次」 → slow down and repeat your last line more clearly.",
+    "- 「（這句／那個字）什麼意思?」/「翻譯一下」 → give a short Traditional Chinese gloss of what you just said.",
+    "- 「我不知道怎麼回 / 卡住了 / 提示一下」 → offer TWO short example answers they could pick from, then let them try.",
+    "Don't wait for a perfect trigger phrase — if they clearly switch to Chinese to ask you something, help. After helping, resume exactly where you were.",
   ];
 
   // W3 — when we have measured ability for this language, tune the communication
@@ -163,8 +174,10 @@ export function composeSystemInstruction(
   if (dueTexts.length) {
     lines.push(
       "",
-      "── Spaced review (W7) — recycle, don't drill ──",
-      `These previously-learned items are due for review. Work each one naturally into the conversation and create a moment where the LEARNER has to use or respond to it (don't quiz them in a list): ${dueTexts.join("; ")}.`,
+      "── Spaced review — make them PRODUCE it, don't drill (W7/B2) ──",
+      "These previously-learned items are due. For each, ENGINEER a moment in the scene that naturally demands it, then make the LEARNER produce it UNAIDED — set up the situation and let them reach for it; do NOT say the item first or quiz them in a list.",
+      "Only if they can't produce it after a beat, recast/model it and have them say it back once. Recall under their own steam is the point; supplying it for them defeats the review.",
+      `Items due: ${dueTexts.join("; ")}.`,
     );
   }
   if (s.progressNote) {
@@ -176,7 +189,10 @@ export function composeSystemInstruction(
 
   lines.push(
     "",
-    "Tone: friendly and encouraging, no exam pressure. Begin now by greeting the learner in character.",
+    "── Open with a short planning beat, THEN start (B3) ──",
+    "Before the role-play proper: (1) in ONE short Traditional Chinese sentence, say what you'll practise together and why it's useful; (2) offer 1–2 key words/phrases they'll likely need (with a 繁中 gloss; for Japanese add kana + romaji); (3) say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) for them to plan — do NOT fill it. Then greet them in character and ask your first question.",
+    "",
+    "Tone: friendly and encouraging, no exam pressure. Begin now.",
   );
 
   return lines.join("\n");
