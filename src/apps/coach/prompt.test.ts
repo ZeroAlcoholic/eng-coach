@@ -55,7 +55,28 @@ describe("composeSystemInstruction — due-item sanitisation", () => {
     const out = composeSystemInstruction(scenario, DEFAULT_PROFILE, [item("circle back")]);
     expect(out).toContain("PRODUCE it");
     expect(out).toContain("UNAIDED");
-    expect(out).toContain("Items due: circle back");
+    expect(out).toContain("circle back");
+  });
+
+  it("C2 — sorts due items into fading-scaffold tiers by review history", () => {
+    const fresh = item("fresh phrase"); // no srs → model tier
+    const seen = { ...item("seen phrase"), srs: { reps: 2 } }; // → cue tier
+    const known = { ...item("known phrase"), srs: { reps: 9 } }; // → independent tier
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE, [fresh, seen, known]);
+    expect(out).toMatch(/Model first[^\n]*fresh phrase/);
+    expect(out).toMatch(/Leading cue[^\n]*seen phrase/);
+    expect(out).toMatch(/Independent[^\n]*known phrase/);
+  });
+});
+
+describe("composeSystemInstruction — objective ledger consumer (C1)", () => {
+  it("injects still-developing objectives as priorities when provided", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], ["order a coffee"]);
+    expect(out).toContain("still aren't solid");
+    expect(out).toContain("order a coffee");
+  });
+  it("omits the priority block when there are no weak objectives", () => {
+    expect(composeSystemInstruction(scenario, DEFAULT_PROFILE)).not.toContain("still aren't solid");
   });
 });
 

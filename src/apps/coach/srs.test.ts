@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { LearnedItem } from "../../kernel/types";
-import { countDue, dueQueue, isDue, rateItem } from "./srs";
+import { countDue, dueQueue, isDue, rateItem, scaffoldTier } from "./srs";
 
 const NOW = new Date("2026-06-10T12:00:00.000Z");
 
@@ -75,5 +75,20 @@ describe("dueQueue / countDue", () => {
   it("counts due items per language", () => {
     expect(countDue([fresh, notDue, ja, seen], "en", NOW)).toBe(2);
     expect(countDue([fresh, notDue, ja, seen], "ja", NOW)).toBe(1);
+  });
+});
+
+describe("scaffoldTier — W8 fading scaffold from review history", () => {
+  it("gives a new / never-graded item the full model", () => {
+    expect(scaffoldTier(item())).toBe("model");
+    expect(scaffoldTier(item({ srs: { reps: 0 } }))).toBe("model");
+  });
+  it("steps down to a leading cue for a lightly-reviewed item", () => {
+    expect(scaffoldTier(item({ srs: { reps: 1 } }))).toBe("cue");
+    expect(scaffoldTier(item({ srs: { reps: 2 } }))).toBe("cue");
+  });
+  it("demands independent production once it's well-practised", () => {
+    expect(scaffoldTier(item({ srs: { reps: 3 } }))).toBe("independent");
+    expect(scaffoldTier(item({ srs: { reps: 9 } }))).toBe("independent");
   });
 });

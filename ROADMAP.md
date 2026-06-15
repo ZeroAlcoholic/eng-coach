@@ -47,6 +47,16 @@ principles below.
   output — engineer a slot, elicit the due item UNAIDED, recast only on failure;
   B3 a pre-task planning beat opens every session (名 task in 繁中 + 1–2 chunks,
   then a ~5s 「給你幾秒想一下」 pause before the first question).
+- **Batch C — objective-mastery ledger & dependents**: C1 a new IndexedDB
+  `objectives` store (DB v3, idempotent v2→v3 upgrade), keyed `scenarioId::objective`,
+  aggregating the judge's per-objective verdicts each session (best-effort; no
+  cross-scenario identity); its first consumer feeds still-developing objectives
+  into the live prompt as priorities. C2 W8 fading scaffold — `scaffoldTier`
+  derives model → cue → independent from `srs.reps`, splitting the due-items
+  prompt block into those tiers. C3 a can-do self-check in the recap (3-state
+  「我可以…」per objective, revealing the judge verdict + a gentle over/under-
+  confidence note, folded back into the ledger). C4 a「複習方向」toggle in
+  ReviewSheet (認 term→meaning / 用 meaning→term) reusing the same FSRS card.
 - **Batch A — data safety**: `navigator.storage.persist()` on load (exempts
   IndexedDB from iOS ITP eviction; state shown in ⚙️ as persisted / best-effort /
   unsupported); one-tap 備份資料 in ⚙️ via `navigator.share({files})` with a plain
@@ -55,7 +65,7 @@ principles below.
   plus workbox runtime-caching of the Google Fonts so the offline shell keeps its
   type (worklet + icons already precached).
 
-## Worklist (W1–W7 shipped; W8+ below)
+## Worklist (W1–W7 + Batches A/B/C shipped; D/E below)
 
 Synthesised from a 6-dimension research pass (vocab depth, learner memory,
 prosody, live scaffolding, learning theory, PWA/UX), then **verified twice**
@@ -68,16 +78,6 @@ building" and "Deferred — needs a missing precondition" below).
 new behaviour (seed IndexedDB, exercise the flow, clear test data) → update this
 file → **commit & push** (CI re-runs the gate, then auto-deploys to Pages). Push
 is the last step of each batch, never mid-batch.
-
-### Batch C — objective-mastery ledger & its dependents (M)
-*C1 is the keystone; C2–C4 read from it.*
-
-| # | item | value | stability / dependency |
-|---|---|---|---|
-| **C1** | **Per-objective mastery ledger.** `objectivesMet` is **already stored on every session record** (`finalize` → `putSession({...session, review})`) but not queryable per objective. Aggregate it into a new IndexedDB `objectives` store keyed by `scenarioId + objective`. | unlocks C2–C4 | new store; **no cross-scenario matching** (objective text has no stable identity across regenerated scenarios) |
-| **C2** | **W8 — fading scaffold.** Derive a per-item tier (full model → leading cue → independent) and inject it into the due-items prompt block. | the A2→production driver; fully invisible | tier derives from the item's existing `srs.reps` / `srs.fsrs.state` (no new state). **Honest limit:** `reps` counts *flashcard* gradings, not unaided speech — start with reps as a coarse proxy, refine with B2's production signal |
-| **C3** | can-do self-check in recap: objectives as 3-state「我可以…」toggles; compare to the judge's `objectivesMet` → the gap is the calibration signal, feeds C1 | metacognition + SDT competence **without** gamification | one list in the existing recap sheet, not a new screen |
-| **C4** | Productive-direction review: a「複習方向」toggle in `ReviewSheet` (L1→L2 recall), reusing the same FSRS card | closes the "recognise-only" gap | flip front/back; do **not** double the schedule |
 
 ### Batch D — minimal shadowing (the stable core of W9; M)
 | # | item | value | guard |
@@ -106,6 +106,5 @@ the no-schedule-pressure principle); no WASM forced alignment (too heavy for
 mobile).
 
 ---
-**Suggested order:** A → B → C → D; E only on demand. A and B are all-S and touch
-no existing data shapes; C introduces the first new store. Each batch ends with
-the full gate + E2E + commit + push.
+**Suggested order:** A, B, C shipped. Next: D (minimal shadowing); E only on
+demand. Each batch ends with the full gate + E2E + commit + push.

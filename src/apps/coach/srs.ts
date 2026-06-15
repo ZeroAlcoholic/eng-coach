@@ -48,6 +48,20 @@ export function dueQueue(
   return [...seen, ...fresh].slice(0, Math.max(0, cap));
 }
 
+// W8 — fading scaffold tier for a due item, derived from how many times it has
+// been reviewed. Honest limit: srs.reps counts FLASHCARD gradings, not unaided
+// speech, so this is a coarse proxy — barely-seen items get a full model, well-
+// reviewed ones must be produced independently. (B2's transcript signal can
+// refine this later; see ROADMAP.) No new state: reads existing srs.reps.
+export type ScaffoldTier = "model" | "cue" | "independent";
+
+export function scaffoldTier(item: LearnedItem): ScaffoldTier {
+  const reps = item.srs?.reps ?? 0;
+  if (reps <= 0) return "model"; // new / never graded — model it, they repeat
+  if (reps <= 2) return "cue"; // seen a little — a leading cue, they complete
+  return "independent"; // well-practised — engineer the need, produce unaided
+}
+
 function cardOf(item: LearnedItem, now: Date): Card {
   const raw = item.srs?.fsrs;
   if (!raw) return createEmptyCard(now);

@@ -9,6 +9,7 @@
 import { clearDraft, putItems, putProfile, putScenario, putSession } from "../../kernel/db";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
 import { extractLearnedItems, summariseSession, type SessionReview } from "./ai";
+import { recordJudgeOutcomes } from "./objectives";
 import { applySessionToProfile } from "./progress";
 
 export interface FinalizeOutcome {
@@ -99,6 +100,12 @@ export async function finalizeSession(
       new Date().toISOString(),
     );
     await putProfile({ ...folded, language: profile.language });
+    // C1 — fold per-objective verdicts into the mastery ledger. Derived/aux
+    // data: a failure here must NOT escalate to ResultsPersistError (the recap
+    // and items are already stored), so it's best-effort.
+    await recordJudgeOutcomes(scenario.id, review.objectivesMet, new Date().toISOString()).catch(
+      (e) => console.warn("objective ledger update failed", e),
+    );
   } catch (err) {
     // Storage died mid-pipeline (e.g. quota). The analysis itself succeeded —
     // a plain throw would be reported as "analysis failed", which is false.

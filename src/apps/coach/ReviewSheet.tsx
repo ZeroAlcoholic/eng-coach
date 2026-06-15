@@ -27,6 +27,11 @@ export function ReviewSheet(props: {
   const [revealed, setRevealed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState(false);
+  // C4 — review direction. "recognise" = see the term, recall its meaning;
+  // "produce" = see the 繁中 meaning, recall/say the term (the harder, more
+  // useful direction for speaking). Same FSRS card either way — flipping the
+  // prompt does NOT create a second card or double the schedule.
+  const [dir, setDir] = useState<"recognise" | "produce">("recognise");
 
   const current = queue[idx];
 
@@ -62,7 +67,23 @@ export function ReviewSheet(props: {
       ) : (
         <div style={{ textAlign: "center" }}>
           {saveError && <p className="notice">⚠ 這張未能儲存，請再選一次。</p>}
-          <div className="review-front">{current.text}</div>
+          <div className="seg" role="group" aria-label="複習方向" style={{ marginBottom: 12 }}>
+            <button
+              className={`seg-btn ${dir === "recognise" ? "seg-on" : ""}`}
+              aria-pressed={dir === "recognise"}
+              onClick={() => setDir("recognise")}
+            >
+              認（看詞→想意思）
+            </button>
+            <button
+              className={`seg-btn ${dir === "produce" ? "seg-on" : ""}`}
+              aria-pressed={dir === "produce"}
+              onClick={() => setDir("produce")}
+            >
+              用（看意思→說詞）
+            </button>
+          </div>
+          <div className="review-front">{dir === "recognise" ? current.text : current.meaning}</div>
           {!revealed ? (
             <button className="btn btn--ghost btn--block" onClick={() => setRevealed(true)}>
               顯示答案
@@ -70,8 +91,17 @@ export function ReviewSheet(props: {
           ) : (
             <>
               <div className="review-back">
-                {current.reading && <div className="muted">{current.reading}</div>}
-                <div>{current.meaning}</div>
+                {dir === "recognise" ? (
+                  <>
+                    {current.reading && <div className="muted">{current.reading}</div>}
+                    <div>{current.meaning}</div>
+                  </>
+                ) : (
+                  <>
+                    <div>{current.text}</div>
+                    {current.reading && <div className="muted">{current.reading}</div>}
+                  </>
+                )}
                 {current.example && <div className="muted vocab-example">{current.example}</div>}
               </div>
               <div className="review-grades">

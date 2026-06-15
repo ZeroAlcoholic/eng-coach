@@ -12,6 +12,7 @@
 
 import type { CEFRLevel, LearnedItem, LearnerProfile, Scenario, TargetLanguage } from "../../kernel/types";
 import { cefrToNum, coachPolicy } from "./progress";
+import { scaffoldTier } from "./srs";
 
 const LANGUAGE_NAME: Record<TargetLanguage, string> = { en: "English", ja: "Japanese" };
 // Traditional-Chinese name of the target language, for learner-facing example
@@ -64,6 +65,7 @@ export function composeSystemInstruction(
   s: Scenario,
   profile: LearnerProfile,
   dueItems?: LearnedItem[], // W7 — SRS items due for review, recycled in-scene
+  weakObjectives?: string[], // C1 — objectives the ledger shows aren't solid yet
 ): string {
   const lang = LANGUAGE_NAME[s.targetLanguage];
   const jlpt = s.targetLanguage === "ja" ? ` (${JLPT[s.level]})` : "";
@@ -162,23 +164,41 @@ export function composeSystemInstruction(
     lines.push("", "Steer the conversation so the learner gets to practise:");
     lines.push(...s.objectives.map((o) => `- ${o}`));
   }
+  // C1 — objectives the mastery ledger shows the learner hasn't nailed yet get
+  // extra weight, so repeated sessions keep working the weak spots (not just
+  // whatever the conversation drifts toward).
+  if (weakObjectives?.length) {
+    lines.push(
+      "",
+      `From past sessions these objectives still aren't solid — make a point of creating chances to practise them: ${weakObjectives.join("; ")}.`,
+    );
+  }
   if (s.targetPhrases.length) {
     lines.push("", `Weave in these expressions when they fit: ${s.targetPhrases.join("; ")}.`);
   }
   // Item text is LLM-extracted, not user-reviewed prose — flatten whitespace
   // and cap length so a stray newline/oversized entry can't break the
   // instruction's line structure, and drop entries that sanitise to nothing.
-  const dueTexts = (dueItems ?? [])
-    .map((i) => i.text.replace(/\s+/g, " ").trim().slice(0, 80))
-    .filter(Boolean);
-  if (dueTexts.length) {
+  // W8 — each item carries a fading-scaffold tier from its review history.
+  const due = (dueItems ?? [])
+    .map((i) => ({ text: i.text.replace(/\s+/g, " ").trim().slice(0, 80), tier: scaffoldTier(i) }))
+    .filter((d) => d.text);
+  if (due.length) {
+    const inTier = (t: string) => due.filter((d) => d.tier === t).map((d) => d.text);
     lines.push(
       "",
-      "── Spaced review — make them PRODUCE it, don't drill (W7/B2) ──",
-      "These previously-learned items are due. For each, ENGINEER a moment in the scene that naturally demands it, then make the LEARNER produce it UNAIDED — set up the situation and let them reach for it; do NOT say the item first or quiz them in a list.",
-      "Only if they can't produce it after a beat, recast/model it and have them say it back once. Recall under their own steam is the point; supplying it for them defeats the review.",
-      `Items due: ${dueTexts.join("; ")}.`,
+      "── Spaced review — make them PRODUCE it, fade help to familiarity (W7/B2/W8) ──",
+      "These items are due. Default stance: engineer a moment in the scene that DEMANDS the item and let the LEARNER produce it UNAIDED — never say it first or quiz them in a list. Lead with only as much help as each tier below needs, and recast only if they stall:",
     );
+    const model = inTier("model");
+    const cue = inTier("cue");
+    const indep = inTier("independent");
+    if (model.length)
+      lines.push(`- Model first (barely seen — model the line in context, have them say it back): ${model.join("; ")}.`);
+    if (cue.length)
+      lines.push(`- Leading cue (give the first word or leave a gap to fill, let them complete): ${cue.join("; ")}.`);
+    if (indep.length)
+      lines.push(`- Independent (well-practised — set up the need and let them reach for it unaided): ${indep.join("; ")}.`);
   }
   if (s.progressNote) {
     lines.push("", `Where the learner left off last time (build on it): ${s.progressNote}`);

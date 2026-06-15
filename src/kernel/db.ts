@@ -3,14 +3,22 @@
 // profile. Hand-rolled (no dependency) and versioned — bump DB_VERSION and add
 // to onupgradeneeded when the schema grows.
 
-import type { DraftSession, LearnedItem, LearnerProfile, Scenario, SessionRecord } from "./types";
+import type {
+  DraftSession,
+  LearnedItem,
+  LearnerProfile,
+  ObjectiveMastery,
+  Scenario,
+  SessionRecord,
+} from "./types";
 import { DEFAULT_PROFILE } from "./types";
 
 const DB_NAME = "learn-kernel";
 // v2: sessions.startedAt index, so "newest first" reads don't getAll() the store.
-const DB_VERSION = 2;
+// v3: objectives store (C1 per-objective mastery ledger), indexed by scenarioId.
+const DB_VERSION = 3;
 
-type StoreName = "scenarios" | "sessions" | "items" | "kv";
+type StoreName = "scenarios" | "sessions" | "items" | "kv" | "objectives";
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -31,6 +39,8 @@ function openDB(): Promise<IDBDatabase> {
       if (!items.indexNames.contains("language")) items.createIndex("language", "language");
       if (!items.indexNames.contains("sourceScenarioId")) items.createIndex("sourceScenarioId", "sourceScenarioId");
       store("kv");
+      const objectives = store("objectives", { keyPath: "id" });
+      if (!objectives.indexNames.contains("scenarioId")) objectives.createIndex("scenarioId", "scenarioId");
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -112,6 +122,23 @@ export const putDraft = (d: DraftSession) =>
   run<IDBValidKey>("kv", "readwrite", (s) => s.put(d, "draft-session"));
 export const clearDraft = () =>
   run<undefined>("kv", "readwrite", (s) => s.delete("draft-session"));
+
+// --- objectives (C1 mastery ledger) ---
+export const objectiveKey = (scenarioId: string, objective: string) => `${scenarioId}::${objective}`;
+export const getObjective = (id: string) =>
+  run<ObjectiveMastery | undefined>("objectives", "readonly", (s) => s.get(id));
+export const putObjective = (rec: ObjectiveMastery) =>
+  run<IDBValidKey>("objectives", "readwrite", (s) => s.put(rec));
+/** All mastery records for one scenario — via the scenarioId index. */
+export async function listObjectivesFor(scenarioId: string): Promise<ObjectiveMastery[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const index = db.transaction("objectives", "readonly").objectStore("objectives").index("scenarioId");
+    const req = index.getAll(scenarioId);
+    req.onsuccess = () => resolve(req.result as ObjectiveMastery[]);
+    req.onerror = () => reject(req.error);
+  });
+}
 
 // --- profile (singleton in kv) ---
 export async function getProfile(): Promise<LearnerProfile> {

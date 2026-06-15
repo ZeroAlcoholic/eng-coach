@@ -12,7 +12,9 @@ import { GeminiLiveDirect } from "../../api/gemini-direct";
 import { listItems, putDraft, putProfile } from "../../kernel/db";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
 import { suggestReplies, translateLine, type ReplySuggestion, type SessionReview } from "./ai";
+import { CanDoSelfCheck } from "./CanDoSelfCheck";
 import { emptyReview, finalizeSession, PersistError, ResultsPersistError } from "./finalize";
+import { weakObjectives } from "./objectives";
 import { band } from "./progress";
 import { composeSystemInstruction } from "./prompt";
 import { dueQueue } from "./srs";
@@ -174,17 +176,22 @@ export function Practice(props: {
 
     try {
       // W7 — read due items NOW (not at render): the app can sit open for hours
-      // and reviews/deletes may happen meanwhile. Best-effort: no items, no recycle.
-      const dueItems = await listItems()
-        .then((its) => dueQueue(its, scenario.targetLanguage, new Date(), RECYCLE_CAP))
-        .catch(() => []);
+      // and reviews/deletes may happen meanwhile. C1 — also load the objectives
+      // the mastery ledger flags as still-developing, so the coach prioritises
+      // them. Both best-effort: a read failure just means no recycle / no flag.
+      const [dueItems, weak] = await Promise.all([
+        listItems()
+          .then((its) => dueQueue(its, scenario.targetLanguage, new Date(), RECYCLE_CAP))
+          .catch(() => []),
+        weakObjectives(scenario.id).catch(() => []),
+      ]);
       // Build inside the try: composeSystemInstruction/pickVoice run here, so a
       // synchronous throw (e.g. a malformed imported scenario) is caught and the
       // finally still resets startingRef — otherwise Start would wedge.
       const client = new GeminiLiveDirect({
         apiKey,
         model: LIVE_MODEL,
-        systemInstruction: composeSystemInstruction(scenario, profile, dueItems),
+        systemInstruction: composeSystemInstruction(scenario, profile, dueItems, weak),
         voiceName: pickVoice(scenario.targetLanguage),
         handlers: {
           onOpen: () => setStatus("live"),
@@ -433,13 +440,7 @@ export function Practice(props: {
           {summary.review.reviewZh && <p className="muted">{summary.review.reviewZh}</p>}
           {summary.review.reviewEn && <p className="muted">{summary.review.reviewEn}</p>}
           {summary.review.objectivesMet && summary.review.objectivesMet.length > 0 && (
-            <div style={{ margin: "10px 0" }}>
-              {summary.review.objectivesMet.map((o, i) => (
-                <div key={i} className="muted">
-                  {o.met ? "✅" : "⬜"} {o.objective}
-                </div>
-              ))}
-            </div>
+            <CanDoSelfCheck scenarioId={scenario.id} objectives={summary.review.objectivesMet} />
           )}
           {summary.review.wins?.map((w, i) => (
             <div key={`w${i}`} className="muted">

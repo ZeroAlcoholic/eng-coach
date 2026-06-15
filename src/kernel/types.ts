@@ -149,6 +149,28 @@ export interface LearnedItem {
 }
 
 /**
+ * C1 — per-objective mastery ledger. One record per (scenario, objective): the
+ * running tally of how the JUDGE has graded that objective across sessions, plus
+ * the learner's most recent SELF-assessment (C3). The two together are the
+ * calibration signal (do they think they can do what they actually can?).
+ *
+ * Keyed by `scenarioId::objective` — there is deliberately NO cross-scenario
+ * objective identity (objective free-text doesn't survive scenario regeneration;
+ * see ROADMAP "Deferred — cross-scenario scheduler"). Derived/auxiliary data:
+ * it is rebuilt by accumulation and never the source of truth for a session.
+ */
+export interface ObjectiveMastery {
+  id: string; // `${scenarioId}::${objective}`
+  scenarioId: string;
+  objective: string;
+  attempts: number; // sessions where the judge assessed this objective
+  met: number; // of those, how many it graded "met"
+  lastMet?: boolean; // the most recent judge verdict
+  selfRating?: "no" | "partly" | "yes"; // C3 — most recent learner self-check
+  updatedAt: string; // ISO of the most recent change
+}
+
+/**
  * The portable "Learning Pack" — the file you export/import and drop on the NAS
  * to move between devices or hand to another tool. A single-scenario pack is the
  * lightweight "progress file"; a full pack carries the whole local-first dataset.
