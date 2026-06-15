@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 
 import { countSessions, listItems, listScenarios } from "../../kernel/db";
+import { ensurePersisted } from "../../kernel/storage";
 
 interface Counts {
   scenarios: number;
@@ -20,6 +21,9 @@ export function Launcher() {
     void Promise.all([listScenarios(), listItems(), countSessions()])
       .then(([sc, it, se]) => setCounts({ scenarios: sc.length, items: it.length, sessions: se }))
       .catch((e) => console.warn("讀取資料失敗", e));
+    // Shared-origin durability: requesting here (the PWA entry) protects the same
+    // IndexedDB the coach writes to. Best-effort; status surfaces in the coach ⚙️.
+    void ensurePersisted();
   }, []);
 
   return (

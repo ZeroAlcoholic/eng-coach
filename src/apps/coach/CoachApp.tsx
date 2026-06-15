@@ -21,6 +21,7 @@ import {
   type Scenario,
   type TargetLanguage,
 } from "../../kernel/types";
+import { ensurePersisted, type PersistState } from "../../kernel/storage";
 import { Home } from "./Home";
 import { Practice } from "./Practice";
 
@@ -34,6 +35,7 @@ export function CoachApp() {
   const [lastByLang, setLastByLang] = useState<Partial<Record<TargetLanguage, Scenario>>>({});
   const [practicing, setPracticing] = useState<Scenario | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [persist, setPersist] = useState<PersistState>("unsupported");
 
   async function reload() {
     try {
@@ -79,6 +81,9 @@ export function CoachApp() {
     // microtask), so this is not the synchronous cascading-render the rule guards.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void reload();
+    // A1 — ask the browser to exempt our IndexedDB from automatic eviction
+    // (best-effort; the resulting state is shown in ⚙️). Independent of reload.
+    void ensurePersisted().then(setPersist);
   }, []);
 
   function onApiKey(key: string) {
@@ -115,6 +120,7 @@ export function CoachApp() {
       draft={draft}
       lastPracticed={lastByLang[profile.language] ?? null}
       loadFailed={loadFailed}
+      persist={persist}
       onApiKey={onApiKey}
       onProfile={onProfile}
       onPractice={setPracticing}

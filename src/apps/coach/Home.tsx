@@ -19,7 +19,15 @@ import {
   type TargetLanguage,
 } from "../../kernel/types";
 import { clearDraft, deleteScenario, putScenario, putSession } from "../../kernel/db";
-import { buildPack, buildScenarioPack, downloadFile, importPack, itemsToCsv, readTextFile } from "../../kernel/pack";
+import {
+  backupPack,
+  buildScenarioPack,
+  downloadFile,
+  importPack,
+  itemsToCsv,
+  readTextFile,
+} from "../../kernel/pack";
+import type { PersistState } from "../../kernel/storage";
 import { generateScenario } from "./ai";
 import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError } from "./finalize";
@@ -40,6 +48,7 @@ export function Home(props: {
   draft: DraftSession | null; // unsaved session left by a killed tab
   lastPracticed: Scenario | null; // most recent scenario for the active language
   loadFailed: boolean; // IndexedDB load failed — empty states below would lie
+  persist: PersistState; // A1 — whether the browser will keep data from eviction
   onApiKey: (key: string) => void;
   onProfile: (p: LearnerProfile) => void;
   onPractice: (s: Scenario) => void;
@@ -101,13 +110,25 @@ export function Home(props: {
     });
   }
 
-  async function exportAll() {
-    const pack = await buildPack();
-    downloadFile("learning-pack.json", JSON.stringify(pack, null, 2), "application/json");
+  // A2 — one-tap backup: shares the file to Files/NAS on phones, downloads on
+  // desktop. User-initiated; no nag. The download fallback lives in backupPack.
+  async function backup() {
+    setBusy("準備備份…");
+    try {
+      const how = await backupPack();
+      setBusy(
+        how === "shared"
+          ? "已備份（已開啟分享，可存到「檔案」或 NAS）。"
+          : how === "downloaded"
+            ? "已下載備份檔 learning-pack.json。"
+            : "", // cancelled — say nothing
+      );
+    } catch (err) {
+      setBusy(`備份失敗：${err instanceof Error ? err.message : String(err)}`);
+    }
   }
-  async function exportCsv() {
-    const pack = await buildPack();
-    downloadFile("learned-items.csv", itemsToCsv(pack.items), "text/csv");
+  function exportCsv() {
+    downloadFile("learned-items.csv", itemsToCsv(items), "text/csv");
   }
   async function exportScenario(sc: Scenario) {
     const pack = await buildScenarioPack(sc);
@@ -377,15 +398,25 @@ export function Home(props: {
         <>
           <div className="section-title">設定與資料</div>
           <div className="card">
-            <div className="row">
-              <button className="btn btn--ghost btn--sm" onClick={exportAll}>
-                匯出資料包
-              </button>
+            <button className="btn btn--primary btn--block" onClick={backup}>
+              💾 備份資料（存到檔案／NAS）
+            </button>
+            <div className="row" style={{ marginTop: 8 }}>
               <button className="btn btn--ghost btn--sm" onClick={exportCsv}>
                 匯出單字（CSV）
               </button>
-              <FileButton accept=".json,application/json" label="匯入資料包" onFile={importPackFile} small />
+              <FileButton accept=".json,application/json" label="匯入備份" onFile={importPackFile} small />
             </div>
+            {props.persist !== "persisted" && (
+              <p className="muted" style={{ margin: "10px 0 0" }}>
+                {props.persist === "best-effort"
+                  ? "⚠ 資料保存為「盡力而為」— 瀏覽器在空間不足時可能清除，請定期備份。"
+                  : "⚠ 此瀏覽器無法鎖定本機資料，請定期備份。"}
+              </p>
+            )}
+            {props.persist === "persisted" && (
+              <p className="muted" style={{ margin: "10px 0 0" }}>✓ 資料已設為永久保存於本機。</p>
+            )}
             <div className="row" style={{ marginTop: 12 }}>
               {apiKey && <span className="muted grow">✓ 金鑰已設定於本機</span>}
               {apiKey && (

@@ -28,6 +28,11 @@ export default defineConfig(({ mode }) => ({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // apple-touch-icon isn't referenced by the manifest (iOS reads the <link>),
+      // so it isn't auto-precached — list it explicitly so the offline install
+      // has its home-screen icon. The worklet + manifest icons are already
+      // covered (js glob / manifest-icon integration).
+      includeAssets: ["apple-touch-icon.png"],
       manifest: {
         name: "Learning Coach",
         short_name: "Coach",
@@ -37,9 +42,37 @@ export default defineConfig(({ mode }) => ({
         display: "standalone",
         orientation: "portrait",
         start_url: ".",
+        // Raster PNGs are mandatory for real installs: iOS/Safari ignore SVG
+        // icons entirely (no home-screen icon / splash). The SVG stays first as
+        // the crisp option for engines that honour it. Maskable is a full-bleed
+        // square so the platform's own mask shapes it without clipping content.
         icons: [
           { src: "icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
-          { src: "icon.svg", sizes: "512x512", type: "image/svg+xml", purpose: "maskable" },
+          { src: "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          { src: "icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        ],
+      },
+      workbox: {
+        // Google Fonts are loaded via @import in app.css. Precache the local
+        // shell (the default glob covers js/css/html/png/svg incl. the audio
+        // worklet + the new icons); cache the remote fonts at runtime so the
+        // in-car offline shell keeps its typography after the first online load.
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.origin === "https://fonts.googleapis.com",
+            handler: "StaleWhileRevalidate",
+            options: { cacheName: "google-fonts-stylesheets" },
+          },
+          {
+            urlPattern: ({ url }) => url.origin === "https://fonts.gstatic.com",
+            handler: "CacheFirst",
+            options: {
+              cacheName: "google-fonts-webfonts",
+              expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
         ],
       },
     }),

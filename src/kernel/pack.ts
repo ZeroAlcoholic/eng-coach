@@ -70,6 +70,34 @@ export function itemsToCsv(items: LearnedItem[]): string {
   return rows.join("\n");
 }
 
+// --- backup ----------------------------------------------------------------
+// One-tap backup of the whole dataset. On phones the Web Share API hands the
+// file straight to "Save to Files"/NAS/cloud; everywhere else (desktop) we fall
+// back to a plain download. User-initiated only — there is deliberately no
+// "you haven't backed up in N days" nag (irregular use is a first-class
+// assumption). Returns the path taken so callers can message it.
+export type BackupResult = "shared" | "cancelled" | "downloaded";
+
+export async function backupPack(): Promise<BackupResult> {
+  const json = JSON.stringify(await buildPack(), null, 2);
+  const file = new File([json], "learning-pack.json", { type: "application/json" });
+  // canShare({files}) is the only honest capability check — bare navigator.share
+  // exists on some desktops that can't actually attach a file.
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: "學習資料備份" });
+      return "shared";
+    } catch (err) {
+      // AbortError = the user dismissed the share sheet on purpose. That is NOT
+      // a failure, and we must NOT silently download behind their back.
+      if (err instanceof DOMException && err.name === "AbortError") return "cancelled";
+      throw err; // a real share failure — let the caller surface it
+    }
+  }
+  downloadFile("learning-pack.json", json, "application/json");
+  return "downloaded";
+}
+
 // --- file download / read helpers ---
 export function downloadFile(filename: string, text: string, mime: string): void {
   const url = URL.createObjectURL(new Blob([text], { type: mime }));

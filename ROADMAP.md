@@ -41,6 +41,13 @@ principles below.
   dinner; JA 10 defaults — train, directions, shopping, pharmacy + polished food/
   hotel set. Objectives = observable task outcomes; targetPhrases = liftable
   chunks; frames recycle chunks + close with a can-do check.
+- **Batch A — data safety**: `navigator.storage.persist()` on load (exempts
+  IndexedDB from iOS ITP eviction; state shown in ⚙️ as persisted / best-effort /
+  unsupported); one-tap 備份資料 in ⚙️ via `navigator.share({files})` with a plain
+  `<a download>` fallback (user-initiated, no nag); real PNG icons (192/512 +
+  full-bleed maskable + `apple-touch-icon`) so iOS installs get an icon/splash,
+  plus workbox runtime-caching of the Google Fonts so the offline shell keeps its
+  type (worklet + icons already precached).
 
 ## Worklist (W1–W7 shipped; W8+ below)
 
@@ -55,16 +62,6 @@ building" and "Deferred — needs a missing precondition" below).
 new behaviour (seed IndexedDB, exercise the flow, clear test data) → update this
 file → **commit & push** (CI re-runs the gate, then auto-deploys to Pages). Push
 is the last step of each batch, never mid-batch.
-
-### Batch A — data safety (do first; all S; one PR; no new data shapes)
-*Local data can be silently evicted (iOS ITP). These three are independent.
-No reminder/nudge mechanics — see the "no schedule pressure" principle above.*
-
-| # | item | value | stability | files / mechanism |
-|---|---|---|---|---|
-| **A1** | `navigator.storage.persist()` on load; show state in ⚙️ | exempts IndexedDB from iOS ITP 7-day eviction | high (Baseline 2021 / Safari 17+) | `CoachApp` mount + `Home` settings |
-| **A2** | One-tap backup via `navigator.share({files})`, always available in ⚙️ | frictionless save to NAS/Files when the user chooses | high (iOS 16.4+/Android); desktop adds FSA later | `pack.ts`, `Home` ⚙️; feature-detect, fall back to existing `<a download>`. **No time-based "N days since backup" nag** — user-initiated only |
-| **A3** | PWA shell fix: 192/512 + maskable **PNG** icons, `apple-touch-icon`; verify precache covers worklet + fonts | offline Home/review/history in-car; real iOS icon/splash | high | `vite.config.ts` manifest, `public/` (iOS ignores SVG icons) |
 
 ### Batch B — pedagogy as prompt logic (all S; zero new API, zero new screen)
 *Lowest-risk, highest minimal-UI fit: changes the coach's behaviour, not the UI.*
