@@ -91,12 +91,18 @@ new behaviour (seed IndexedDB, exercise the flow, clear test data) → update th
 file → **commit & push** (CI re-runs the gate, then auto-deploys to Pages). Push
 is the last step of each batch, never mid-batch.
 
-### Batch V — on-device verification (S; do FIRST — it gates every "completed" claim)
-The DoD says "real-browser E2E" but no on-device record exists. One pass on the
-actual phone. **Every check is binary (pass/fail) or a number against a fixed
+### Batch V — verification（拆成兩半：桌機可代跑 / 必須手機）
+**Status: V-desktop 可由開發端隨時執行；V-phone deferred（附因：使用者暫不想
+親自實測，2026-08-01）— 不阻擋 Batch S/D 開工，但在 V-phone 補齊前，任何
+batch 不得宣稱「手機端已驗證」。**
+**Every check is binary (pass/fail) or a number against a fixed
 threshold — no free-text observations.** Protocol: one device per platform,
 record OS + browser version once; each check gets exactly one row `V# | pass/fail
 | measured value (if numeric)` in `docs/DEVICE_E2E.md`.
+
+**V-desktop（桌機瀏覽器可判定，開發端代跑）**: V1a′（點擊數，桌機計）、V1c、
+V1d、V1e、V3b（殺分頁→恢復卡）、V3c（斷網→繁中錯誤）。
+**V-phone（只能實機，暫緩）**: V1b、V2a–V2c、V3a、V4a–V4b。
 | # | check | pass criterion (binary/numeric only) |
 |---|---|---|
 | **V1a** | 乾淨瀏覽器：開 Pages URL → 開口說出第一句，總點擊數 | **≤ 6 次點擊**（含允許麥克風；不含金鑰申請） |
@@ -158,7 +164,10 @@ the no-schedule-pressure principle); no WASM forced alignment (too heavy for
 mobile).
 
 ---
-**Suggested order:** A, B, C + phone-first ease-of-use shipped. Next: **V**
-(on-device verification, small and gating) → **S1–S4** (story arcs — the
-current direction) → D (minimal shadowing); E only on demand. Each batch ends
+**Suggested order (2026-08-01, V-phone deferred):** A, B, C + phone-first
+ease-of-use shipped. Next, all executable WITHOUT the phone: **V-desktop** →
+**S1** (story state kernel, pure code + desktop E2E) → **S2** (episode UX) →
+**S4** (built-in demo arcs) → **S3** (arc curriculum) → D (minimal shadowing,
+desktop mic suffices for dev). **V-phone** slots in whenever the user has 15
+minutes with their phone — it only re-verifies, never blocks. Each batch ends
 with the full gate + E2E + commit + push.
