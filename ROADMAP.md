@@ -93,14 +93,27 @@ is the last step of each batch, never mid-batch.
 
 ### Batch V — on-device verification (S; do FIRST — it gates every "completed" claim)
 The DoD says "real-browser E2E" but no on-device record exists. One pass on the
-actual phone, written down, so later batches inherit a verified baseline.
-| # | item | acceptance (all must be observed on the device, not assumed) | guard |
-|---|---|---|---|
-| **V1** | 首次上手實測：乾淨瀏覽器開 Pages URL → 金鑰卡（點 AI Studio 連結、貼錯 key 看見繁中錯誤、貼對 key 看見 ✓）→ 範例情境 → 開練 | 每一步截圖或一行紀錄；量測「開網頁→開口說」的點擊數與分鐘數 | 不改碼；發現的問題開成新條目，不當場修 |
-| **V2** | 安裝流程：加入主畫面 → 開啟直接進教練（start_url 生效）→ 圖示/啟動畫面正確 | Android + iOS 各一次 | 舊安裝可能快取舊 start_url — 記錄是否需移除重裝 |
-| **V3** | 練習中韌性：鎖屏/切 app 後回來（wake lock 重取）、練到一半殺分頁（草稿恢復卡出現）、飛航模式斷線（看見翻譯後的錯誤而非英文原文） | 三種都實際做一次並記錄結果 | 只驗證，不加功能 |
-| **V4** | 麥克風權限行為：iOS 安裝版 PWA 是否每次重問；拒絕後的繁中提示是否出現 | 記錄實際行為（這是文件寫不出來、只能實測的） | — |
-**DoD**: 結果記進本檔（或 `docs/DEVICE_E2E.md`）＋列出的新問題各成一個 worklist 條目 → commit+push。
+actual phone. **Every check is binary (pass/fail) or a number against a fixed
+threshold — no free-text observations.** Protocol: one device per platform,
+record OS + browser version once; each check gets exactly one row `V# | pass/fail
+| measured value (if numeric)` in `docs/DEVICE_E2E.md`.
+| # | check | pass criterion (binary/numeric only) |
+|---|---|---|
+| **V1a** | 乾淨瀏覽器：開 Pages URL → 開口說出第一句，總點擊數 | **≤ 6 次點擊**（含允許麥克風；不含金鑰申請） |
+| **V1b** | 同上，總耗時（已持有金鑰） | **≤ 3 分鐘** |
+| **V1c** | 金鑰卡的 AI Studio 連結在新分頁開啟 | pass/fail |
+| **V1d** | 貼一把壞 key → 儲存被擋下且訊息含「金鑰」二字的繁中句 | pass/fail |
+| **V1e** | 貼正確 key → 顯示 ✓ 且金鑰卡消失 | pass/fail |
+| **V2a** | 加入主畫面後開啟，首個畫面＝教練 Home（非 Launcher） | pass/fail × Android、iOS 各一 |
+| **V2b** | 主畫面圖示為 app 圖示（非瀏覽器預設/空白） | pass/fail × 兩平台 |
+| **V2c** | 既有舊安裝不重裝時，start_url 是否更新 | pass/fail（fail＝需重裝，寫進 README 一行） |
+| **V3a** | 練習中鎖屏 30 秒→解鎖：session 仍在 live 且 60 秒內完成一次正常對答 | pass/fail |
+| **V3b** | 練習中殺分頁→重開：恢復卡出現，且句數 ≥ 殺前句數 − 1 | pass/fail（記兩個數字） |
+| **V3c** | 練習中開飛航模式：90 秒內出現繁中錯誤訊息（非英文原文、非無反應） | pass/fail |
+| **V4a** | iOS 安裝版連續兩次 session：第二次是否重問麥克風權限 | pass/fail（fail 非缺陷，是事實記錄——決定要不要在 UI 預告） |
+| **V4b** | 拒絕麥克風 → 訊息含「麥克風權限被拒」 | pass/fail |
+**DoD**: 13 個 check 全數有判定值填入 `docs/DEVICE_E2E.md` → 每個 fail 各開一個
+worklist 條目（不當場修）→ commit+push。**任何 check 沒有判定值＝Batch V 未完成。**
 
 ### Batch S — 連續情境／故事性 (story arcs; the 2026-08-01 direction update)
 誘因＝敘事拉力（想知道下一集），不是 streak/XP — no-schedule-pressure 原則不變：
@@ -112,8 +125,11 @@ actual phone, written down, so later batches inherit a verified baseline.
 | **S3** | 課綱化 arc：每條 arc 綁一組 CEFR can-do（6–8 個），每集鎖定 1–2 個，餵進 C1 ledger；arc 卡顯示「第 N／約 M 集」一行，不顯示分數 | 「有方法有脈絡」從隱形變可見 | 進度是集數不是百分比（no-gamification 紅線）；can-do 文字固定於 arc 建立時（避免 C1 已知的 objective 漂移） |
 | **S4** | 內建示範 arc：EN 一條（多集出差線：機場→客戶會議→危機→應酬）、JA 一條（東京自由行連續劇），沿用 defaults 的 stable-id 機制 | 不用自建就能體驗故事性 | 各 ≤6 集；集與集共用 storyState 種子 |
 **Phase order is the dependency order: S1 → S2 → S3 → S4**（S4 可與 S3 併行）。
-**DoD per phase**: quality gate green → real-browser E2E of the new behaviour →
-update this file → commit & push（沿用全域 DoD，push 是每階段最後一步）。
+**DoD per phase**: quality gate green → real-browser E2E of the new behaviour,
+**written as binary checks in the Batch-V format**（先在該階段開工前列好
+pass criterion，完工時逐條判定，追加進 `docs/DEVICE_E2E.md`；例：S1＝「殺掉生成
+呼叫後 arc 集數不變且可重試 pass/fail」、S2＝「Home 到開口說下一集 ≤ 2 次點擊」）
+→ update this file → commit & push（push 是每階段最後一步）。
 
 ### Batch D — minimal shadowing (the stable core of W9; M)
 | # | item | value | guard |
