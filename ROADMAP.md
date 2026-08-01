@@ -91,6 +91,29 @@ principles below.
   程式層 clamp）→ planning beat →進角色，並帶入人物／已發生事件／未解懸念與集尾
   收束＋下一集預告；新增區多一個「連續劇」勾選作為建立入口。
 
+- **2026-08-01 — S4／S3／D1 出貨（Batch S 完成、Batch D 完成）**:
+  **S4** 內建示範劇集，EN「倫敦出差：從入境到應酬」＋ JA「東京自由行：五天連續劇」，
+  各 6 集。只有第 1 集是授撰的 → 安裝**零 API 呼叫、離線可用**；第 2 集起走正常生成
+  路徑，並由新的 `Arc.outline`（每集一段 beat）把故事鎖在設計好的形狀上（機場→對接→
+  客戶會議→危機→協商→應酬），同時仍會依實際逐字稿改寫 storyState。stable id 沿用
+  DEFAULT_SCENARIOS 機制（重覆安裝覆寫而非新增）。授撰資料由 16 個單元測試把關，含
+  一道**簡體字**檢查。
+  **S3** 每條 arc 綁 6–8 個 CEFR can-do，`ArcCanDo` 文字在建立時凍結（模型只能用
+  1-based index 挑，越界／重複／非整數一律丟棄）。can-do 併入該集 scenario 的
+  objectives，因此直接沿用既有的 live prompt 引導＋集尾判決，不另建一套機制；判決除了
+  寫進 episode 自己的 C1 列，還以 **arc id** 為 key 再寫一次 —— 這是讓 mastery 能跨集
+  累積的唯一辦法（每集都是新 scenario，用 scenario key 永遠停在 attempts=1），也是
+  ROADMAP「Deferred — cross-scenario scheduler」所缺的穩定 objective identity 在 arc
+  範圍內合法成立的地方。Practice 同時吃 episode 層與 arc 層的弱項。arc 卡多一行
+  「◦ 這集練：…」，進度仍只有集數。
+  **D1** 最小跟讀：`AudioEngine` 新增按輪擷取教練音訊（barge-in 打斷的半句丟棄、單輪
+  上限 30 秒），`encodeWav` 把 provider PCM 包成 WAV，暫停狀態出現「🔁 跟讀」面板 ——
+  錄自己一段、A/B 兩顆大按鈕來回比對，**不打分數、不做分析**。只在暫停時提供是刻意的：
+  live 時麥克風正在串給 Gemini，跟讀會被當成一句話回應。
+  **E2E 抓到並修掉兩個真缺陷**：(1) `coach.html` 的 CSP 缺 `media-src`，`blob:` 音訊被
+  Chrome 擋掉 → 跟讀重播在正式環境會完全失效；(2) `describeError` 漏
+  `OverconstrainedError`（拔掉耳麥／找不到裝置）會漏成英文原文。
+
 ## Worklist (W1–W7 + Batches A/B/C shipped; D/E below)
 
 Synthesised from a 6-dimension research pass (vocab depth, learner memory,
@@ -146,13 +169,14 @@ worklist 條目（不當場修）→ commit+push。**任何 check 沒有判定�
 | **S2** | 單鍵劇集 UX：Home 對進行中 arc 顯示一顆「▶ 下一集 · 第 N 集」（取代該情境的繼續上次）；開場 prompt 加 30 秒繁中「前情提要」beat；集尾自然收束並預告 | 誘因所在 — 打開 app 就是一顆會說故事的按鈕 | one primary action：arc 不得長出列表/儀表板；前情提要 ≤3 句 |
 | **S3** | 課綱化 arc：每條 arc 綁一組 CEFR can-do（6–8 個），每集鎖定 1–2 個，餵進 C1 ledger；arc 卡顯示「第 N／約 M 集」一行，不顯示分數 | 「有方法有脈絡」從隱形變可見 | 進度是集數不是百分比（no-gamification 紅線）；can-do 文字固定於 arc 建立時（避免 C1 已知的 objective 漂移） |
 | **S4** | 內建示範 arc：EN 一條（多集出差線：機場→客戶會議→危機→應酬）、JA 一條（東京自由行連續劇），沿用 defaults 的 stable-id 機制 | 不用自建就能體驗故事性 | 各 ≤6 集；集與集共用 storyState 種子 |
-**Status: S1 ✅ / S2 ✅（2026-08-01）— S3、S4 未開工。**
-S1／S2 留下的已知後果，交給 S3／S4 處理：
-- 一次只有一條 arc 是主按鈕；多於一條時其餘收在「其他故事線（N）」後面。S4 內建兩條
-  （EN／JA 各一）落在不同語言，不會互相擠壓。
-- 集尾生成在 `finalizeSession` 內 await，會讓「分析中…」多幾秒。若 S4 之後覺得太久，
-  改成不 await（Home 的「下一集」本來就會等同一個 in-flight promise）。
-- `plannedEpisodes` 目前固定 6（`DEFAULT_ARC_LENGTH`），沒讓模型決定長度。
+**Status: S1 ✅ / S2 ✅ / S3 ✅ / S4 ✅ — Batch S 完成（2026-08-01）。**
+仍然成立的取捨（不是待辦，是刻意的邊界）：
+- 一次只有一條 arc 是主按鈕；其餘收在「其他故事線（N）」後面。內建兩條落在不同語言，
+  不會互相擠壓。
+- 集尾生成在 `finalizeSession` 內 await，會讓「分析中…」多幾秒（實測 ~19 秒含判決）。
+  若覺得太久，改成不 await（Home 的「下一集」本來就會等同一個 in-flight promise）。
+- `plannedEpisodes` 固定 6（`DEFAULT_ARC_LENGTH`），沒讓模型決定長度。
+- arc 走完 6 集後卡片消失（`isArcFinished`），目前沒有「重看／重練這條故事」的入口。
 **Phase order is the dependency order: S1 → S2 → S3 → S4**（S4 可與 S3 併行）。
 **DoD per phase**: quality gate green → real-browser E2E of the new behaviour,
 **written as binary checks in the Batch-V format**（先在該階段開工前列好
@@ -161,9 +185,13 @@ pass criterion，完工時逐條判定，追加進 `docs/DEVICE_E2E.md`；例：
 → update this file → commit & push（push 是每階段最後一步）。
 
 ### Batch D — minimal shadowing (the stable core of W9; M)
+**Status: D1 ✅ 2026-08-01**（判定見 `docs/DEVICE_E2E.md`；D1a-ii 待麥克風補判定）
 | # | item | value | guard |
 |---|---|---|---|
 | **D1** | 跟讀 = coach models a phrase → learner records (MediaRecorder) → **A/B replay** (your clip ↔ coach clip) | self-comparison rebuilds prosody; rock-solid APIs | **no analysis, no score** (holds the ROADMAP line). Cost to scope: capturing the coach's modeled phrase needs a small playback-buffer tap in `AudioEngine` |
+實作備註：擷取點在 `AudioEngine.playPcm`，以「輪」為單位（`beginCoachTurn` /
+`endCoachTurn`，由 transport 的 turn state 驅動）；barge-in 打斷的半句丟棄，單輪上限
+30 秒。面板只在**暫停**時出現 —— live 時麥克風正串給 Gemini，跟讀會被當成一句回應。
 
 ### Batch E — optional, only if a real need shows
 - **E1** LLM error-log extraction (fixed error-type enum to bound noise) — extra Gemini call/session.
@@ -187,10 +215,16 @@ the no-schedule-pressure principle); no WASM forced alignment (too heavy for
 mobile).
 
 ---
-**Suggested order (2026-08-01, V-phone deferred):** A, B, C + phone-first
-ease-of-use shipped. Next, all executable WITHOUT the phone: **V-desktop** →
-**S1** (story state kernel, pure code + desktop E2E) → **S2** (episode UX) →
-**S4** (built-in demo arcs) → **S3** (arc curriculum) → D (minimal shadowing,
-desktop mic suffices for dev). **V-phone** slots in whenever the user has 15
-minutes with their phone — it only re-verifies, never blocks. Each batch ends
-with the full gate + E2E + commit + push.
+**Where things stand (2026-08-01).** Shipped: W1–W7, Batches A/B/C, phone-first
+ease-of-use, **V-desktop**, **Batch S (S1–S4)**, **Batch D (D1)**. Batch E stays
+optional and unstarted (only if a real need shows).
+
+**Two verification debts, both waiting on hardware, neither blocking:**
+1. **A microphone on the dev machine** unblocks three already-registered checks —
+   `V3b` (kill-tab → recovery sentence count), `S2b-ii` (recap IS the first coach
+   turn), `D1a-ii` (the shadowed clip comes from a real coach turn). This desktop
+   has no capture device at all (only a silent Stereo Mix loopback), so a live
+   session never accumulates turns. Any USB mic/headset clears all three.
+2. **V-phone** (9 checks) needs the user's own phone for 15 minutes. Until it is
+   done, **nothing may claim「手機端已驗證」— only「桌機已驗證」**, and even on
+   desktop the three checks above are still open.

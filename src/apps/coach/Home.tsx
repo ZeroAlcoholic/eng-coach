@@ -32,8 +32,11 @@ import {
 } from "../../kernel/pack";
 import { persistedState, type PersistState } from "../../kernel/storage";
 import { generateScenario, validateApiKey } from "./ai";
+import { DEFAULT_ARCS } from "./arcDefaults";
 import {
   advanceArc,
+  episodeCanDos,
+  installDemoArc,
   isArcFinished,
   nextEpisodeGenerator,
   nextEpisodeNumber,
@@ -41,6 +44,7 @@ import {
   playedCount,
   seedGenerator,
   startArc,
+  type DemoArc,
 } from "./arcs";
 import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError } from "./finalize";
@@ -106,6 +110,8 @@ export function Home(props: {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const [primaryArc, ...otherArcs] = liveArcs;
   const samples = DEFAULT_SCENARIOS[lang].filter((d) => !scenarios.some((s) => s.id === d.id));
+  // S4 — built-in demo arcs, minus any already installed (stable ids).
+  const demoArcs = DEFAULT_ARCS[lang].filter((d) => !arcs.some((a) => a.id === d.id));
   const lvl = levelSummary(profile, lang); // W6
   const due = countDue(items, lang, new Date()); // W7
   const TREND = { up: "↗", flat: "→", down: "↘" } as const;
@@ -164,6 +170,22 @@ export function Home(props: {
       props.onChanged();
     });
     setBuilding(false);
+  }
+
+  // S4 — installing a demo arc costs ZERO API calls: episode 1 is authored, so
+  // this works with no key and offline, and goes straight into practice.
+  async function startDemoArc(demo: DemoArc) {
+    if (advancing) return;
+    setAdvancing(demo.id);
+    try {
+      const { scenario } = await installDemoArc(demo);
+      setBusy("");
+      props.onPractice(scenario);
+    } catch (err) {
+      setBusy(`無法開始這條故事線：${describeError(err)}`);
+    } finally {
+      setAdvancing(null);
+    }
   }
 
   // S2 — the single narrative action. advanceArc is idempotent: normally the
@@ -467,9 +489,29 @@ export function Home(props: {
       )}
 
       {/* 3. 範例情境 — 自動展開（沒有自建時）；有自建則收合成一顆按鈕（W5 減法） */}
-      {samples.length > 0 &&
+      {(samples.length > 0 || demoArcs.length > 0) &&
         (mine.length === 0 || showSamples ? (
           <>
+            {/* S4 — demo arcs sit above the one-off samples: a story line is the
+                better first experience, and there is at most one per language. */}
+            {demoArcs.map((demo) => (
+              <div key={demo.id} className="card" style={{ marginTop: 8 }}>
+                <div className="scenario-title">📖 {demo.title}</div>
+                <div className="row" style={{ marginBottom: 8 }}>
+                  <span className="pill pill--neutral">CEFR {demo.level}</span>
+                  <span className="pill pill--neutral">約 {demo.plannedEpisodes} 集</span>
+                  <span className="pill pill--neutral">示範</span>
+                </div>
+                <p className="scenario-ctx">{demo.premise}</p>
+                <button
+                  className="btn btn--primary btn--block"
+                  onClick={() => startDemoArc(demo)}
+                  disabled={advancing === demo.id}
+                >
+                  {advancing === demo.id ? "準備第 1 集…" : "▶ 從第 1 集開始"}
+                </button>
+              </div>
+            ))}
             <div className="section-title">範例情境 · 直接開練</div>
             {samples.map((sc) => (
               <div key={sc.id} className="card">
@@ -487,7 +529,7 @@ export function Home(props: {
           </>
         ) : (
           <button className="btn btn--ghost btn--sm" style={{ marginTop: 8 }} onClick={() => setShowSamples(true)}>
-            顯示範例情境（{samples.length}）
+            顯示範例（{samples.length + demoArcs.length}）
           </button>
         ))}
 
@@ -626,12 +668,20 @@ function ArcNextButton(props: { arc: Arc; busy: boolean; onPlay: () => void }) {
   const { arc } = props;
   const n = nextEpisodeNumber(arc);
   const played = playedCount(arc);
+  // S3 — what this episode trains, in the learner's words. Only shown for an
+  // episode that already exists; never a count, a percentage or a score.
+  const canDos = episodeCanDos(arc, pendingEpisode(arc));
   return (
     <div className="card" style={{ marginTop: 16 }}>
       <div className="scenario-title">📖 {arc.title}</div>
       <p className="muted" style={{ margin: "6px 0 10px" }}>
         第 {n} 集 · 全劇約 {arc.plannedEpisodes} 集{played > 0 && `（已練 ${played} 集）`}
       </p>
+      {canDos.map((c) => (
+        <p key={c.id} className="muted" style={{ margin: "0 0 6px" }}>
+          ◦ 這集練：{c.text}
+        </p>
+      ))}
       <button className="btn btn--primary btn--block" onClick={props.onPlay} disabled={props.busy}>
         {props.busy ? "準備下一集…" : `▶ 下一集 · 第 ${n} 集`}
       </button>

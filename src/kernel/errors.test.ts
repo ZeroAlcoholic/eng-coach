@@ -8,6 +8,16 @@ describe("describeError", () => {
     expect(describeError(e)).toContain("麥克風權限被拒");
   });
 
+  it("maps every no-usable-microphone flavour to one 繁中 sentence", () => {
+    // NotFoundError = no capture device at all; OverconstrainedError = the device
+    // we asked for is gone (headset unplugged). D1's 跟讀 hits both.
+    for (const e of [
+      new DOMException("Requested device not found", "NotFoundError"),
+      new DOMException("", "OverconstrainedError"),
+    ])
+      expect(describeError(e)).toContain("找不到麥克風");
+  });
+
   it("maps an invalid-key API blob", () => {
     const e = new Error(
       '{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}',

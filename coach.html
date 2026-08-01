@@ -2,9 +2,15 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
+    <!-- media-src allows blob: because D1 (跟讀) replays two locally-created
+         clips — the coach's captured turn re-encoded as a WAV Blob, and the
+         learner's MediaRecorder Blob. Without it these inherit default-src
+         'self' and Chrome rejects them ("Media load rejected by URL safety
+         check"), so replay silently fails. The launcher (index.html) plays no
+         media and deliberately stays tighter. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data:; manifest-src 'self'; object-src 'none'; base-uri 'self'"
+      content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; media-src 'self' blob:; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data:; manifest-src 'self'; object-src 'none'; base-uri 'self'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0a1410" />

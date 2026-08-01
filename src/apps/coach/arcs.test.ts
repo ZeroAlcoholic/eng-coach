@@ -4,11 +4,15 @@ import type { Arc, ArcEpisode } from "../../kernel/types";
 import {
   clampRecap,
   countSentences,
+  episodeCanDos,
+  freezeCanDos,
+  hasFullSyllabus,
   isArcFinished,
   nextEpisodeNumber,
   normaliseStoryState,
   pendingEpisode,
   playedCount,
+  resolveCanDoIds,
 } from "./arcs";
 
 const arc = (episodes: ArcEpisode[], plannedEpisodes = 6): Arc => ({
@@ -75,6 +79,78 @@ describe("clampRecap — S2's ≤3 sentence guard is enforced in code", () => {
 
   it("keeps an unterminated final sentence rather than dropping it", () => {
     expect(clampRecap("第一句。沒有句號結尾")).toBe("第一句。沒有句號結尾");
+  });
+});
+
+describe("freezeCanDos — S3's syllabus is fixed at creation", () => {
+  it("assigns stable positional ids and preserves the text verbatim", () => {
+    const out = freezeCanDos(["能問路", "能點餐"]);
+    expect(out).toEqual([
+      { id: "cd1", text: "能問路" },
+      { id: "cd2", text: "能點餐" },
+    ]);
+  });
+
+  it("dedupes and drops empties so a repeat can't occupy two syllabus slots", () => {
+    expect(freezeCanDos(["能問路", " 能問路 ", "", "  ", "能點餐"])).toEqual([
+      { id: "cd1", text: "能問路" },
+      { id: "cd2", text: "能點餐" },
+    ]);
+  });
+
+  it("caps at 8 and returns undefined when there is nothing usable", () => {
+    expect(freezeCanDos(Array.from({ length: 12 }, (_, i) => `能做事 ${i}`))).toHaveLength(8);
+    expect(freezeCanDos([])).toBeUndefined();
+    expect(freezeCanDos(undefined)).toBeUndefined();
+  });
+
+  it("hasFullSyllabus accepts 6–8 only", () => {
+    const withN = (n: number) =>
+      ({ ...arc([]), canDos: freezeCanDos(Array.from({ length: n }, (_, i) => `能 ${i}`)) }) as Arc;
+    expect(hasFullSyllabus(withN(5))).toBe(false);
+    expect(hasFullSyllabus(withN(6))).toBe(true);
+    expect(hasFullSyllabus(withN(8))).toBe(true);
+    expect(hasFullSyllabus(withN(9))).toBe(true); // freezeCanDos already capped it to 8
+    expect(hasFullSyllabus(arc([]))).toBe(false); // no syllabus at all
+  });
+});
+
+describe("resolveCanDoIds — the model may only PICK from the frozen list", () => {
+  const canDos = freezeCanDos(["a", "b", "c"]);
+
+  it("maps 1-based positions to ids", () => {
+    expect(resolveCanDoIds(canDos, [1, 3])).toEqual(["cd1", "cd3"]);
+  });
+
+  it("drops out-of-range, duplicate and non-numeric picks instead of inventing", () => {
+    expect(resolveCanDoIds(canDos, [0, 4, 99, -1, "x", null])).toEqual([]);
+    expect(resolveCanDoIds(canDos, [2, 2])).toEqual(["cd2"]);
+    expect(resolveCanDoIds(canDos, ["2", 3.7])).toEqual(["cd2", "cd3"]);
+  });
+
+  it("never returns more than two per episode", () => {
+    expect(resolveCanDoIds(canDos, [1, 2, 3])).toEqual(["cd1", "cd2"]);
+  });
+
+  it("returns nothing when there is no syllabus or no picks", () => {
+    expect(resolveCanDoIds(undefined, [1])).toEqual([]);
+    expect(resolveCanDoIds(canDos, undefined)).toEqual([]);
+  });
+});
+
+describe("episodeCanDos — resolving an episode's syllabus slice", () => {
+  const withSyllabus: Arc = { ...arc([]), canDos: freezeCanDos(["能問路", "能點餐"]) };
+
+  it("returns the referenced can-dos in the episode's order", () => {
+    const e: ArcEpisode = { ...ep(1), canDoIds: ["cd2", "cd1"] };
+    expect(episodeCanDos(withSyllabus, e).map((c) => c.text)).toEqual(["能點餐", "能問路"]);
+  });
+
+  it("silently skips ids the syllabus no longer contains, and handles absences", () => {
+    expect(episodeCanDos(withSyllabus, { ...ep(1), canDoIds: ["cd9"] })).toEqual([]);
+    expect(episodeCanDos(withSyllabus, ep(1))).toEqual([]);
+    expect(episodeCanDos(withSyllabus, undefined)).toEqual([]);
+    expect(episodeCanDos(arc([]), { ...ep(1), canDoIds: ["cd1"] })).toEqual([]);
   });
 });
 

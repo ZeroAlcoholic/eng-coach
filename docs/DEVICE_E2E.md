@@ -18,7 +18,8 @@
 `enumerateDevices()` 只列出 Realtek「立體聲混音」（系統輸出回錄），且播放 440Hz 純音
 時該裝置量到的 peak 仍為 0.00006（＝數位靜音，回錄路徑不通）。因此 Gemini Live 的
 VAD 永遠不會被觸發、教練不會開口，**任何需要真實對話內容的 check 在本機無法判定**
-（見 V3b、S2b-ii）。這不是程式缺陷，是本機硬體事實。
+（見 V3b、S2b-ii、D1a-ii）。這不是程式缺陷，是本機硬體事實。
+**一支 USB 麥克風／耳麥即可一次解鎖這三項。**
 
 ## Batch V
 
@@ -105,4 +106,81 @@ S1 依 ROADMAP 刻意不新增畫面，因此 E2E 在真實瀏覽器裡直接驅
 - **S2b-ii = blocked**：同 V3b 的硬體原因。**解鎖條件**：插上麥克風後跑一次 arc 集數
   ≥2 的 session，看教練第一個 turn 是否就是 ≤3 句繁中前情提要。
 
-### S3 / S4 — criterion 於開工時補列（規則同上）
+### S4 — 內建示範劇集（criterion 於 2026-08-01 開工前登錄）
+| check | pass criterion | 判定 | 量測值 | 日期 |
+|---|---|---|---|---|
+| S4a | 乾淨資料下 EN／JA 各恰好 1 條示範連續劇，且各條 plannedEpisodes ≤ 6 | **pass** | EN 1／JA 1，各 6 集 | 2026-08-01 |
+| S4b | 安裝示範劇：**零 API 呼叫**即可開練第 1 集；安裝後該示範從清單消失，且重覆安裝不產生第二條（stable id） | **pass** | 離線安裝成功；重裝後仍 1 arc／1 scenario | 2026-08-01 |
+| S4c | 示範劇第 2 集生成後：沿用 outline 指定的下一段落，且延續同一 storyState 種子的人物 | **pass** | 第 2、3 集都命中對應段落 | 2026-08-01 |
+
+判定細節：
+- **S4a**：EN「倫敦出差：從入境到應酬」、JA「東京自由行：五天連續劇」，各 6 集、7 個
+  can-do、6 段 outline；每個語言的 Home 上只出現 1 張示範卡。授撰資料另有 16 個單元
+  測試把關（outline 長度＝集數、can-do 6–8 且不重複、episode1 欄位齊全、recap ≤3 句、
+  storyState 種子有人物與懸念但 events 為空、**無簡體字**）。
+- **S4b**：以 DevTools 設 `Offline` 後點「▶ 從第 1 集開始」→ 成功安裝並進入第 1 集
+  「希斯洛入境：行李沒跟上」，畫面無任何錯誤訊息（第 1 集全部是授撰內容，不需模型）。
+  id 為 `def-arc-en-london-trip` / `-ep1`；再次 `installDemoArc` 後仍是 1 條 arc、
+  1 個 scenario（stable id 覆寫而非新增）。
+- **S4c**：走真實 finalize 生成第 2 集 →「Aligning Strategies at the London Office」，
+  對應 outline 第 2 段「抵達倫敦辦公室：與當地同事 Priya 對接…」，內容確實提到 Priya；
+  第 3 集「The Pitch under Pressure」對應第 3 段「客戶會議：向 Daniel 說明…」，Daniel
+  與 Priya 都在場。storyState 人物固定為 Priya Raman／Daniel Whitfield，events 依實際
+  逐字稿累積到 4 筆。
+
+### S3 — 劇集綁課綱（criterion 於 2026-08-01 開工前登錄）
+| check | pass criterion | 判定 | 量測值 | 日期 |
+|---|---|---|---|---|
+| S3a | 每條 arc 綁 6–8 個 CEFR can-do，且文字在建立後固定（走完一集後逐字不變） | **pass** | 7 個；走完 2 集後 JSON 逐字相同 | 2026-08-01 |
+| S3b | 每集鎖定 1–2 個 can-do；集尾判決累積在 **arc 層** key —— 同一 can-do 跨兩集後 attempts = 2（不分裂成兩筆） | **pass** | attempts = 2，列數不變 | 2026-08-01 |
+| S3c | arc 卡顯示「第 N／約 M 集」與本集 can-do，且畫面上不出現任何分數／百分比 | **pass** | — | 2026-08-01 |
+
+判定細節：
+- **S3a**：7 個 can-do（`cd1`…`cd7`）。跑完兩集真實 finalize（含兩次下一集生成）後，
+  `JSON.stringify(arc.canDos)` 與建立時完全相同——模型只能用 1-based index 挑，
+  `resolveCanDoIds` 會丟掉越界／重複／非整數的選擇，永遠不改寫文字。
+- **S3b**：第 1 集鎖 cd1、第 2 集鎖 cd2（模型被要求優先挑沒練過的）。兩集真實
+  finalize 後 arc 層 ledger 為 2 列、各 attempts=1，key 形如
+  `def-arc-en-london-trip::能在入境與交通場景說明來意，並處理突發狀況`。接著對 cd2
+  再送一次判決（呼叫 finalize 用的同一個 `recordJudgeOutcomes`）→ **同一列** attempts
+  變 2、met=1、lastMet=false，列數不變。同一批判決在 episode 的 scenario 上另有 5 列
+  （每集自己的目標留在自己那列），證明 key 是 arc 範圍而非 episode 範圍。
+- **S3c**：卡面為「第 3 集 · 全劇約 6 集（已練 2 集）」＋兩行「◦ 這集練：…」，
+  全頁無百分比、無分數字樣；episode 的 scenario 不出現在「你的情境」清單（顯示 0）。
+
+### D1 — 最小跟讀（criterion 於 2026-08-01 開工前登錄）
+| check | pass criterion | 判定 | 量測值 | 日期 |
+|---|---|---|---|---|
+| D1a-i | 跟讀面板可錄下自己的版本，並能 A/B 重播兩段音訊（任一時刻只有一邊在播） | **pass** | 教練 1.000s／我的 1.14s，皆實際播放推進 | 2026-08-01 |
+| D1a-ii | 該教練音訊來自真實 live 教練輪 | **blocked** | 本機無麥克風 → 教練不開口 | 2026-08-01 |
+| D1b | 跟讀流程全程不出現任何分數／評分／百分比文字（守住 ROADMAP 紅線） | **pass** | 0 個分數字樣、0 個百分比 | 2026-08-01 |
+| D1c | 未授權／無麥克風時給出繁中錯誤訊息，且不影響進行中的 live session | **pass** | — | 2026-08-01 |
+
+判定細節：
+- **D1a-i**：以真 `AudioEngine` 餵入真 PCM16（provider 格式）走完整條路——
+  `beginCoachTurn` → `playPcm`×N → `endCoachTurn` → 擷取到 24000 samples @24kHz
+  （正好 1.000 秒）→ `encodeWav` → Blob → `new Audio()` 載入 duration=1.000 且
+  `currentTime` 實際推進；學習者側用真 `MediaRecorder` 錄到 19616 bytes
+  `audio/webm;codecs=opus`、duration 1.14s、同樣實際播放推進，且停止後 mic track
+  `readyState` 為 `ended`（麥克風確實釋放）。再把**真的 Shadowing 元件**配上這段真
+  clip 掛進頁面跑完整流程：錄音中兩顆播放鍵停用；錄完「我的」啟用；播教練時教練鍵變
+  「■ 停」而「我的」維持「▶」，播我的時反之——A/B 任一時刻只有一邊在播。
+  另驗兩條保護：barge-in 打斷的半句**不會**成為跟讀範本（`flushPlayback` 丟棄進行中
+  的擷取，前一句完整範本保留）；單輪擷取上限 30 秒（餵 40 秒只留 30 秒）。
+- **D1a-ii = blocked**：與 V3b／S2b-ii 同一個硬體原因（本機無麥克風→Gemini Live 的
+  VAD 不被觸發→教練不開口）。**解鎖條件**：插上麥克風後練一段，暫停時確認跟讀面板的
+  「教練的」就是教練剛說那句。
+- **D1b**：初始／錄音中／錄完／A-B 播放四個狀態的文案全部掃過，無百分比、無評分字樣。
+  唯一命中「分數」的是刻意寫的否定句「這裡**不打分數**，只讓你自己聽出差別。」
+- **D1c**：真實觸發 `getUserMedia` 失敗（要求不存在的 deviceId → 真 `OverconstrainedError`）
+  → 訊息為繁中「找不到麥克風 — 請確認裝置有麥克風且未被其他 app 佔用。」
+  **這一項原本是 fail**：`describeError` 只認 `NotFoundError`，`OverconstrainedError`
+  會漏成英文原文，已修並補單元測試。live session 隔離也實測：暫停中開跟讀後狀態仍為
+  「已暫停」，「▶ 接續」「■ 停止並儲存」都還在（跟讀用自己的短命 stream，不碰 session）。
+
+### 本批修掉的兩個真缺陷（E2E 抓出來的）
+1. **CSP 沒有 `media-src`** → `default-src 'self'` 讓 `blob:` 音訊被 Chrome 擋掉
+   （`MEDIA_ELEMENT_ERROR: Media load rejected by URL safety check`），跟讀的兩段重播
+   在正式環境會完全播不出來。已在 `coach.html` 加 `media-src 'self' blob:`（launcher
+   不播媒體，維持較緊）。修好後同一個探針立刻由 fail 轉 pass。
+2. **`describeError` 漏 `OverconstrainedError`** → 見 D1c。

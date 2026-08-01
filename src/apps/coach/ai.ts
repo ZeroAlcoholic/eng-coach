@@ -290,8 +290,18 @@ const EPISODE_SCHEMA = {
     objectives: { type: Type.ARRAY, items: { type: Type.STRING } },
     targetPhrases: { type: Type.ARRAY, items: { type: Type.STRING } },
     recap: { type: Type.STRING },
+    canDoIndexes: { type: Type.ARRAY, items: { type: Type.INTEGER } },
   },
-  required: ["title", "contentContext", "coachRole", "userRole", "objectives", "targetPhrases", "recap"],
+  required: [
+    "title",
+    "contentContext",
+    "coachRole",
+    "userRole",
+    "objectives",
+    "targetPhrases",
+    "recap",
+    "canDoIndexes",
+  ],
 };
 
 /** One episode's raw material, before it becomes a Scenario. */
@@ -303,6 +313,7 @@ export interface EpisodeDraft {
   objectives: string[];
   targetPhrases: string[];
   recap: string; // 繁中「前情提要」— clamped to ≤3 sentences by the arc domain
+  canDoIndexes: number[]; // S3 — 1-based refs into the arc's FIXED can-do list
 }
 
 /** What every arc-growing call returns: where the story now stands + what's next. */
@@ -316,15 +327,19 @@ const ARC_SEED_SCHEMA = {
   properties: {
     arcTitle: { type: Type.STRING },
     premise: { type: Type.STRING },
+    canDos: { type: Type.ARRAY, items: { type: Type.STRING } },
+    outline: { type: Type.ARRAY, items: { type: Type.STRING } },
     storyState: STORY_STATE_SCHEMA,
     episode: EPISODE_SCHEMA,
   },
-  required: ["arcTitle", "premise", "storyState", "episode"],
+  required: ["arcTitle", "premise", "canDos", "outline", "storyState", "episode"],
 };
 
 export interface ArcSeed extends EpisodeGeneration {
   arcTitle: string;
   premise: string;
+  canDos: string[]; // S3 — 6–8 can-do statements, fixed from here on
+  outline: string[]; // S4 — one beat per planned episode
 }
 
 const langName = (l: TargetLanguage) => (l === "ja" ? "Japanese" : "English");
@@ -352,11 +367,22 @@ export async function generateArcSeed(
     `learner at CEFR ${opts.level}, based on the brief below. The arc runs about ${opts.episodes} ` +
     `episodes: one connected story with recurring characters, where each episode is a separate ` +
     `conversation that moves the story forward.\n\n` +
-    `Return: arcTitle (short); premise (2-3 sentences describing the whole arc's situation and ` +
-    `where it is heading); storyState with characters (the recurring cast, name + one-line note), ` +
-    `events (leave EMPTY — nothing has happened yet), openThreads (1-3 things already hanging over ` +
-    `the learner that episode 1 will start paying off); and episode — the FIRST episode.\n\n` +
+    `Return:\n` +
+    `- arcTitle (short).\n` +
+    `- premise: 2-3 sentences describing the whole arc's situation and where it is heading.\n` +
+    `- canDos: the arc's SYLLABUS — 6 to 8 CEFR-style can-do statements written in Traditional ` +
+    `Chinese (Taiwan), each starting「能…」and naming an observable speaking ability at CEFR ` +
+    `${opts.level} that this story naturally trains (e.g.「能向櫃台說明狀況並要求具體補救」). ` +
+    `They must be distinct from one another and cover the whole arc, not just episode 1.\n` +
+    `- outline: exactly ${opts.episodes} short beats, one per episode, in order — the shape of ` +
+    `the story from start to resolution.\n` +
+    `- storyState: characters (the recurring cast, name + one-line note), events (leave EMPTY — ` +
+    `nothing has happened yet), openThreads (1-3 things already hanging over the learner that ` +
+    `episode 1 will start paying off).\n` +
+    `- episode: the FIRST episode, playing out outline beat 1.\n\n` +
     EPISODE_RULES +
+    `\n- canDoIndexes: the 1 or 2 canDos this episode targets, as 1-based positions in the canDos ` +
+    `list you just returned.` +
     `\n\nBRIEF:\n${opts.brief}`;
   return generateJson<ArcSeed>(apiKey, prompt, ARC_SEED_SCHEMA);
 }
@@ -392,6 +418,21 @@ export async function generateNextEpisode(
     `- open threads: ${state.openThreads.join("; ") || "(none)"}\n\n` +
     `JUST PLAYED — episode ${lastEpisode.n}: ${lastEpisode.title}\n${opts.lastScenario.contentContext}\n\n` +
     `TRANSCRIPT OF THAT EPISODE\n${convo}\n\n` +
+    // S4 — a built-in arc is authored as a shape; episode N must play beat N.
+    (arc.outline?.[nextN - 1]
+      ? `THE BEAT EPISODE ${nextN} MUST PLAY (this is fixed — build the episode around it):\n` +
+        `${arc.outline[nextN - 1]}\n` +
+        (arc.outline[nextN]
+          ? `(for context only, do NOT play it yet — episode ${nextN + 1} will be: ${arc.outline[nextN]})\n`
+          : "") +
+        "\n"
+      : "") +
+    // S3 — the syllabus is FIXED; the model picks from it, never rewrites it.
+    (arc.canDos?.length
+      ? `THE ARC'S FIXED CAN-DO LIST (choose from these by position; never reword them):\n` +
+        arc.canDos.map((c, i) => `${i + 1}. ${c.text}`).join("\n") +
+        `\n\n`
+      : "") +
     `Return TWO things.\n` +
     `1. storyState — the story state UPDATED for what actually happened in that transcript: keep ` +
     `and extend characters; APPEND the key events of that episode to the existing events (keep the ` +
@@ -403,7 +444,11 @@ export async function generateNextEpisode(
       ? ` This is the FINAL episode: resolve the main open threads and bring the story to a close.`
       : ` Leave a new hook open at the end so the learner wants the next episode.`) +
     `\n\n` +
-    EPISODE_RULES;
+    EPISODE_RULES +
+    (arc.canDos?.length
+      ? `\n- canDoIndexes: the 1 or 2 can-dos from the FIXED list above that this episode targets, ` +
+        `as 1-based positions. Prefer ones earlier episodes haven't covered yet.`
+      : `\n- canDoIndexes: return an empty array.`);
   return generateJson<EpisodeGeneration>(apiKey, prompt, NEXT_EPISODE_SCHEMA);
 }
 

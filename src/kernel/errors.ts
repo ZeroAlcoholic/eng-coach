@@ -12,7 +12,15 @@ export function describeError(err: unknown): string {
   // getUserMedia — the mic never even opened.
   if (m.includes("notallowederror") || m.includes("permission denied") || m.includes("permission dismissed"))
     return "麥克風權限被拒 — 請在瀏覽器的網站設定裡允許麥克風，再重新開始。";
-  if (m.includes("notfounderror") || m.includes("devices not found"))
+  // No usable capture device: NotFoundError when there is none at all, and
+  // OverconstrainedError when the one we asked for isn't there any more (a
+  // headset unplugged mid-session). Both mean the same thing to the learner.
+  if (
+    m.includes("notfounderror") ||
+    m.includes("devices not found") ||
+    m.includes("requested device not found") ||
+    m.includes("overconstrainederror")
+  )
     return "找不到麥克風 — 請確認裝置有麥克風且未被其他 app 佔用。";
   if (m.includes("notreadableerror"))
     return "麥克風被其他程式佔用中 — 請關閉其他使用麥克風的 app 再試。";

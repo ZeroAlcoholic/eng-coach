@@ -6,11 +6,11 @@
 // Used from two places: Practice (normal「停止並儲存」) and Home (recovering a
 // draft left behind by a killed tab).
 
-import { clearDraft, putItems, putProfile, putScenario, putSession } from "../../kernel/db";
+import { clearDraft, getArc, putItems, putProfile, putScenario, putSession } from "../../kernel/db";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
 import { extractLearnedItems, summariseSession, type SessionReview } from "./ai";
-import { advanceArc, markEpisodePlayed, nextEpisodeGenerator } from "./arcs";
-import { recordJudgeOutcomes } from "./objectives";
+import { advanceArc, episodeCanDos, markEpisodePlayed, nextEpisodeGenerator } from "./arcs";
+import { canonicalizeVerdicts, recordJudgeOutcomes } from "./objectives";
 import { applySessionToProfile } from "./progress";
 
 export interface FinalizeOutcome {
@@ -123,6 +123,7 @@ export async function finalizeSession(
   if (scenario.arc) {
     const { arcId, episode } = scenario.arc;
     try {
+      await recordArcCanDos(arcId, episode, review);
       await markEpisodePlayed(arcId, episode, new Date().toISOString());
       await advanceArc(arcId, nextEpisodeGenerator(apiKey));
     } catch (e) {
@@ -130,4 +131,35 @@ export async function finalizeSession(
     }
   }
   return outcome;
+}
+
+/**
+ * S3 — fold this episode's can-do verdicts into the C1 ledger under the ARC's id
+ * rather than the episode's scenario id.
+ *
+ * That is the whole point: every episode is a NEW Scenario, so keying on the
+ * scenario would give each can-do a fresh row with attempts=1 and mastery could
+ * never accumulate. The arc id is stable for the life of the story and its
+ * can-do texts are frozen at creation, which is exactly the stable objective
+ * identity C1's ledger needs (see ROADMAP "Deferred — cross-scenario scheduler":
+ * an arc is the one place that identity legitimately exists).
+ *
+ * Only can-dos are recorded here — an episode's own one-off objectives stay on
+ * the episode's scenario row, where they belong.
+ */
+async function recordArcCanDos(
+  arcId: string,
+  episode: number,
+  review: SessionReview,
+): Promise<void> {
+  if (!review.objectivesMet?.length) return;
+  const arc = await getArc(arcId);
+  if (!arc) return;
+  const canDoTexts = episodeCanDos(arc, arc.episodes.find((e) => e.n === episode)).map((c) => c.text);
+  if (!canDoTexts.length) return;
+  const verdicts = [...canonicalizeVerdicts(review.objectivesMet, canDoTexts)]
+    .filter(([objective]) => canDoTexts.includes(objective))
+    .map(([objective, met]) => ({ objective, met }));
+  if (!verdicts.length) return;
+  await recordJudgeOutcomes(arcId, verdicts, new Date().toISOString(), canDoTexts);
 }

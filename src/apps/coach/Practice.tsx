@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { AudioEngine } from "../../audio/AudioEngine";
+import { AudioEngine, type CoachClip } from "../../audio/AudioEngine";
 import { GeminiLiveDirect } from "../../api/gemini-direct";
 import { getArc, listItems, putDraft, putProfile } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
@@ -19,6 +19,7 @@ import { emptyReview, finalizeSession, PersistError, ResultsPersistError } from 
 import { weakObjectives } from "./objectives";
 import { band } from "./progress";
 import { composeSystemInstruction, type ArcContext } from "./prompt";
+import { Shadowing } from "./Shadowing";
 import { dueQueue } from "./srs";
 import { pickVoice } from "./voices";
 
@@ -67,6 +68,7 @@ export function Practice(props: {
   const [suggestions, setSuggestions] = useState<ReplySuggestion[] | null>(null);
   const [helping, setHelping] = useState(false);
   const [slow, setSlow] = useState(!!profile.prefs?.slowSpeech);
+  const [coachClip, setCoachClip] = useState<CoachClip | null>(null); // D1 — 跟讀 model
   // tapped-line translations, keyed by index but tagged with the source text so a
   // still-growing streamed line doesn't show a stale partial translation.
   const [tx, setTx] = useState<Record<number, { src: string; zh: string }>>({});
@@ -187,6 +189,7 @@ export function Practice(props: {
     pausedRef.current = false;
     setPaused(false);
     setSuggestions(null);
+    setCoachClip(null); // D1 — a new session starts with no shadowing model
     setTx({});
     startedAtRef.current = new Date().toISOString();
     sessionIdRef.current = crypto.randomUUID();
@@ -202,7 +205,12 @@ export function Practice(props: {
         listItems()
           .then((its) => dueQueue(its, scenario.targetLanguage, new Date(), RECYCLE_CAP))
           .catch(() => []),
-        weakObjectives(scenario.id).catch(() => []),
+        // C1 + S3 — weak spots from THIS episode's scenario row and, for an arc,
+        // from the arc-level can-do ledger that accumulates across episodes.
+        Promise.all([
+          weakObjectives(scenario.id).catch(() => []),
+          scenario.arc ? weakObjectives(scenario.arc.arcId).catch(() => []) : Promise.resolve([]),
+        ]).then(([own, arcWide]) => [...new Set([...own, ...arcWide])]),
         loadArcContext(scenario).catch(() => undefined),
       ]);
       // Build inside the try: composeSystemInstruction/pickVoice run here, so a
@@ -220,7 +228,17 @@ export function Practice(props: {
             engineRef.current?.playPcm(pcm);
           },
           onInterrupted: () => engineRef.current?.flushPlayback(),
-          onTurnState: (t) => setPhase(t), // transport is the single source of truth
+          onTurnState: (t) => {
+            setPhase(t); // transport is the single source of truth
+            // D1 — bracket the coach's turn so its audio can be shadowed. The
+            // clip is only offered once the turn ENDS (a cut-off turn is dropped
+            // inside flushPlayback), so 跟讀 always models a complete phrase.
+            if (t === "coach") engineRef.current?.beginCoachTurn();
+            else {
+              engineRef.current?.endCoachTurn();
+              setCoachClip(engineRef.current?.lastCoachTurn() ?? null);
+            }
+          },
           onUserTranscript: (t) => pushDelta("user", t),
           onAssistantTranscript: (t) => pushDelta("coach", t),
           onError: (m) => setNotice(`錯誤：${describeError(m)}`),
@@ -426,6 +444,9 @@ export function Practice(props: {
                   </button>
                 </div>
               )}
+              {/* D1 — 跟讀 lives in the paused state on purpose: live, the mic is
+                  streaming to Gemini and a practice attempt would be answered. */}
+              {paused && <Shadowing clip={coachClip} />}
               {suggestions && suggestions.length > 0 && (
                 <div className="card" style={{ width: "100%", marginTop: 8 }}>
                   <div className="muted" style={{ marginBottom: 6 }}>可以這樣說：</div>

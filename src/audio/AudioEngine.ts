@@ -15,6 +15,16 @@ const MIC_CONSTRAINTS: MediaStreamConstraints = {
   audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
 };
 
+// D1 — how much of one coach turn to keep for shadowing. A modelled phrase is a
+// few seconds; the cap only stops a runaway monologue from holding megabytes.
+const MAX_TURN_SECONDS = 30;
+
+/** D1 — one captured coach turn, ready to be encoded for replay. */
+export interface CoachClip {
+  samples: Float32Array;
+  sampleRate: number;
+}
+
 export interface AudioEngineOptions {
   inputSampleRate: number; // provider expects (e.g. 16000 for Gemini)
   outputSampleRate: number; // provider produces (e.g. 24000 for Gemini)
@@ -32,6 +42,12 @@ export class AudioEngine {
   // BufferSources audible.
   private scheduled: AudioBufferSourceNode[] = [];
   private rate = 1; // playback speed (W4 slow-speech toggle); <1 = slower
+  // D1 — the coach's voice for shadowing. `capturing` accumulates the turn that
+  // is playing right now; it is promoted to `lastTurn` only when the turn ENDS
+  // cleanly, so a barged-in (cut short) turn is never offered as a model.
+  private capturing: Float32Array[] | null = null;
+  private capturedLength = 0;
+  private lastTurn: CoachClip | null = null;
   private readonly opts: AudioEngineOptions;
 
   constructor(opts: AudioEngineOptions) {
@@ -66,10 +82,54 @@ export class AudioEngine {
     // Worklet has no output we want audible; do not connect to destination.
   }
 
+  // --- D1: coach-turn capture for shadowing -------------------------------
+
+  /** The coach started speaking — start a fresh capture. */
+  beginCoachTurn(): void {
+    this.capturing = [];
+    this.capturedLength = 0;
+  }
+
+  /** The coach finished cleanly — this turn becomes the shadowing model. */
+  endCoachTurn(): void {
+    if (!this.capturing?.length) {
+      this.capturing = null;
+      return;
+    }
+    const samples = new Float32Array(this.capturedLength);
+    let at = 0;
+    for (const chunk of this.capturing) {
+      samples.set(chunk, at);
+      at += chunk.length;
+    }
+    this.lastTurn = { samples, sampleRate: this.opts.outputSampleRate };
+    this.capturing = null;
+    this.capturedLength = 0;
+  }
+
+  /** Throw away the in-progress capture (barge-in cut the turn short). */
+  discardCoachTurn(): void {
+    this.capturing = null;
+    this.capturedLength = 0;
+  }
+
+  /** The coach's most recent COMPLETE turn, or null if there isn't one yet. */
+  lastCoachTurn(): CoachClip | null {
+    return this.lastTurn;
+  }
+
   /** Queue provider audio for gapless playback. */
   playPcm(pcm: ArrayBuffer): void {
     if (!this.ctx) return;
     const samples = pcm16ToFloat32(pcm);
+    if (this.capturing) {
+      const room = this.opts.outputSampleRate * MAX_TURN_SECONDS - this.capturedLength;
+      if (room > 0) {
+        const keep = samples.length <= room ? samples : samples.subarray(0, room);
+        this.capturing.push(keep);
+        this.capturedLength += keep.length;
+      }
+    }
     const buffer = this.ctx.createBuffer(1, samples.length, this.opts.outputSampleRate);
     // .set() avoids the TS 5.7 Float32Array<ArrayBuffer> generic mismatch that
     // copyToChannel's signature triggers.
@@ -93,6 +153,9 @@ export class AudioEngine {
 
   /** Drop any scheduled playback — used on barge-in ('interrupted' state). */
   flushPlayback(): void {
+    // Whatever the coach was mid-way through saying was cut off, so it must not
+    // become a shadowing model. Covers both callers: barge-in and pauseMic.
+    this.discardCoachTurn();
     if (!this.ctx) return;
     for (const node of this.scheduled) {
       node.onended = null;

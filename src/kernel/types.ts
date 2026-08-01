@@ -64,12 +64,27 @@ export interface StoryState {
   openThreads: string[]; // promises/loose ends not yet paid off → next episode's hook
 }
 
+/**
+ * S3 — one CEFR can-do the arc teaches, e.g.「能在櫃台說明狀況並要求改班」.
+ *
+ * The TEXT IS THE IDENTITY and is FIXED when the arc is created: the C1 ledger is
+ * keyed by objective text, so regenerating or rewording a can-do mid-arc would
+ * fork its mastery row and the accumulated attempts would be lost (this is the
+ * exact "objective drift" problem C1 documents). `id` is stable and local to the
+ * arc, so an episode can reference a can-do without repeating its prose.
+ */
+export interface ArcCanDo {
+  id: string; // stable within the arc, e.g. "cd1"
+  text: string; // the can-do statement, in 繁中 — NEVER rewritten after creation
+}
+
 /** One materialised episode of an arc: the Scenario to practise plus its recap. */
 export interface ArcEpisode {
   n: number; // 1-based episode number
   scenarioId: string; // the Scenario carrying this episode's context
   title: string;
   recap?: string; // ≤3 繁中 sentences of「前情提要」(episode 1 has none)
+  canDoIds?: string[]; // S3 — the 1–2 arc can-dos this episode targets
   completedAt?: string; // ISO — set once a session for this episode is finalised
 }
 
@@ -89,6 +104,13 @@ export interface Arc {
   episodes: ArcEpisode[]; // materialised so far; index order === episode order
   plannedEpisodes: number; // rough length ("第 N／約 M 集"); also the hard cap
   storyState: StoryState;
+  // S3 — the arc's syllabus: 6–8 can-dos, fixed at creation. Optional only for
+  // backward compatibility with arcs exported before S3.
+  canDos?: ArcCanDo[];
+  // S4 — an authored beat per episode ("機場報到" → "客戶會議" → …). When present,
+  // episode N must play out beat N, so a built-in demo arc follows its designed
+  // shape instead of wherever the model drifts. Absent = the model is free.
+  outline?: string[];
   createdAt: string; // ISO
   updatedAt: string; // ISO
 }

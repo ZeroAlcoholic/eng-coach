@@ -24,6 +24,7 @@ import {
 } from "../../kernel/db";
 import type {
   Arc,
+  ArcCanDo,
   ArcEpisode,
   CEFRLevel,
   Scenario,
@@ -50,6 +51,11 @@ const MAX_CHARACTERS = 8;
 const MAX_EVENTS = 20;
 const MAX_OPEN_THREADS = 5;
 
+// S3 — syllabus size (ROADMAP:「每組 6–8 個 can-do」/「每集鎖定 1–2 個」).
+const MIN_CAN_DOS = 6;
+const MAX_CAN_DOS = 8;
+const MAX_CAN_DOS_PER_EPISODE = 2;
+
 // --- selectors (pure) -------------------------------------------------------
 
 /** The episode waiting to be practised — 「下一集」. Undefined = one is needed. */
@@ -69,6 +75,13 @@ export function nextEpisodeNumber(arc: Arc): number {
 /** Every episode played and no room for another — the story is over. */
 export function isArcFinished(arc: Arc): boolean {
   return !pendingEpisode(arc) && arc.episodes.length >= arc.plannedEpisodes;
+}
+
+/** S3 — the can-dos one episode targets, resolved from the arc's FIXED list. */
+export function episodeCanDos(arc: Arc, episode: ArcEpisode | undefined): ArcCanDo[] {
+  if (!episode?.canDoIds?.length || !arc.canDos?.length) return [];
+  const byId = new Map(arc.canDos.map((c) => [c.id, c]));
+  return episode.canDoIds.map((id) => byId.get(id)).filter((c): c is ArcCanDo => !!c);
 }
 
 export function countSentences(text: string): number {
@@ -119,15 +132,68 @@ function cleanLines(xs: string[] | undefined, cap: number, max: number): string[
   return (xs ?? []).map((x) => flat(x, cap)).filter(Boolean).slice(0, max);
 }
 
-/** An episode draft → the Scenario the live coach actually runs. */
+/**
+ * S3 — freeze the arc's syllabus. Ids are positional (`cd1`…) and the text is
+ * never touched again: the C1 ledger keys on the text, so any later rewording
+ * would fork the mastery row. Deduped, so a repeated statement can't occupy two
+ * slots. Returns undefined when the source gives nothing usable — an arc without
+ * a syllabus still works, it just has no can-do line.
+ */
+export function freezeCanDos(texts: string[] | undefined): ArcCanDo[] | undefined {
+  const seen = new Set<string>();
+  const out: ArcCanDo[] = [];
+  for (const t of texts ?? []) {
+    const text = flat(t, 200);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push({ id: `cd${out.length + 1}`, text });
+    if (out.length === MAX_CAN_DOS) break;
+  }
+  return out.length ? out : undefined;
+}
+
+/** Whether a frozen syllabus is the size ROADMAP S3 asks for (6–8). */
+export function hasFullSyllabus(arc: Arc): boolean {
+  const n = arc.canDos?.length ?? 0;
+  return n >= MIN_CAN_DOS && n <= MAX_CAN_DOS;
+}
+
+/**
+ * S3 — model-chosen 1-based positions → can-do ids. Out-of-range, duplicate and
+ * non-integer picks are dropped rather than invented, and at most 2 survive.
+ */
+export function resolveCanDoIds(canDos: ArcCanDo[] | undefined, indexes: unknown): string[] {
+  if (!canDos?.length || !Array.isArray(indexes)) return [];
+  const picked: string[] = [];
+  for (const raw of indexes) {
+    const i = Math.trunc(Number(raw));
+    const canDo = Number.isFinite(i) ? canDos[i - 1] : undefined;
+    if (!canDo || picked.includes(canDo.id)) continue;
+    picked.push(canDo.id);
+    if (picked.length === MAX_CAN_DOS_PER_EPISODE) break;
+  }
+  return picked;
+}
+
+/** An episode draft → the Scenario the live coach actually runs.
+ *
+ *  S3: the episode's can-do statements are appended to `objectives`, which is
+ *  what makes the syllabus real rather than decorative — the live prompt steers
+ *  toward objectives and the end-of-session judge grades them one by one, so the
+ *  can-dos ride the machinery that already exists instead of a parallel one. */
 function episodeScenario(
   arc: Arc,
   draft: EpisodeDraft,
   n: number,
+  canDoIds: string[],
   previous?: Scenario,
+  scenarioId?: string,
 ): Scenario {
+  const canDoTexts = episodeCanDos(arc, { n, scenarioId: "", title: "", canDoIds }).map((c) => c.text);
+  const objectives = [...cleanLines(draft.objectives, 200, 6)];
+  for (const text of canDoTexts) if (!objectives.includes(text)) objectives.push(text);
   return {
-    id: crypto.randomUUID(),
+    id: scenarioId ?? crypto.randomUUID(),
     title: flat(draft.title, 120) || `${arc.title} 第 ${n} 集`,
     targetLanguage: arc.targetLanguage,
     level: arc.level,
@@ -137,7 +203,7 @@ function episodeScenario(
     contentContext: String(draft.contentContext ?? "").trim(),
     coachRole: flat(draft.coachRole, 200),
     userRole: flat(draft.userRole, 200),
-    objectives: cleanLines(draft.objectives, 200, 6),
+    objectives,
     targetPhrases: cleanLines(draft.targetPhrases, 120, 12),
     // Coaching continuity: each episode is a NEW scenario, so without this the
     // rolling「下次重點」would reset every episode.
@@ -197,12 +263,75 @@ export async function startArc(
     episodes: [],
     plannedEpisodes: episodes,
     storyState: normaliseStoryState(seed.storyState),
+    canDos: freezeCanDos(seed.canDos),
+    outline: cleanLines(seed.outline, 200, episodes),
     createdAt: at,
     updatedAt: at,
   };
-  const scenario = episodeScenario(arc, seed.episode, 1);
+  const canDoIds = resolveCanDoIds(arc.canDos, seed.episode.canDoIndexes);
+  const scenario = episodeScenario(arc, seed.episode, 1, canDoIds);
   arc.episodes = [
-    { n: 1, scenarioId: scenario.id, title: scenario.title, recap: clampRecap(seed.episode.recap) },
+    {
+      n: 1,
+      scenarioId: scenario.id,
+      title: scenario.title,
+      recap: clampRecap(seed.episode.recap),
+      canDoIds,
+    },
+  ];
+  await putArcWithScenario(arc, scenario);
+  return { arc, scenario };
+}
+
+/**
+ * S4 — a built-in demo arc: everything episode 1 needs is AUTHORED, so installing
+ * one costs zero API calls and works offline. Episodes 2+ are generated on the
+ * normal path, kept on rails by `outline`.
+ */
+export interface DemoArc {
+  id: string; // stable — re-installing overwrites rather than duplicating
+  title: string;
+  targetLanguage: TargetLanguage;
+  level: CEFRLevel;
+  premise: string;
+  plannedEpisodes: number;
+  canDos: string[]; // 6–8, frozen on install
+  outline: string[]; // one beat per episode
+  storyState: StoryState; // the shared seed every episode builds on
+  episode1: EpisodeDraft;
+}
+
+/**
+ * Install (or reset) a demo arc under its stable id. Idempotent by construction:
+ * both the arc id and episode 1's scenario id are derived from the demo's id, so
+ * running this twice leaves exactly ONE arc and ONE episode-1 scenario.
+ */
+export async function installDemoArc(demo: DemoArc, now?: string): Promise<ArcStart> {
+  const at = now ?? new Date().toISOString();
+  const arc: Arc = {
+    id: demo.id,
+    title: demo.title,
+    targetLanguage: demo.targetLanguage,
+    level: demo.level,
+    premise: demo.premise,
+    episodes: [],
+    plannedEpisodes: clampLength(demo.plannedEpisodes),
+    storyState: normaliseStoryState(demo.storyState),
+    canDos: freezeCanDos(demo.canDos),
+    outline: cleanLines(demo.outline, 200, demo.plannedEpisodes),
+    createdAt: at,
+    updatedAt: at,
+  };
+  const canDoIds = resolveCanDoIds(arc.canDos, demo.episode1.canDoIndexes);
+  const scenario = episodeScenario(arc, demo.episode1, 1, canDoIds, undefined, `${demo.id}-ep1`);
+  arc.episodes = [
+    {
+      n: 1,
+      scenarioId: scenario.id,
+      title: scenario.title,
+      recap: clampRecap(demo.episode1.recap),
+      canDoIds,
+    },
   ];
   await putArcWithScenario(arc, scenario);
   return { arc, scenario };
@@ -280,14 +409,22 @@ async function grow(
   const out = await generate({ arc, lastEpisode: last, lastScenario, transcript });
 
   const n = last.n + 1;
-  const scenario = episodeScenario(arc, out.episode, n, lastScenario);
+  // S3 — the syllabus is frozen at creation: the model only PICKS from it here.
+  const canDoIds = resolveCanDoIds(arc.canDos, out.episode.canDoIndexes);
+  const scenario = episodeScenario(arc, out.episode, n, canDoIds, lastScenario);
   const at = now ?? new Date().toISOString();
   const updated: Arc = {
     ...arc,
     storyState: normaliseStoryState(out.storyState),
     episodes: [
       ...arc.episodes,
-      { n, scenarioId: scenario.id, title: scenario.title, recap: clampRecap(out.episode.recap) },
+      {
+        n,
+        scenarioId: scenario.id,
+        title: scenario.title,
+        recap: clampRecap(out.episode.recap),
+        canDoIds,
+      },
     ],
     updatedAt: at,
   };
