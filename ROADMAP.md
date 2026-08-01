@@ -67,6 +67,16 @@ principles below.
   plus workbox runtime-caching of the Google Fonts so the offline shell keeps its
   type (worklet + icons already precached).
 
+- **2026-08-01 — phone-first ease-of-use**: installed PWA opens the coach
+  directly (start_url → coach.html; the launcher hop + "coming soon" tiles are
+  gone from the daily path); key card gains an AI Studio link + steps and
+  validates the pasted key at save time (models.list, zero tokens); a kernel
+  error mapper turns the five common failures (key invalid / quota exhausted /
+  mic denied / model renamed / network) into ONE 繁中 sentence with the next
+  step, wired through Home + Practice including WebSocket close reasons; ⚙️
+  gains a live-model override (localStorage) so a Google model rename is
+  repairable from the phone without a redeploy.
+
 ## Worklist (W1–W7 + Batches A/B/C shipped; D/E below)
 
 Synthesised from a 6-dimension research pass (vocab depth, learner memory,
@@ -80,6 +90,30 @@ building" and "Deferred — needs a missing precondition" below).
 new behaviour (seed IndexedDB, exercise the flow, clear test data) → update this
 file → **commit & push** (CI re-runs the gate, then auto-deploys to Pages). Push
 is the last step of each batch, never mid-batch.
+
+### Batch V — on-device verification (S; do FIRST — it gates every "completed" claim)
+The DoD says "real-browser E2E" but no on-device record exists. One pass on the
+actual phone, written down, so later batches inherit a verified baseline.
+| # | item | acceptance (all must be observed on the device, not assumed) | guard |
+|---|---|---|---|
+| **V1** | 首次上手實測：乾淨瀏覽器開 Pages URL → 金鑰卡（點 AI Studio 連結、貼錯 key 看見繁中錯誤、貼對 key 看見 ✓）→ 範例情境 → 開練 | 每一步截圖或一行紀錄；量測「開網頁→開口說」的點擊數與分鐘數 | 不改碼；發現的問題開成新條目，不當場修 |
+| **V2** | 安裝流程：加入主畫面 → 開啟直接進教練（start_url 生效）→ 圖示/啟動畫面正確 | Android + iOS 各一次 | 舊安裝可能快取舊 start_url — 記錄是否需移除重裝 |
+| **V3** | 練習中韌性：鎖屏/切 app 後回來（wake lock 重取）、練到一半殺分頁（草稿恢復卡出現）、飛航模式斷線（看見翻譯後的錯誤而非英文原文） | 三種都實際做一次並記錄結果 | 只驗證，不加功能 |
+| **V4** | 麥克風權限行為：iOS 安裝版 PWA 是否每次重問；拒絕後的繁中提示是否出現 | 記錄實際行為（這是文件寫不出來、只能實測的） | — |
+**DoD**: 結果記進本檔（或 `docs/DEVICE_E2E.md`）＋列出的新問題各成一個 worklist 條目 → commit+push。
+
+### Batch S — 連續情境／故事性 (story arcs; the 2026-08-01 direction update)
+誘因＝敘事拉力（想知道下一集），不是 streak/XP — no-schedule-pressure 原則不變：
+故事永遠在原地等你，隔一個月回來照樣接得上。全程零後端：prompt 邏輯＋本地狀態。
+| # | item | value | guard |
+|---|---|---|---|
+| **S1** | 故事狀態核心：`Arc`（title、episodes[]、storyState：人物/事件/承諾）新 IndexedDB store＋冪等升版；`finalizeSession` 對 arc 情境多一個 3.5-flash 呼叫生成「下一集」Scenario＋更新 storyState；LearningPack 匯出/匯入 round-trip | 連續性的資料地基；備份帶著故事走 | 生成失敗＝best-effort（arc 停在原集數，隨時可重試）；不新增畫面 |
+| **S2** | 單鍵劇集 UX：Home 對進行中 arc 顯示一顆「▶ 下一集 · 第 N 集」（取代該情境的繼續上次）；開場 prompt 加 30 秒繁中「前情提要」beat；集尾自然收束並預告 | 誘因所在 — 打開 app 就是一顆會說故事的按鈕 | one primary action：arc 不得長出列表/儀表板；前情提要 ≤3 句 |
+| **S3** | 課綱化 arc：每條 arc 綁一組 CEFR can-do（6–8 個），每集鎖定 1–2 個，餵進 C1 ledger；arc 卡顯示「第 N／約 M 集」一行，不顯示分數 | 「有方法有脈絡」從隱形變可見 | 進度是集數不是百分比（no-gamification 紅線）；can-do 文字固定於 arc 建立時（避免 C1 已知的 objective 漂移） |
+| **S4** | 內建示範 arc：EN 一條（多集出差線：機場→客戶會議→危機→應酬）、JA 一條（東京自由行連續劇），沿用 defaults 的 stable-id 機制 | 不用自建就能體驗故事性 | 各 ≤6 集；集與集共用 storyState 種子 |
+**Phase order is the dependency order: S1 → S2 → S3 → S4**（S4 可與 S3 併行）。
+**DoD per phase**: quality gate green → real-browser E2E of the new behaviour →
+update this file → commit & push（沿用全域 DoD，push 是每階段最後一步）。
 
 ### Batch D — minimal shadowing (the stable core of W9; M)
 | # | item | value | guard |
@@ -108,5 +142,7 @@ the no-schedule-pressure principle); no WASM forced alignment (too heavy for
 mobile).
 
 ---
-**Suggested order:** A, B, C shipped. Next: D (minimal shadowing); E only on
-demand. Each batch ends with the full gate + E2E + commit + push.
+**Suggested order:** A, B, C + phone-first ease-of-use shipped. Next: **V**
+(on-device verification, small and gating) → **S1–S4** (story arcs — the
+current direction) → D (minimal shadowing); E only on demand. Each batch ends
+with the full gate + E2E + commit + push.
