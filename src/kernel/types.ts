@@ -46,7 +46,55 @@ export interface Scenario {
   // report parsing, no retained eval documents.
   progressNote?: string;
   source?: string; // the original brief/markdown this scenario was built from
+  // S1 — set when this scenario IS one episode of a story arc. Absent on every
+  // standalone scenario (and on every pack written before S1), so the whole arc
+  // feature is additive: nothing reads this unless the scenario opted in.
+  arc?: { arcId: string; episode: number };
 }
+
+/**
+ * S1 — the continuity a story arc carries between episodes. Deliberately three
+ * flat lists rather than free prose: each is cheap for the model to update and
+ * cheap to feed back in, and「還沒兌現的事」is what makes the learner want the
+ * next episode (openThreads IS the narrative hook).
+ */
+export interface StoryState {
+  characters: { name: string; note: string }[]; // who is who (recurring cast)
+  events: string[]; // key things that have happened, oldest → newest
+  openThreads: string[]; // promises/loose ends not yet paid off → next episode's hook
+}
+
+/** One materialised episode of an arc: the Scenario to practise plus its recap. */
+export interface ArcEpisode {
+  n: number; // 1-based episode number
+  scenarioId: string; // the Scenario carrying this episode's context
+  title: string;
+  recap?: string; // ≤3 繁中 sentences of「前情提要」(episode 1 has none)
+  completedAt?: string; // ISO — set once a session for this episode is finalised
+}
+
+/**
+ * S1 — a continuous story line: an ordered list of episodes over a shared,
+ * evolving StoryState. The pull is narrative ("what happens next"), never a
+ * streak — an arc waits in place indefinitely, exactly like a scenario does.
+ *
+ * Progress is EPISODE COUNT, never a percentage or a score (no-gamification).
+ */
+export interface Arc {
+  id: string;
+  title: string;
+  targetLanguage: TargetLanguage;
+  level: CEFRLevel;
+  premise: string; // the situation the whole arc plays out in
+  episodes: ArcEpisode[]; // materialised so far; index order === episode order
+  plannedEpisodes: number; // rough length ("第 N／約 M 集"); also the hard cap
+  storyState: StoryState;
+  createdAt: string; // ISO
+  updatedAt: string; // ISO
+}
+
+/** How long a built or generated arc runs by default (ROADMAP S4: 各 ≤6 集). */
+export const DEFAULT_ARC_LENGTH = 6;
 
 /** Smoothed per-skill level (EWMA), stored as a float on the 1–6 (A1–C2) scale. */
 export interface SkillLevels {
@@ -186,6 +234,7 @@ export interface LearningPack {
   items: LearnedItem[];
   sessions?: SessionRecord[];
   objectives?: ObjectiveMastery[]; // C1 ledger — optional; older packs simply omit it
+  arcs?: Arc[]; // S1 story arcs — optional; older packs simply omit it
 }
 
 export const DEFAULT_PROFILE: LearnerProfile = { language: "en", level: "B1", focus: [] };

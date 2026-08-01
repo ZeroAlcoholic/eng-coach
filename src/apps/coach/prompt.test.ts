@@ -95,6 +95,71 @@ describe("composeSystemInstruction — coaching prompt logic (Batch B)", () => {
   });
 });
 
+describe("composeSystemInstruction — S2 story arcs", () => {
+  const arcContext = {
+    title: "London Calling",
+    episode: 3,
+    planned: 6,
+    recap: "你昨天抵達倫敦。行李還沒送到。今晚要和 Oliver 補完簡報。",
+    storyState: {
+      characters: [{ name: "Oliver Harris", note: "英國同事" }],
+      events: ["抵達希斯洛", "行李遺失"],
+      openThreads: ["樣品還沒找到"],
+    },
+    isFinal: false,
+  };
+
+  it("puts the recap FIRST in the opening order, ahead of the planning beat", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], arcContext);
+    const recapAt = out.indexOf("前情提要 FIRST");
+    const planAt = out.indexOf("Then the planning beat");
+    expect(recapAt).toBeGreaterThan(-1);
+    expect(planAt).toBeGreaterThan(recapAt);
+    expect(out).toContain(arcContext.recap);
+    expect(out).toContain("AT MOST 3 short sentences");
+    expect(out).toContain("給你幾秒想一下"); // the B3 beat survives, it just moves後
+  });
+
+  it("states where the episode sits and forbids contradicting the continuity", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], arcContext);
+    expect(out).toContain("第 3 集");
+    expect(out).toContain("約 6 集");
+    expect(out).toContain("Oliver Harris");
+    expect(out).toContain("抵達希斯洛 → 行李遺失");
+    expect(out).toContain("樣品還沒找到");
+  });
+
+  it("closes a mid-arc episode with a tease, and the final episode with a resolution", () => {
+    const mid = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], arcContext);
+    expect(mid).toContain("下一集預告");
+    expect(mid).not.toContain("FINAL episode");
+
+    const last = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], {
+      ...arcContext,
+      episode: 6,
+      isFinal: true,
+    });
+    expect(last).toContain("FINAL episode");
+    expect(last).not.toContain("下一集預告");
+  });
+
+  it("falls back to the plain B3 opening when the arc has no recap", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], {
+      ...arcContext,
+      recap: undefined,
+    });
+    expect(out).toContain("Open with a short planning beat");
+    expect(out).not.toContain("前情提要 FIRST");
+    expect(out).toContain("第 3 集"); // continuity still applies
+  });
+
+  it("leaves a standalone scenario's instruction untouched (no arc wording at all)", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(out).not.toContain("連續劇");
+    expect(out).not.toContain("前情提要");
+  });
+});
+
 describe("band — display mapping for per-skill subscores", () => {
   it("maps 1–6 to CEFR letters", () => {
     expect(band(1)).toBe("A1");

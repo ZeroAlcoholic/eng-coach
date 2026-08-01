@@ -5,12 +5,15 @@
 
 import type { LearnedItem, LearningPack, Scenario } from "./types";
 import {
+  getArc,
   getProfile,
+  listArcs,
   listItems,
   listObjectives,
   listObjectivesFor,
   listScenarios,
   listSessions,
+  putArcs,
   putItems,
   putObjectives,
   putProfile,
@@ -19,12 +22,13 @@ import {
 } from "./db";
 
 export async function buildPack(): Promise<LearningPack> {
-  const [profile, scenarios, items, sessions, objectives] = await Promise.all([
+  const [profile, scenarios, items, sessions, objectives, arcs] = await Promise.all([
     getProfile(),
     listScenarios(),
     listItems(),
     listSessions(),
     listObjectives(),
+    listArcs(),
   ]);
   return {
     version: 1,
@@ -35,12 +39,18 @@ export async function buildPack(): Promise<LearningPack> {
     items,
     sessions,
     objectives,
+    arcs,
   };
 }
 
-/** A single-scenario pack — the lightweight "progress file". */
+/** A single-scenario pack — the lightweight "progress file". An episode carries
+ *  its whole arc, otherwise the exported episode restores without its story. */
 export async function buildScenarioPack(scenario: Scenario): Promise<LearningPack> {
-  const [all, objectives] = await Promise.all([listItems(), listObjectivesFor(scenario.id)]);
+  const [all, objectives, arc] = await Promise.all([
+    listItems(),
+    listObjectivesFor(scenario.id),
+    scenario.arc ? getArc(scenario.arc.arcId) : Promise.resolve(undefined),
+  ]);
   return {
     version: 1,
     kind: "learning-pack",
@@ -48,6 +58,7 @@ export async function buildScenarioPack(scenario: Scenario): Promise<LearningPac
     scenarios: [scenario],
     items: all.filter((i) => i.sourceScenarioId === scenario.id),
     objectives,
+    ...(arc ? { arcs: [arc] } : {}),
   };
 }
 
@@ -58,6 +69,7 @@ export async function importPack(pack: LearningPack): Promise<void> {
   if (pack.items?.length) await putItems(pack.items);
   for (const s of pack.sessions ?? []) await putSession(s);
   if (pack.objectives?.length) await putObjectives(pack.objectives);
+  if (pack.arcs?.length) await putArcs(pack.arcs);
 }
 
 // --- CSV (Anki/Quizlet): one row per item, header first ---

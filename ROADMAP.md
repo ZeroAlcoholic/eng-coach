@@ -77,6 +77,20 @@ principles below.
   gains a live-model override (localStorage) so a Google model rename is
   repairable from the phone without a redeploy.
 
+- **2026-08-01 — V-desktop 跑完 + Batch S 的 S1／S2 出貨**: V-desktop 6 項判定值
+  全部填入 `docs/DEVICE_E2E.md`（V1a′ 5 次點擊、V1c／V1d／V1e pass、V3c 1 秒；
+  V3b blocked — 開發機無任何實體麥克風，已附兩條替代路徑的探針證據）。
+  **S1** — `Arc`／`StoryState`／`ArcEpisode` 型別 + IndexedDB v4 `arcs` store
+  （v3→v4 冪等升版）；`arcs.ts` 擁有三條不變量：同時只有一個 pending 集、集與其
+  Scenario **同一個 transaction 原子寫入**、advanceArc 冪等且 single-flight。集尾在
+  `finalizeSession` 以 best-effort 多打一次 3.5-flash 生成下一集並改寫 storyState，
+  失敗時 arc byte-identical、下次點「下一集」即為重試。arc 隨 LearningPack 匯出／
+  匯入（單情境 pack 也夾帶所屬 arc）。**S2** — Home 對進行中 arc 只長出**一顆**
+  「▶ 下一集 · 第 N 集」（取代該情境的繼續上次，集數而非百分比；其餘故事線收在一顆
+  「其他故事線（N）」ghost 後，不長列表）；live prompt 加開場順序＝前情提要（≤3 句，
+  程式層 clamp）→ planning beat →進角色，並帶入人物／已發生事件／未解懸念與集尾
+  收束＋下一集預告；新增區多一個「連續劇」勾選作為建立入口。
+
 ## Worklist (W1–W7 + Batches A/B/C shipped; D/E below)
 
 Synthesised from a 6-dimension research pass (vocab depth, learner memory,
@@ -100,8 +114,10 @@ threshold — no free-text observations.** Protocol: one device per platform,
 record OS + browser version once; each check gets exactly one row `V# | pass/fail
 | measured value (if numeric)` in `docs/DEVICE_E2E.md`.
 
-**V-desktop（桌機瀏覽器可判定，開發端代跑）**: V1a′（點擊數，桌機計）、V1c、
-V1d、V1e、V3b（殺分頁→恢復卡）、V3c（斷網→繁中錯誤）。
+**V-desktop（桌機瀏覽器可判定，開發端代跑）**: ✅ 2026-08-01 跑完 — V1a′ 5 次點擊、
+V1c／V1d／V1e pass、V3c 1 秒；**V3b blocked**（開發機無實體麥克風，唯一擷取裝置是
+立體聲混音且回錄路徑實測靜音 → 對話恆為 0 句，無法量「殺前句數」）。V3b 與 S2b-ii
+共用同一個解鎖條件：**插上任一 USB 麥克風／耳麥**後各跑一次即可補判定。
 **V-phone（只能實機，暫緩）**: V1b、V2a–V2c、V3a、V4a–V4b。
 | # | check | pass criterion (binary/numeric only) |
 |---|---|---|
@@ -130,6 +146,13 @@ worklist 條目（不當場修）→ commit+push。**任何 check 沒有判定�
 | **S2** | 單鍵劇集 UX：Home 對進行中 arc 顯示一顆「▶ 下一集 · 第 N 集」（取代該情境的繼續上次）；開場 prompt 加 30 秒繁中「前情提要」beat；集尾自然收束並預告 | 誘因所在 — 打開 app 就是一顆會說故事的按鈕 | one primary action：arc 不得長出列表/儀表板；前情提要 ≤3 句 |
 | **S3** | 課綱化 arc：每條 arc 綁一組 CEFR can-do（6–8 個），每集鎖定 1–2 個，餵進 C1 ledger；arc 卡顯示「第 N／約 M 集」一行，不顯示分數 | 「有方法有脈絡」從隱形變可見 | 進度是集數不是百分比（no-gamification 紅線）；can-do 文字固定於 arc 建立時（避免 C1 已知的 objective 漂移） |
 | **S4** | 內建示範 arc：EN 一條（多集出差線：機場→客戶會議→危機→應酬）、JA 一條（東京自由行連續劇），沿用 defaults 的 stable-id 機制 | 不用自建就能體驗故事性 | 各 ≤6 集；集與集共用 storyState 種子 |
+**Status: S1 ✅ / S2 ✅（2026-08-01）— S3、S4 未開工。**
+S1／S2 留下的已知後果，交給 S3／S4 處理：
+- 一次只有一條 arc 是主按鈕；多於一條時其餘收在「其他故事線（N）」後面。S4 內建兩條
+  （EN／JA 各一）落在不同語言，不會互相擠壓。
+- 集尾生成在 `finalizeSession` 內 await，會讓「分析中…」多幾秒。若 S4 之後覺得太久，
+  改成不 await（Home 的「下一集」本來就會等同一個 in-flight promise）。
+- `plannedEpisodes` 目前固定 6（`DEFAULT_ARC_LENGTH`），沒讓模型決定長度。
 **Phase order is the dependency order: S1 → S2 → S3 → S4**（S4 可與 S3 併行）。
 **DoD per phase**: quality gate green → real-browser E2E of the new behaviour,
 **written as binary checks in the Batch-V format**（先在該階段開工前列好

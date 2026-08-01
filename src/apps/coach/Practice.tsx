@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { AudioEngine } from "../../audio/AudioEngine";
 import { GeminiLiveDirect } from "../../api/gemini-direct";
-import { listItems, putDraft, putProfile } from "../../kernel/db";
+import { getArc, listItems, putDraft, putProfile } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
 import { liveModel } from "../../kernel/overrides";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
@@ -18,7 +18,7 @@ import { CanDoSelfCheck } from "./CanDoSelfCheck";
 import { emptyReview, finalizeSession, PersistError, ResultsPersistError } from "./finalize";
 import { weakObjectives } from "./objectives";
 import { band } from "./progress";
-import { composeSystemInstruction } from "./prompt";
+import { composeSystemInstruction, type ArcContext } from "./prompt";
 import { dueQueue } from "./srs";
 import { pickVoice } from "./voices";
 
@@ -33,6 +33,23 @@ const STATUS_LABEL: Record<Status, string> = {
   saving: "分析中…",
   done: "完成",
 };
+
+/** S2 — the story context for an arc episode, or undefined for a standalone
+ *  scenario (and for an episode whose arc record has gone missing). */
+async function loadArcContext(scenario: Scenario): Promise<ArcContext | undefined> {
+  if (!scenario.arc) return undefined;
+  const arc = await getArc(scenario.arc.arcId);
+  if (!arc) return undefined;
+  const n = scenario.arc.episode;
+  return {
+    title: arc.title,
+    episode: n,
+    planned: arc.plannedEpisodes,
+    recap: arc.episodes.find((e) => e.n === n)?.recap,
+    storyState: arc.storyState,
+    isFinal: n >= arc.plannedEpisodes,
+  };
+}
 
 export function Practice(props: {
   apiKey: string;
@@ -180,11 +197,13 @@ export function Practice(props: {
       // and reviews/deletes may happen meanwhile. C1 — also load the objectives
       // the mastery ledger flags as still-developing, so the coach prioritises
       // them. Both best-effort: a read failure just means no recycle / no flag.
-      const [dueItems, weak] = await Promise.all([
+      // S2 — if this scenario is an arc episode, load the story continuity too.
+      const [dueItems, weak, arcContext] = await Promise.all([
         listItems()
           .then((its) => dueQueue(its, scenario.targetLanguage, new Date(), RECYCLE_CAP))
           .catch(() => []),
         weakObjectives(scenario.id).catch(() => []),
+        loadArcContext(scenario).catch(() => undefined),
       ]);
       // Build inside the try: composeSystemInstruction/pickVoice run here, so a
       // synchronous throw (e.g. a malformed imported scenario) is caught and the
@@ -192,7 +211,7 @@ export function Practice(props: {
       const client = new GeminiLiveDirect({
         apiKey,
         model: liveModel(), // ⚙️ override wins — repairable from the phone if renamed
-        systemInstruction: composeSystemInstruction(scenario, profile, dueItems, weak),
+        systemInstruction: composeSystemInstruction(scenario, profile, dueItems, weak, arcContext),
         voiceName: pickVoice(scenario.targetLanguage),
         handlers: {
           onOpen: () => setStatus("live"),

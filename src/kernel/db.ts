@@ -4,6 +4,7 @@
 // to onupgradeneeded when the schema grows.
 
 import type {
+  Arc,
   DraftSession,
   LearnedItem,
   LearnerProfile,
@@ -16,9 +17,10 @@ import { DEFAULT_PROFILE } from "./types";
 const DB_NAME = "learn-kernel";
 // v2: sessions.startedAt index, so "newest first" reads don't getAll() the store.
 // v3: objectives store (C1 per-objective mastery ledger), indexed by scenarioId.
-const DB_VERSION = 3;
+// v4: arcs store (S1 story arcs), indexed by targetLanguage.
+const DB_VERSION = 4;
 
-type StoreName = "scenarios" | "sessions" | "items" | "kv" | "objectives";
+type StoreName = "scenarios" | "sessions" | "items" | "kv" | "objectives" | "arcs";
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -41,6 +43,8 @@ function openDB(): Promise<IDBDatabase> {
       store("kv");
       const objectives = store("objectives", { keyPath: "id" });
       if (!objectives.indexNames.contains("scenarioId")) objectives.createIndex("scenarioId", "scenarioId");
+      const arcs = store("arcs", { keyPath: "id" });
+      if (!arcs.indexNames.contains("targetLanguage")) arcs.createIndex("targetLanguage", "targetLanguage");
     };
     // If THIS open is held up by another tab still holding an older-version
     // connection, fail loud instead of hanging the promise forever (every read
@@ -76,6 +80,8 @@ async function run<T>(
 
 // --- scenarios ---
 export const listScenarios = () => run<Scenario[]>("scenarios", "readonly", (s) => s.getAll());
+export const getScenario = (id: string) =>
+  run<Scenario | undefined>("scenarios", "readonly", (s) => s.get(id));
 export const putScenario = (sc: Scenario) =>
   run<IDBValidKey>("scenarios", "readwrite", (s) => s.put(sc));
 export const deleteScenario = (id: string) =>
@@ -164,6 +170,57 @@ export async function listObjectivesFor(scenarioId: string): Promise<ObjectiveMa
     const index = db.transaction("objectives", "readonly").objectStore("objectives").index("scenarioId");
     const req = index.getAll(scenarioId);
     req.onsuccess = () => resolve(req.result as ObjectiveMastery[]);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// --- arcs (S1 story arcs) ---
+export const getArc = (id: string) => run<Arc | undefined>("arcs", "readonly", (s) => s.get(id));
+export const listArcs = () => run<Arc[]>("arcs", "readonly", (s) => s.getAll());
+export const putArc = (arc: Arc) => run<IDBValidKey>("arcs", "readwrite", (s) => s.put(arc));
+export const deleteArc = (id: string) => run<undefined>("arcs", "readwrite", (s) => s.delete(id));
+export async function putArcs(arcs: Arc[]): Promise<void> {
+  if (!arcs.length) return;
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("arcs", "readwrite");
+    const store = tx.objectStore("arcs");
+    for (const arc of arcs) store.put(arc);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+/**
+ * Materialising an episode means writing TWO records that are meaningless apart:
+ * the arc (now listing episode N) and the Scenario episode N points at. Do it in
+ * ONE transaction so a mid-write failure can never leave an episode referencing a
+ * scenario that doesn't exist — the arc simply stays one episode shorter and the
+ * generation is retried (ROADMAP S1 guard: best-effort, retryable).
+ */
+export async function putArcWithScenario(arc: Arc, scenario: Scenario): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(["arcs", "scenarios"], "readwrite");
+    tx.objectStore("scenarios").put(scenario);
+    tx.objectStore("arcs").put(arc);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+/** Newest-first sessions for one scenario, via the scenarioId index. */
+export async function listSessionsFor(scenarioId: string): Promise<SessionRecord[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const index = db.transaction("sessions", "readonly").objectStore("sessions").index("scenarioId");
+    const req = index.getAll(scenarioId);
+    req.onsuccess = () =>
+      resolve(
+        (req.result as SessionRecord[]).sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
+      );
     req.onerror = () => reject(req.error);
   });
 }

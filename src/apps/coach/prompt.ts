@@ -10,9 +10,31 @@
 //     the learner repeat, introduce + reuse vocabulary, one pronunciation fix/turn.
 // (No gamification, no forced scenario-narrowing — the scenario is user-defined.)
 
-import type { CEFRLevel, LearnedItem, LearnerProfile, Scenario, TargetLanguage } from "../../kernel/types";
+import type {
+  CEFRLevel,
+  LearnedItem,
+  LearnerProfile,
+  Scenario,
+  StoryState,
+  TargetLanguage,
+} from "../../kernel/types";
 import { cefrToNum, coachPolicy } from "./progress";
 import { scaffoldTier } from "./srs";
+
+/**
+ * S2 — everything the coach needs to run this scenario as ONE EPISODE of a
+ * continuing story: the recap to open with (already clamped to ≤3 sentences by
+ * the arc domain), where the episode sits in the arc, and the continuity it must
+ * not contradict. Absent for every standalone scenario.
+ */
+export interface ArcContext {
+  title: string;
+  episode: number;
+  planned: number;
+  recap?: string;
+  storyState: StoryState;
+  isFinal: boolean;
+}
 
 const LANGUAGE_NAME: Record<TargetLanguage, string> = { en: "English", ja: "Japanese" };
 // Traditional-Chinese name of the target language, for learner-facing example
@@ -66,6 +88,7 @@ export function composeSystemInstruction(
   profile: LearnerProfile,
   dueItems?: LearnedItem[], // W7 — SRS items due for review, recycled in-scene
   weakObjectives?: string[], // C1 — objectives the ledger shows aren't solid yet
+  arc?: ArcContext, // S2 — this scenario is one episode of a continuing story
 ): string {
   const lang = LANGUAGE_NAME[s.targetLanguage];
   const jlpt = s.targetLanguage === "ja" ? ` (${JLPT[s.level]})` : "";
@@ -207,13 +230,51 @@ export function composeSystemInstruction(
     lines.push("", `Pay special attention to their recurring weak spots: ${profile.focus.join(", ")}.`);
   }
 
-  lines.push(
-    "",
-    "── Open with a short planning beat, THEN start (B3) ──",
-    "Before the role-play proper: (1) in ONE short Traditional Chinese sentence, say what you'll practise together and why it's useful; (2) offer 1–2 key words/phrases they'll likely need (with a 繁中 gloss; for Japanese add kana + romaji); (3) say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) for them to plan — do NOT fill it. Then greet them in character and ask your first question.",
-    "",
-    "Tone: friendly and encouraging, no exam pressure. Begin now.",
-  );
+  // S2 — story continuity. Placed last so it frames HOW the session opens and
+  // closes, which is what makes an episode feel like an episode.
+  if (arc) {
+    lines.push(
+      "",
+      `── 這是連續劇《${arc.title}》的第 ${arc.episode} 集（全劇約 ${arc.planned} 集）──`,
+      "This scenario is ONE episode of a continuing story. Honour the continuity below exactly: never contradict it, and never re-introduce a character or event the learner has already met as if it were new.",
+    );
+    if (arc.storyState.characters.length)
+      lines.push(
+        `- Recurring characters: ${arc.storyState.characters.map((c) => `${c.name} — ${c.note}`).join(" / ")}`,
+      );
+    if (arc.storyState.events.length)
+      lines.push(`- Already happened (oldest first): ${arc.storyState.events.join(" → ")}`);
+    if (arc.storyState.openThreads.length)
+      lines.push(`- Still unresolved (this episode should move these): ${arc.storyState.openThreads.join("; ")}`);
+    lines.push(
+      "",
+      arc.isFinal
+        ? "This is the FINAL episode: steer toward resolving the unresolved threads, and close the story properly at the end."
+        : "Near the end, once the objectives are met, bring THIS EPISODE to a natural close in character — do NOT start the next episode. Then, in ONE short Traditional Chinese sentence, tease what's coming next（下一集預告）so they want to come back.",
+    );
+  }
+
+  const recap = arc?.recap?.trim();
+  if (recap) {
+    lines.push(
+      "",
+      "── 開場順序（照這個順序，不要顛倒）──",
+      "1) 前情提要 FIRST — your very FIRST words are the recap, spoken in Traditional Chinese (Taiwan) like a drama's「前情提要」: warm, in AT MOST 3 short sentences, about 20–30 seconds. Deliver exactly this content — you may polish the wording, but add NO new plot and do not mention episode numbers:",
+      `「${recap}」`,
+      "2) Then the planning beat: in ONE short Traditional Chinese sentence say what you'll practise this episode; offer 1–2 key words/phrases they'll need (with a 繁中 gloss; for Japanese add kana + romaji); say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) — do NOT fill it.",
+      "3) Then greet them in character and ask your first question.",
+      "",
+      "Tone: friendly and encouraging, no exam pressure. Begin now.",
+    );
+  } else {
+    lines.push(
+      "",
+      "── Open with a short planning beat, THEN start (B3) ──",
+      "Before the role-play proper: (1) in ONE short Traditional Chinese sentence, say what you'll practise together and why it's useful; (2) offer 1–2 key words/phrases they'll likely need (with a 繁中 gloss; for Japanese add kana + romaji); (3) say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) for them to plan — do NOT fill it. Then greet them in character and ask your first question.",
+      "",
+      "Tone: friendly and encouraging, no exam pressure. Begin now.",
+    );
+  }
 
   return lines.join("\n");
 }

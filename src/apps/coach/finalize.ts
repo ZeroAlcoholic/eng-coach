@@ -9,6 +9,7 @@
 import { clearDraft, putItems, putProfile, putScenario, putSession } from "../../kernel/db";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
 import { extractLearnedItems, summariseSession, type SessionReview } from "./ai";
+import { advanceArc, markEpisodePlayed, nextEpisodeGenerator } from "./arcs";
 import { recordJudgeOutcomes } from "./objectives";
 import { applySessionToProfile } from "./progress";
 
@@ -113,6 +114,20 @@ export async function finalizeSession(
     // Storage died mid-pipeline (e.g. quota). The analysis itself succeeded —
     // a plain throw would be reported as "analysis failed", which is false.
     throw new ResultsPersistError(err, outcome);
+  }
+
+  // S1 — this session WAS an episode of a story arc: close it out and write the
+  // next one. Deliberately AFTER the ResultsPersistError boundary and entirely
+  // best-effort: the recap, items and level are already stored, and a failed
+  // generation must leave the arc byte-identical so 「下一集」 simply retries.
+  if (scenario.arc) {
+    const { arcId, episode } = scenario.arc;
+    try {
+      await markEpisodePlayed(arcId, episode, new Date().toISOString());
+      await advanceArc(arcId, nextEpisodeGenerator(apiKey));
+    } catch (e) {
+      console.warn("arc advance failed (retried on 下一集)", e);
+    }
   }
   return outcome;
 }

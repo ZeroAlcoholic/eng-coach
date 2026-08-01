@@ -10,6 +10,7 @@ import { useId, useState } from "react";
 import {
   CEFR_LEVELS,
   TARGET_LANGUAGES,
+  type Arc,
   type CEFRLevel,
   type DraftSession,
   type LearnedItem,
@@ -31,6 +32,16 @@ import {
 } from "../../kernel/pack";
 import { persistedState, type PersistState } from "../../kernel/storage";
 import { generateScenario, validateApiKey } from "./ai";
+import {
+  advanceArc,
+  isArcFinished,
+  nextEpisodeGenerator,
+  nextEpisodeNumber,
+  pendingEpisode,
+  playedCount,
+  seedGenerator,
+  startArc,
+} from "./arcs";
 import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError } from "./finalize";
 import { HistorySheet } from "./HistorySheet";
@@ -45,6 +56,7 @@ export function Home(props: {
   apiKey: string;
   profile: LearnerProfile;
   scenarios: Scenario[];
+  arcs: Arc[]; // S1/S2 — story lines; at most ONE is ever the primary action
   items: LearnedItem[];
   sessionCount: number;
   draft: DraftSession | null; // unsaved session left by a killed tab
@@ -56,7 +68,7 @@ export function Home(props: {
   onPractice: (s: Scenario) => void;
   onChanged: () => void;
 }) {
-  const { apiKey, profile, scenarios, items, sessionCount, draft } = props;
+  const { apiKey, profile, scenarios, arcs, items, sessionCount, draft } = props;
   const lang = profile.language; // the active "mode" — set by the top toggle
   const [keyInput, setKeyInput] = useState("");
   const [savingKey, setSavingKey] = useState(false); // validating the pasted key
@@ -76,12 +88,23 @@ export function Home(props: {
   const [refreshedPersist, setRefreshedPersist] = useState<PersistState | null>(null);
   const persist = refreshedPersist ?? props.persist;
   const [showSamples, setShowSamples] = useState(false); // W5: samples collapsed once you have own
+  const [serial, setSerial] = useState(false); // 新增: build a story arc, not a one-off
+  const [advancing, setAdvancing] = useState<string | null>(null); // arc id being advanced
+  const [showOtherArcs, setShowOtherArcs] = useState(false); // progressive disclosure, not a list
   const [sheet, setSheet] = useState<"history" | "vocab" | "review" | null>(null);
   const levelId = useId();
   const briefId = useId();
   const modelId = useId();
 
-  const mine = scenarios.filter((s) => s.targetLanguage === lang);
+  // Arc episodes are NOT standalone scenarios — they belong to the arc card, and
+  // listing all six would bury Home under one story's episodes.
+  const mine = scenarios.filter((s) => s.targetLanguage === lang && !s.arc);
+  // S2 — ONE primary story action: the most recently advanced unfinished arc for
+  // this language. Any others stay behind a single collapsed row (never a list).
+  const liveArcs = arcs
+    .filter((a) => a.targetLanguage === lang && !isArcFinished(a))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const [primaryArc, ...otherArcs] = liveArcs;
   const samples = DEFAULT_SCENARIOS[lang].filter((d) => !scenarios.some((s) => s.id === d.id));
   const lvl = levelSummary(profile, lang); // W6
   const due = countDue(items, lang, new Date()); // W7
@@ -121,13 +144,51 @@ export function Home(props: {
     if (!brief.trim()) return setBusy("請先貼上簡報或匯入 Markdown。");
     if (building) return; // guard double-submit
     setBuilding(true);
-    await withBusy("建立情境中…", async () => {
-      const sc = await generateScenario(apiKey, { brief: brief.trim(), language: lang, level: profile.level });
-      await putScenario(sc);
+    await withBusy(serial ? "編寫連續劇中…" : "建立情境中…", async () => {
+      if (serial) {
+        // S1/S2 — an arc lands with episode 1 already materialised, so the very
+        // next tap is「▶ 下一集 · 第 1 集」.
+        await startArc(
+          { brief: brief.trim(), language: lang, level: profile.level },
+          seedGenerator(apiKey),
+        );
+      } else {
+        const sc = await generateScenario(apiKey, {
+          brief: brief.trim(),
+          language: lang,
+          level: profile.level,
+        });
+        await putScenario(sc);
+      }
       setBrief("");
       props.onChanged();
     });
     setBuilding(false);
+  }
+
+  // S2 — the single narrative action. advanceArc is idempotent: normally the
+  // episode was already written at the end of the last one and this is a plain
+  // read; if that generation failed, THIS is the retry (guard: a failure leaves
+  // the arc untouched, so tapping again is always safe).
+  async function playNextEpisode(arc: Arc) {
+    if (!apiKey) return setBusy("請先連結 API 金鑰。");
+    if (advancing) return; // guard double-tap
+    setAdvancing(arc.id);
+    setBusy(pendingEpisode(arc) ? "" : "正在寫下一集…");
+    try {
+      const sc = await advanceArc(arc.id, nextEpisodeGenerator(apiKey));
+      if (!sc) {
+        setBusy("這條故事線已經完結了。");
+        props.onChanged();
+        return;
+      }
+      setBusy("");
+      props.onPractice(sc);
+    } catch (err) {
+      setBusy(`下一集還沒寫好：${describeError(err)}（再點一次即可重試）`);
+    } finally {
+      setAdvancing(null);
+    }
   }
 
   async function importBriefFile(file: File) {
@@ -299,6 +360,31 @@ export function Home(props: {
         </div>
       )}
 
+      {/* S2 — the story line: ONE button that says what happens next. Deliberately
+          above 繼續上次 and without any episode list — the pull is「下一集」, and a
+          dashboard of episodes would kill it. */}
+      {primaryArc && (
+        <ArcNextButton
+          arc={primaryArc}
+          busy={advancing === primaryArc.id}
+          onPlay={() => playNextEpisode(primaryArc)}
+        />
+      )}
+      {otherArcs.length > 0 &&
+        (showOtherArcs ? (
+          otherArcs.map((a) => (
+            <ArcNextButton key={a.id} arc={a} busy={advancing === a.id} onPlay={() => playNextEpisode(a)} />
+          ))
+        ) : (
+          <button
+            className="btn btn--ghost btn--sm"
+            style={{ marginTop: 8 }}
+            onClick={() => setShowOtherArcs(true)}
+          >
+            其他故事線（{otherArcs.length}）
+          </button>
+        ))}
+
       {/* One-tap continue — the most recently practiced scenario in this language */}
       {props.lastPracticed && (
         <button
@@ -433,9 +519,15 @@ export function Home(props: {
         <p className="muted" style={{ margin: "8px 0" }}>
           小技巧：先在 ChatGPT／Gemini 網頁把雜亂資料整理成 Markdown，再匯入。
         </p>
+        {/* S2 — one control, not a second screen: the same brief either makes a
+            one-off scenario or a multi-episode story line. */}
+        <label className="row" style={{ marginBottom: 10, gap: 8, alignItems: "center" }}>
+          <input type="checkbox" checked={serial} onChange={(e) => setSerial(e.target.checked)} />
+          <span className="muted">連續劇 — 一條約 6 集、會接續下去的故事線</span>
+        </label>
         <div className="row">
           <button className="btn btn--primary grow" onClick={build} disabled={building}>
-            {building ? "建立中…" : "建立情境"}
+            {building ? (serial ? "編寫中…" : "建立中…") : serial ? "建立連續劇" : "建立情境"}
           </button>
           <FileButton accept=".md,.txt,text/markdown,text/plain" label="匯入 .md" onFile={importBriefFile} />
         </div>
@@ -524,6 +616,28 @@ export function Home(props: {
 }
 
 // --- building blocks ---
+
+/**
+ * S2 — a story line as ONE tap. Progress is shown as episode count, never a
+ * percentage or a score (no-gamification red line), and the recap deliberately
+ * lives in the coach's spoken opening rather than on this card.
+ */
+function ArcNextButton(props: { arc: Arc; busy: boolean; onPlay: () => void }) {
+  const { arc } = props;
+  const n = nextEpisodeNumber(arc);
+  const played = playedCount(arc);
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="scenario-title">📖 {arc.title}</div>
+      <p className="muted" style={{ margin: "6px 0 10px" }}>
+        第 {n} 集 · 全劇約 {arc.plannedEpisodes} 集{played > 0 && `（已練 ${played} 集）`}
+      </p>
+      <button className="btn btn--primary btn--block" onClick={props.onPlay} disabled={props.busy}>
+        {props.busy ? "準備下一集…" : `▶ 下一集 · 第 ${n} 集`}
+      </button>
+    </div>
+  );
+}
 
 function ScenarioCard(props: {
   sc: Scenario;

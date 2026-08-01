@@ -8,6 +8,7 @@ import {
   countSessions,
   getDraft,
   getProfile,
+  listArcs,
   listItems,
   listScenarios,
   putProfile,
@@ -15,6 +16,7 @@ import {
 } from "../../kernel/db";
 import {
   DEFAULT_PROFILE,
+  type Arc,
   type DraftSession,
   type LearnedItem,
   type LearnerProfile,
@@ -29,6 +31,7 @@ export function CoachApp() {
   const [apiKey, setKey] = useState(getApiKey());
   const [profile, setProfile] = useState<LearnerProfile>(DEFAULT_PROFILE);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [arcs, setArcs] = useState<Arc[]>([]); // S1/S2 — story lines
   const [items, setItems] = useState<LearnedItem[]>([]); // W6 counts + W7 review
   const [sessionCount, setSessionCount] = useState(0);
   const [draft, setDraft] = useState<DraftSession | null>(null); // crash recovery
@@ -39,15 +42,17 @@ export function CoachApp() {
 
   async function reload() {
     try {
-      const [p, s, it, count, d] = await Promise.all([
+      const [p, s, it, count, d, a] = await Promise.all([
         getProfile(),
         listScenarios(),
         listItems(),
         countSessions(), // count() — never deserializes transcripts
         getDraft(),
+        listArcs(),
       ]);
       setProfile(p);
       setScenarios(s);
+      setArcs(a);
       setItems(it);
       setSessionCount(count);
       setDraft(d && d.transcript.length ? d : null); // empty drafts aren't worth recovering
@@ -60,7 +65,10 @@ export function CoachApp() {
       await scanSessionsDesc((sess) => {
         walked += 1;
         const sc = byId.get(sess.scenarioId);
-        if (sc && !last[sc.targetLanguage]) last[sc.targetLanguage] = sc;
+        // S2 — an arc episode is never「繼續上次」: the arc's single「▶ 下一集」
+        // button owns that slot, and re-entering a finished episode would replay
+        // the story instead of advancing it.
+        if (sc && !sc.arc && !last[sc.targetLanguage]) last[sc.targetLanguage] = sc;
         // Stop once both languages are filled — or after 100 records, so a
         // never-practiced language can't turn this into a full-store walk.
         return walked < 100 && !(last.en && last.ja);
@@ -115,6 +123,7 @@ export function CoachApp() {
       apiKey={apiKey}
       profile={profile}
       scenarios={scenarios}
+      arcs={arcs}
       items={items}
       sessionCount={sessionCount}
       draft={draft}
