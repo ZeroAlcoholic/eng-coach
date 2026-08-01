@@ -3,7 +3,7 @@
 // Where self and judge diverge is the calibration signal (over/under-confidence)
 // — shown gently, no score — and the rating is folded into the C1 ledger.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { ObjectiveMastery, SessionReview } from "../../kernel/types";
 import { recordSelfRating } from "./objectives";
@@ -30,12 +30,19 @@ export function CanDoSelfCheck(props: {
 }) {
   const [ratings, setRatings] = useState<Record<string, Self>>({});
   const [saveError, setSaveError] = useState(false);
+  // recordSelfRating is a read-modify-write; two taps on the same objective in
+  // flight at once would race and the earlier write could win. Serialise all
+  // writes through one chain so they commit in tap order — the last tap wins and
+  // the persisted selfRating always matches the visible selection.
+  const writeChain = useRef<Promise<unknown>>(Promise.resolve());
 
   function rate(objective: string, value: Self) {
     setRatings((r) => ({ ...r, [objective]: value }));
-    recordSelfRating(props.scenarioId, objective, value, new Date().toISOString()).catch(() =>
-      setSaveError(true),
-    );
+    writeChain.current = writeChain.current
+      .catch(() => {})
+      .then(() => recordSelfRating(props.scenarioId, objective, value, new Date().toISOString()))
+      .then(() => setSaveError(false))
+      .catch(() => setSaveError(true));
   }
 
   if (!props.objectives.length) return null;

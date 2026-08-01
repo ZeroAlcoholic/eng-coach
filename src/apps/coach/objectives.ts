@@ -23,16 +23,40 @@ export async function weakObjectives(scenarioId: string): Promise<string[]> {
   return recs.filter(isStillDeveloping).map((r) => r.objective);
 }
 
-/** C1 — fold one session's judge verdicts into the ledger (best-effort upsert).
- *  Dedupes by objective text first (last verdict wins) so a judge that lists the
+// Normalise an objective string for matching: the judge echoes the scenario's
+// objectives but isn't guaranteed to do so verbatim (case, trailing punctuation,
+// or whitespace can drift), and a drifted string would key a SEPARATE ledger row
+// so attempts could never accumulate. Collapse those incidental differences.
+const normObjective = (s: string) =>
+  s.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.。!！?？\s]+$/u, "");
+
+/** Canonicalise + dedupe one session's judge verdicts (pure, unit-tested).
+ *  Each judge objective is mapped back to the scenario's own objective text when
+ *  it matches one (ignoring case/whitespace/trailing punctuation), so near-
+ *  verbatim drift can't fork the ledger key; unmatched objectives keep their own
+ *  text. Deduped by canonical text with last-verdict-wins, so a judge listing the
  *  same objective twice in one session can't inflate attempts. */
+export function canonicalizeVerdicts(
+  objectivesMet: SessionReview["objectivesMet"],
+  canonical: string[] = [],
+): Map<string, boolean> {
+  const canonByNorm = new Map(canonical.map((o) => [normObjective(o), o]));
+  const verdicts = new Map<string, boolean>();
+  for (const o of objectivesMet ?? []) {
+    const key = canonByNorm.get(normObjective(o.objective)) ?? o.objective;
+    verdicts.set(key, o.met);
+  }
+  return verdicts;
+}
+
+/** C1 — fold one session's judge verdicts into the ledger (best-effort upsert). */
 export async function recordJudgeOutcomes(
   scenarioId: string,
   objectivesMet: SessionReview["objectivesMet"],
   nowIso: string,
+  canonical: string[] = [],
 ): Promise<void> {
-  const verdicts = new Map<string, boolean>();
-  for (const o of objectivesMet ?? []) verdicts.set(o.objective, o.met);
+  const verdicts = canonicalizeVerdicts(objectivesMet, canonical);
   for (const [objective, met] of verdicts) {
     const id = objectiveKey(scenarioId, objective);
     const prev = await getObjective(id);

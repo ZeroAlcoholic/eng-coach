@@ -98,7 +98,10 @@ export async function backupPack(): Promise<BackupResult> {
       // AbortError = the user dismissed the share sheet on purpose. That is NOT
       // a failure, and we must NOT silently download behind their back.
       if (err instanceof DOMException && err.name === "AbortError") return "cancelled";
-      throw err; // a real share failure — let the caller surface it
+      // Anything else (notably NotAllowedError when the transient user
+      // activation lapsed during the async buildPack reads, or share is blocked)
+      // is NOT a deliberate cancel — the user asked to back up, so honour that
+      // intent by falling back to a plain download rather than reporting failure.
     }
   }
   downloadFile("learning-pack.json", json, "application/json");

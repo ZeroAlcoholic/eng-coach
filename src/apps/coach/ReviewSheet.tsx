@@ -35,6 +35,15 @@ export function ReviewSheet(props: {
 
   const current = queue[idx];
 
+  // Switching direction must re-hide the answer: otherwise revealing in one
+  // direction then flipping shows the prompt AND the term together, defeating
+  // the recall test. A no-op when the direction is unchanged.
+  function setDirection(next: "recognise" | "produce") {
+    if (next === dir) return;
+    setDir(next);
+    setRevealed(false);
+  }
+
   async function grade(rating: ReviewRating) {
     if (!current || busy) return;
     setBusy(true);
@@ -71,14 +80,14 @@ export function ReviewSheet(props: {
             <button
               className={`seg-btn ${dir === "recognise" ? "seg-on" : ""}`}
               aria-pressed={dir === "recognise"}
-              onClick={() => setDir("recognise")}
+              onClick={() => setDirection("recognise")}
             >
               認（看詞→想意思）
             </button>
             <button
               className={`seg-btn ${dir === "produce" ? "seg-on" : ""}`}
               aria-pressed={dir === "produce"}
-              onClick={() => setDir("produce")}
+              onClick={() => setDirection("produce")}
             >
               用（看意思→說詞）
             </button>

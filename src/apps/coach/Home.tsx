@@ -27,7 +27,7 @@ import {
   itemsToCsv,
   readTextFile,
 } from "../../kernel/pack";
-import type { PersistState } from "../../kernel/storage";
+import { persistedState, type PersistState } from "../../kernel/storage";
 import { generateScenario } from "./ai";
 import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError } from "./finalize";
@@ -64,6 +64,13 @@ export function Home(props: {
   const [backingUp, setBackingUp] = useState(false); // guard double-tap on 備份
   const [editing, setEditing] = useState<Scenario | null>(null);
   const [showSettings, setShowSettings] = useState(false); // W5: settings tucked away
+  // props.persist arrives async from CoachApp (the mount-time request). On top of
+  // that we re-read the state (without re-requesting) whenever ⚙️ opens — some
+  // engines grant persistence LATER from engagement signals (PWA install, repeat
+  // visits), so the initial best-effort result would otherwise leave a stale
+  //「請定期備份」warning showing all session. The fresh read wins once we have it.
+  const [refreshedPersist, setRefreshedPersist] = useState<PersistState | null>(null);
+  const persist = refreshedPersist ?? props.persist;
   const [showSamples, setShowSamples] = useState(false); // W5: samples collapsed once you have own
   const [sheet, setSheet] = useState<"history" | "vocab" | "review" | null>(null);
   const levelId = useId();
@@ -210,7 +217,12 @@ export function Home(props: {
           className="btn btn--ghost btn--sm"
           aria-label="設定與資料"
           aria-pressed={showSettings}
-          onClick={() => setShowSettings((v) => !v)}
+          onClick={() =>
+            setShowSettings((v) => {
+              if (!v) void persistedState().then(setRefreshedPersist); // refresh on open
+              return !v;
+            })
+          }
         >
           ⚙️
         </button>
@@ -411,14 +423,14 @@ export function Home(props: {
               </button>
               <FileButton accept=".json,application/json" label="匯入備份" onFile={importPackFile} small />
             </div>
-            {props.persist !== "persisted" && (
+            {persist !== "persisted" && (
               <p className="muted" style={{ margin: "10px 0 0" }}>
-                {props.persist === "best-effort"
+                {persist === "best-effort"
                   ? "⚠ 資料保存為「盡力而為」— 瀏覽器在空間不足時可能清除，請定期備份。"
                   : "⚠ 此瀏覽器無法鎖定本機資料，請定期備份。"}
               </p>
             )}
-            {props.persist === "persisted" && (
+            {persist === "persisted" && (
               <p className="muted" style={{ margin: "10px 0 0" }}>✓ 資料已設為永久保存於本機。</p>
             )}
             <div className="row" style={{ marginTop: 12 }}>

@@ -42,7 +42,20 @@ function openDB(): Promise<IDBDatabase> {
       const objectives = store("objectives", { keyPath: "id" });
       if (!objectives.indexNames.contains("scenarioId")) objectives.createIndex("scenarioId", "scenarioId");
     };
-    req.onsuccess = () => resolve(req.result);
+    // If THIS open is held up by another tab still holding an older-version
+    // connection, fail loud instead of hanging the promise forever (every read
+    // path awaits openDB). The other tab's onversionchange below normally clears
+    // the block immediately; onblocked only fires if it can't.
+    req.onblocked = () =>
+      reject(new Error("資料庫升級被另一個分頁卡住 — 請關閉其他開著的分頁後重試。"));
+    req.onsuccess = () => {
+      const db = req.result;
+      // A future version (a new tab loading a newer build) must be able to
+      // upgrade: drop this connection so its open doesn't block. Each operation
+      // reopens lazily, so closing here is safe.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
   });
 }
