@@ -2,8 +2,11 @@
 // reusable. Covers W1 (per-skill EWMA memory), W2 (median of judge samples), W3
 // (measured ability → coach communication policy), and W6 (level summary/trend).
 
+import { ERROR_TYPES } from "../../kernel/types";
 import type {
   CEFRLevel,
+  ErrorTally,
+  ErrorType,
   LearnerProfile,
   SessionReview,
   SkillLevels,
@@ -50,7 +53,85 @@ export function medianReview(reviews: SessionReview[]): SessionReview {
         interaction: Math.round(median(subs.map((s) => s.interaction))),
       }
     : base.subscores;
-  return { ...base, cefr, subscores };
+  return { ...base, cefr, subscores, errors: voteErrors(reviews) };
+}
+
+// E1 — noise control for typed errors. A single sample naming an error type is
+// not evidence: the judge is a probabilistic reader of a noisy transcript, and one
+// spurious "article" would enter the running tally forever. So a type must appear
+// in a MAJORITY of the samples (≥2) to survive, and with fewer than two samples to
+// compare, nothing does. The example/correction come from the first sample that
+// named it, so the learner sees their own words rather than a merged paraphrase.
+const MIN_ERROR_VOTES = 2;
+
+export function voteErrors(reviews: SessionReview[]): SessionReview["errors"] {
+  if (reviews.length < MIN_ERROR_VOTES) return [];
+  const votes = new Map<ErrorType, { n: number; first: NonNullable<SessionReview["errors"]>[number] }>();
+  for (const review of reviews) {
+    // One vote per type PER SAMPLE — a sample listing "tense" twice must not
+    // out-vote the other samples on its own.
+    const seen = new Set<ErrorType>();
+    for (const e of review.errors ?? []) {
+      if (!isErrorType(e?.type) || seen.has(e.type)) continue;
+      seen.add(e.type);
+      const prev = votes.get(e.type);
+      if (prev) prev.n += 1;
+      else votes.set(e.type, { n: 1, first: e });
+    }
+  }
+  return [...votes.values()].filter((v) => v.n >= MIN_ERROR_VOTES).map((v) => v.first);
+}
+
+const ERROR_TYPE_SET = new Set<string>(ERROR_TYPES);
+
+/** Guard the closed set: a model can return a plausible label outside the enum. */
+export function isErrorType(v: unknown): v is ErrorType {
+  return typeof v === "string" && ERROR_TYPE_SET.has(v);
+}
+
+// E1 — fold one session's confirmed errors into the per-language running tally.
+// `count` counts SESSIONS, not occurrences: three article slips in one session are
+// one data point about a habit, and counting occurrences would let a single bad
+// session dominate the tally for months.
+export function applyErrorsToProfile(
+  profile: LearnerProfile,
+  language: TargetLanguage,
+  errors: SessionReview["errors"],
+  nowIso: string,
+): LearnerProfile {
+  // Dedupe by type FIRST, so this holds its own invariant (one session = at most
+  // one increment per type) no matter what the caller passes. voteErrors already
+  // dedupes, but a stored recap from before E1's vote existed might not.
+  const confirmed = new Map(
+    (errors ?? []).filter((e) => isErrorType(e?.type)).map((e) => [e.type, e]),
+  );
+  if (!confirmed.size) return profile;
+  const forLang: Partial<Record<ErrorType, ErrorTally>> = { ...profile.errorLog?.[language] };
+  for (const e of confirmed.values()) {
+    const prev = forLang[e.type];
+    forLang[e.type] = {
+      count: (prev?.count ?? 0) + 1,
+      lastAt: nowIso,
+      example: e.example?.trim() || prev?.example,
+      correction: e.correction?.trim() || prev?.correction,
+    };
+  }
+  return { ...profile, errorLog: { ...profile.errorLog, [language]: forLang } };
+}
+
+/** E1 — the error types worth naming to the coach: most frequent first. Requires
+ *  at least two sessions of evidence, so a one-off never becomes "recurring". */
+export function recurringErrors(
+  profile: LearnerProfile,
+  language: TargetLanguage,
+  limit = 3,
+): { type: ErrorType; tally: ErrorTally }[] {
+  return Object.entries(profile.errorLog?.[language] ?? {})
+    .filter((entry): entry is [ErrorType, ErrorTally] => isErrorType(entry[0]) && !!entry[1])
+    .filter(([, tally]) => tally.count >= 2)
+    .sort(([, a], [, b]) => b.count - a.count || b.lastAt.localeCompare(a.lastAt))
+    .slice(0, limit)
+    .map(([type, tally]) => ({ type, tally }));
 }
 
 const EWMA_ALPHA = 0.25; // weight on the newest session; rest is history

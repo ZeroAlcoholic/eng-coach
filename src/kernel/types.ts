@@ -118,6 +118,52 @@ export interface Arc {
 /** How long a built or generated arc runs by default (ROADMAP S4: 各 ≤6 集). */
 export const DEFAULT_ARC_LENGTH = 6;
 
+/**
+ * E1 — the CLOSED set of error types the judge may report.
+ *
+ * Closed on purpose: free-text error labels drift every session ("past tense" /
+ * "tense errors" / "verb tense"), so a tally keyed on them would fragment into
+ * dozens of one-off rows and never show a pattern. A fixed enum is what makes
+ * "what do I keep getting wrong" answerable at all. Covers both languages —
+ * `particle` and `politeness` are the Japanese-heavy ones.
+ */
+export const ERROR_TYPES = [
+  "tense",
+  "agreement",
+  "article",
+  "plural",
+  "preposition",
+  "particle",
+  "wordOrder",
+  "wordChoice",
+  "politeness",
+  "pronunciation",
+] as const;
+
+export type ErrorType = (typeof ERROR_TYPES)[number];
+
+/** 繁中 labels — used in the recap line AND when naming weak spots to the coach. */
+export const ERROR_TYPE_LABEL: Record<ErrorType, string> = {
+  tense: "時態",
+  agreement: "主詞動詞一致",
+  article: "冠詞",
+  plural: "單複數",
+  preposition: "介系詞",
+  particle: "助詞",
+  wordOrder: "語序",
+  wordChoice: "用字選擇",
+  politeness: "敬語／禮貌度",
+  pronunciation: "發音",
+};
+
+/** E1 — running tally for one error type, per target language. */
+export interface ErrorTally {
+  count: number; // sessions this type was confirmed in (not raw occurrences)
+  lastAt: string; // ISO of the most recent confirmation
+  example?: string; // the learner's own most recent slip — concrete beats abstract
+  correction?: string; // the natural version, so the coach can re-teach it
+}
+
 /** Smoothed per-skill level (EWMA), stored as a float on the 1–6 (A1–C2) scale. */
 export interface SkillLevels {
   grammar: number;
@@ -137,8 +183,11 @@ export interface LearnerProfile {
   levels?: Partial<Record<TargetLanguage, SkillLevels>>;
   // W6 — compact history for the trend sparkline (cap ~30 entries / language).
   levelHistory?: Partial<Record<TargetLanguage, { at: string; cefr: string; overall: number }[]>>;
-  // W4 — UX preferences.
-  prefs?: { slowSpeech?: boolean };
+  // W4 — UX preferences. E2 adds the opt-in loudness indicator (default off, so
+  // the live screen stays the clean orb it was designed to be).
+  prefs?: { slowSpeech?: boolean; showLevelMeter?: boolean };
+  // E1 — recurring error types per language, keyed by the closed ERROR_TYPES set.
+  errorLog?: Partial<Record<TargetLanguage, Partial<Record<ErrorType, ErrorTally>>>>;
 }
 
 export interface TranscriptTurn {
@@ -165,6 +214,9 @@ export interface SessionReview {
   wins?: string[]; // what went well
   fixes?: string[]; // top things to fix, with the natural correction
   objectivesMet?: { objective: string; met: boolean }[]; // per scenario objective
+  // E1 — typed error patterns, restricted to ERROR_TYPES. Absent when the judge
+  // found none worth naming (or on an older stored recap).
+  errors?: { type: ErrorType; example: string; correction: string }[];
 }
 
 export interface SessionRecord {
@@ -206,6 +258,13 @@ export interface LearnedItem {
   sourceScenarioId?: string;
   sourceSessionId?: string;
   firstSeenAt: string; // ISO
+  // E3 — cached review extras, computed once per item and then free forever
+  // (they also ride the LearningPack, so a restore keeps them):
+  //   cloze        — the example sentence with the item blanked out
+  //   collocations — 2–3 natural partners for the item; extra exposure on reveal,
+  //                  deliberately NOT cards and NOT multiple-choice options
+  cloze?: string;
+  collocations?: string[];
   // SRS scheduling (W7). due/intervalDays/reps are the stable interop surface;
   // `fsrs` carries the full serialized ts-fsrs card (dates as ISO strings) so
   // the scheduler can resume exactly. An item with no srs is a NEW card.

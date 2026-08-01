@@ -193,21 +193,80 @@ export async function putArcs(arcs: Arc[]): Promise<void> {
 }
 
 /**
+ * Read-modify-write an arc inside ONE transaction.
+ *
+ * `getArc` then `putArc` is two transactions, so a second tab (or a second call in
+ * this one) can interleave and silently drop the earlier edit — and this app is
+ * plainly multi-tab. `mutate` returning undefined leaves the record untouched.
+ * Resolves to the stored arc, or undefined when there was nothing to change.
+ */
+export async function updateArc(
+  id: string,
+  mutate: (arc: Arc) => Arc | undefined,
+): Promise<Arc | undefined> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("arcs", "readwrite");
+    const store = tx.objectStore("arcs");
+    const read = store.get(id);
+    let result: Arc | undefined;
+    read.onsuccess = () => {
+      const current = read.result as Arc | undefined;
+      if (!current) return; // nothing to update; tx completes as a no-op
+      const next = mutate(current);
+      if (!next) return;
+      result = next;
+      store.put(next);
+    };
+    read.onerror = () => reject(read.error);
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+/**
  * Materialising an episode means writing TWO records that are meaningless apart:
  * the arc (now listing episode N) and the Scenario episode N points at. Do it in
  * ONE transaction so a mid-write failure can never leave an episode referencing a
  * scenario that doesn't exist — the arc simply stays one episode shorter and the
  * generation is retried (ROADMAP S1 guard: best-effort, retryable).
  */
-export async function putArcWithScenario(arc: Arc, scenario: Scenario): Promise<void> {
+export class ArcRaceError extends Error {
+  constructor() {
+    super("這條故事線在另一個分頁被更新了 — 請重新整理後再試。");
+    this.name = "ArcRaceError";
+  }
+}
+
+export async function putArcWithScenario(
+  arc: Arc,
+  scenario: Scenario,
+  // Episode count the caller based its work on. Checked INSIDE the transaction so
+  // a second tab that materialised an episode meanwhile can't be silently
+  // overwritten (which would orphan its scenario and break the one-pending rule).
+  expectedEpisodes?: number,
+): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(["arcs", "scenarios"], "readwrite");
-    tx.objectStore("scenarios").put(scenario);
-    tx.objectStore("arcs").put(arc);
+    const arcs = tx.objectStore("arcs");
+    const read = arcs.get(arc.id);
+    read.onsuccess = () => {
+      const stored = read.result as Arc | undefined;
+      if (expectedEpisodes !== undefined && (stored?.episodes.length ?? 0) !== expectedEpisodes) {
+        tx.abort();
+        reject(new ArcRaceError());
+        return;
+      }
+      tx.objectStore("scenarios").put(scenario);
+      arcs.put(arc);
+    };
+    read.onerror = () => reject(read.error);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
+    // A deliberate abort above already rejected; don't reject twice.
+    tx.onabort = () => reject(tx.error ?? new ArcRaceError());
   });
 }
 

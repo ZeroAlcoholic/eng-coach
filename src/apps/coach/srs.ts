@@ -62,6 +62,56 @@ export function scaffoldTier(item: LearnedItem): ScaffoldTier {
   return "independent"; // well-practised — engineer the need, produce unaided
 }
 
+/** The blank shown in a cloze prompt. Long enough to read as a gap, not a dash. */
+export const CLOZE_BLANK = "＿＿＿＿";
+
+/**
+ * E3 — build a cloze prompt from the item's own example sentence, with no model
+ * call at all: the example usually CONTAINS the item, so blanking it out is a
+ * string operation. Free, deterministic, offline, and higher quality than anything
+ * generated — it is the sentence the learner actually met the word in.
+ *
+ * Returns null when the example is missing or doesn't contain the item (Japanese
+ * conjugation, or an example that paraphrases). The caller then falls back to one
+ * cached model call, so the model is the exception rather than the rule.
+ *
+ * Matching is case-insensitive (English capitalises sentence-initially) but never
+ * fuzzy: a wrong blank would teach the wrong thing.
+ */
+export function clozeFromExample(item: LearnedItem): string | null {
+  const example = item.example?.trim();
+  const target = item.text?.trim();
+  if (!example || !target) return null;
+  // Blank EVERY occurrence. Blanking only the first leaves the answer sitting in
+  // the same sentence ("Let's ＿＿ later; I'll circle back after lunch."), which
+  // turns the recall test into a reading test.
+  const haystack = example.toLocaleLowerCase();
+  const needle = target.toLocaleLowerCase();
+  let out = "";
+  let from = 0;
+  for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, from)) {
+    out += example.slice(from, at) + CLOZE_BLANK;
+    from = at + target.length;
+  }
+  if (!from) return null; // never matched
+  out += example.slice(from);
+  // A "sentence" that is only the item itself teaches nothing once blanked.
+  return out.split(CLOZE_BLANK).join("").trim() ? out : null;
+}
+
+/** E3 — the cloze prompt to show, preferring the free one over the cached call.
+ *  A cached (model-written) cloze is VALIDATED, not trusted: the prompt asks it to
+ *  keep the answer out and insert the blank, and it does not always comply. */
+export function clozeFor(item: LearnedItem): string | null {
+  const free = clozeFromExample(item);
+  if (free) return free;
+  const cached = item.cloze?.trim();
+  if (!cached || !cached.includes(CLOZE_BLANK)) return null; // no gap = not a question
+  const target = item.text?.trim().toLocaleLowerCase();
+  if (target && cached.toLocaleLowerCase().includes(target)) return null; // answer leaked
+  return cached;
+}
+
 function cardOf(item: LearnedItem, now: Date): Card {
   const raw = item.srs?.fsrs;
   if (!raw) return createEmptyCard(now);

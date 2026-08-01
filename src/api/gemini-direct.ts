@@ -146,8 +146,13 @@ export class GeminiLiveDirect {
     // `.data` concatenates all inline-data (audio) parts of this message.
     const audioB64 = m.data;
     if (audioB64) {
-      handlers.onAudio(base64ToArrayBuffer(audioB64));
+      // Announce the turn BEFORE handing over the audio. Consumers bracket a
+      // coach turn on this transition (D1 captures the turn's audio for
+      // shadowing), so emitting the audio first would drop the opening of every
+      // phrase — and for a short turn that arrives in ONE message, would drop the
+      // whole thing and leave the previous turn standing in for it.
       this.setTurn("coach"); // model is speaking
+      handlers.onAudio(base64ToArrayBuffer(audioB64));
     }
     // turnComplete is evaluated AFTER audio: Gemini often carries the final audio
     // chunk in the SAME message as turnComplete, so this must win → learner's turn.

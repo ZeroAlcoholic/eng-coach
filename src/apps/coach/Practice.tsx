@@ -5,17 +5,20 @@
 // In-car UX: one big circular mic button is the whole control surface — start
 // is a large green target, stop is a large red one, status is glanceable.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AudioEngine, type CoachClip } from "../../audio/AudioEngine";
 import { GeminiLiveDirect } from "../../api/gemini-direct";
 import { getArc, listItems, putDraft, putProfile } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
 import { liveModel } from "../../kernel/overrides";
+import { ERROR_TYPE_LABEL } from "../../kernel/types";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
 import { suggestReplies, translateLine, type ReplySuggestion, type SessionReview } from "./ai";
 import { CanDoSelfCheck } from "./CanDoSelfCheck";
+import { LevelMeter, type LevelSubscribe } from "./LevelMeter";
 import { emptyReview, finalizeSession, PersistError, ResultsPersistError } from "./finalize";
+import { normaliseStoryState } from "./arcs";
 import { weakObjectives } from "./objectives";
 import { band } from "./progress";
 import { composeSystemInstruction, type ArcContext } from "./prompt";
@@ -47,7 +50,9 @@ async function loadArcContext(scenario: Scenario): Promise<ArcContext | undefine
     episode: n,
     planned: arc.plannedEpisodes,
     recap: arc.episodes.find((e) => e.n === n)?.recap,
-    storyState: arc.storyState,
+    // An arc can arrive from a hand-editable LearningPack, so its storyState is
+    // untrusted here too — prompt assembly indexes into these arrays.
+    storyState: normaliseStoryState(arc.storyState),
     isFinal: n >= arc.plannedEpisodes,
   };
 }
@@ -69,6 +74,7 @@ export function Practice(props: {
   const [helping, setHelping] = useState(false);
   const [slow, setSlow] = useState(!!profile.prefs?.slowSpeech);
   const [coachClip, setCoachClip] = useState<CoachClip | null>(null); // D1 — 跟讀 model
+  const [showLevel, setShowLevel] = useState(!!profile.prefs?.showLevelMeter); // E2 — opt-in
   // tapped-line translations, keyed by index but tagged with the source text so a
   // still-growing streamed line doesn't show a stale partial translation.
   const [tx, setTx] = useState<Record<number, { src: string; zh: string }>>({});
@@ -85,6 +91,9 @@ export function Practice(props: {
   const endRef = useRef<HTMLDivElement>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const draftTimerRef = useRef<number | null>(null);
+  // E2 — the meter subscribes itself so 10 Hz level updates re-render only the
+  // meter, never this screen's transcript. No listener = the engine skips the maths.
+  const levelListenerRef = useRef<((rms: number) => void) | null>(null);
   const draftFailsRef = useRef(0); // consecutive backup failures
   const [draftWarning, setDraftWarning] = useState(false);
 
@@ -211,7 +220,14 @@ export function Practice(props: {
           weakObjectives(scenario.id).catch(() => []),
           scenario.arc ? weakObjectives(scenario.arc.arcId).catch(() => []) : Promise.resolve([]),
         ]).then(([own, arcWide]) => [...new Set([...own, ...arcWide])]),
-        loadArcContext(scenario).catch(() => undefined),
+        // NOT best-effort in the same sense as the two above: without this an arc
+        // episode runs with no recap and no story state — the coach simply forgets
+        // the plot — and the session still counts. So say so rather than swallow it.
+        loadArcContext(scenario).catch((e) => {
+          if (scenario.arc)
+            setNotice(`讀不到前情提要，教練可能不記得之前的劇情：${describeError(e)}`);
+          return undefined;
+        }),
       ]);
       // Build inside the try: composeSystemInstruction/pickVoice run here, so a
       // synchronous throw (e.g. a malformed imported scenario) is caught and the
@@ -233,8 +249,10 @@ export function Practice(props: {
             // D1 — bracket the coach's turn so its audio can be shadowed. The
             // clip is only offered once the turn ENDS (a cut-off turn is dropped
             // inside flushPlayback), so 跟讀 always models a complete phrase.
-            if (t === "coach") engineRef.current?.beginCoachTurn();
-            else {
+            if (t === "coach") {
+              engineRef.current?.beginCoachTurn();
+              setCoachClip(null); // a new turn started — the old clip isn't「剛才那句」
+            } else {
               engineRef.current?.endCoachTurn();
               setCoachClip(engineRef.current?.lastCoachTurn() ?? null);
             }
@@ -263,9 +281,11 @@ export function Practice(props: {
         inputSampleRate: GeminiLiveDirect.INPUT_SAMPLE_RATE,
         outputSampleRate: GeminiLiveDirect.OUTPUT_SAMPLE_RATE,
         onChunk: (pcm) => clientRef.current?.sendAudio(pcm),
+        onLevel: (rms) => levelListenerRef.current?.(rms),
       });
       await engine.start();
       engine.setPlaybackRate(slow ? 0.85 : 1);
+      engine.setLevelReporting(showLevel); // E2 — only pay for RMS when it's shown
       engineRef.current = engine;
     } catch (err) {
       // Silence the onClose our own teardown triggers, so the REAL cause
@@ -326,12 +346,40 @@ export function Practice(props: {
     setHelping(false);
   }
 
+  // Both toggles write the WHOLE prefs object from local state, because the
+  // `profile` prop stays stale for the rest of the session (Practice has no reload)
+  // and stopAndFinalize writes prefs back from it — a partial write here would be
+  // silently reverted when the session ends.
+  function savePrefs(next: { slowSpeech: boolean; showLevelMeter: boolean }) {
+    putProfile({ ...profile, prefs: { ...profile.prefs, ...next } }).catch((e) =>
+      setNotice(`偏好設定沒能存起來：${describeError(e)}`),
+    );
+  }
+
   function toggleSpeed() {
     const next = !slow;
     setSlow(next);
     engineRef.current?.setPlaybackRate(next ? 0.85 : 1);
-    void putProfile({ ...profile, prefs: { ...profile.prefs, slowSpeech: next } });
+    savePrefs({ slowSpeech: next, showLevelMeter: showLevel });
   }
+
+  // E2 — remember the choice, so someone who wants the meter isn't re-enabling it
+  // every session and someone who doesn't never sees it again.
+  function toggleLevelMeter() {
+    const next = !showLevel;
+    setShowLevel(next);
+    engineRef.current?.setLevelReporting(next);
+    savePrefs({ slowSpeech: slow, showLevelMeter: next });
+  }
+
+  // Stable across renders — the meter uses it as an effect dependency, so a new
+  // identity each render would re-subscribe on every level tick.
+  const subscribeLevel = useCallback<LevelSubscribe>((listener) => {
+    levelListenerRef.current = listener;
+    return () => {
+      if (levelListenerRef.current === listener) levelListenerRef.current = null;
+    };
+  }, []);
 
   async function translateAt(i: number, text: string) {
     if (tx[i]?.src === text) {
@@ -369,7 +417,9 @@ export function Practice(props: {
       // Merge the current slow-speech pref so it isn't clobbered.
       const outcome = await finalizeSession(apiKey, {
         scenario,
-        profile: { ...profile, prefs: { ...profile.prefs, slowSpeech: slow } },
+        // Carry BOTH live prefs, or finalize's profile write reverts whichever one
+        // was toggled during the session.
+        profile: { ...profile, prefs: { ...profile.prefs, slowSpeech: slow, showLevelMeter: showLevel } },
         sessionId: sessionIdRef.current,
         startedAt: startedAtRef.current,
         transcript: turnsRef.current,
@@ -442,8 +492,14 @@ export function Practice(props: {
                   <button className="btn btn--ghost btn--sm" onClick={toggleSpeed} aria-pressed={slow}>
                     🐢 {slow ? "慢速 ✓" : "慢速"}
                   </button>
+                  {/* E2 — off by default; the orb stays the only thing on screen
+                      unless the learner asks to see whether the mic hears them. */}
+                  <button className="btn btn--ghost btn--sm" onClick={toggleLevelMeter} aria-pressed={showLevel}>
+                    📊 {showLevel ? "音量 ✓" : "音量"}
+                  </button>
                 </div>
               )}
+              {showLevel && !paused && <LevelMeter subscribe={subscribeLevel} />}
               {/* D1 — 跟讀 lives in the paused state on purpose: live, the mic is
                   streaming to Gemini and a practice attempt would be answered. */}
               {paused && <Shadowing clip={coachClip} />}
@@ -499,6 +555,15 @@ export function Practice(props: {
               🔧 {f}
             </div>
           ))}
+          {/* E1 — one line naming the error TYPES confirmed this session (each
+              survived a majority vote across the judge samples). One line, not a
+              dashboard: the value is that these accumulate and steer the coach. */}
+          {summary.review.errors && summary.review.errors.length > 0 && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              📌 這次的錯誤型態：
+              {summary.review.errors.map((e) => ERROR_TYPE_LABEL[e.type]).join("・")}
+            </p>
+          )}
           <p className="muted" style={{ marginTop: 8 }}>
             已新增 {summary.items} 個單字／語句到你的詞庫。
           </p>

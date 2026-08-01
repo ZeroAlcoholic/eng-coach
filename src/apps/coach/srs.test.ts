@@ -1,5 +1,84 @@
 import { describe, expect, it } from "vitest";
 
+import { CLOZE_BLANK, clozeFor, clozeFromExample } from "./srs";
+
+const clozeItem = (over: Partial<import("../../kernel/types").LearnedItem>) => ({
+  id: "c1",
+  language: "en" as const,
+  kind: "phrase" as const,
+  text: "circle back",
+  meaning: "稍後再談",
+  firstSeenAt: "2026-06-01T00:00:00.000Z",
+  ...over,
+});
+
+describe("E3 clozeFromExample — the free, offline cloze", () => {
+  it("blanks the item out of its own example sentence", () => {
+    const out = clozeFromExample(clozeItem({ example: "Let's circle back on that tomorrow." }));
+    expect(out).toBe(`Let's ${CLOZE_BLANK} on that tomorrow.`);
+    expect(out).not.toContain("circle back"); // the answer must not leak
+  });
+
+  it("matches case-insensitively (English capitalises sentence-initially)", () => {
+    expect(clozeFromExample(clozeItem({ example: "Circle back later, please." }))).toBe(
+      `${CLOZE_BLANK} later, please.`,
+    );
+  });
+
+  it("returns null rather than guessing when the example doesn't contain the item", () => {
+    expect(clozeFromExample(clozeItem({ example: "We will discuss it later." }))).toBeNull();
+    expect(clozeFromExample(clozeItem({ example: "" }))).toBeNull();
+    expect(clozeFromExample(clozeItem({}))).toBeNull();
+  });
+
+  it("rejects an example that is nothing but the item — blanking it teaches nothing", () => {
+    expect(clozeFromExample(clozeItem({ example: "circle back" }))).toBeNull();
+    expect(clozeFromExample(clozeItem({ example: "  circle back  " }))).toBeNull();
+  });
+
+  it("handles Japanese items, where the example often lacks the dictionary form", () => {
+    const ja = clozeItem({ language: "ja", text: "お願いします", example: "チェックインお願いします。" });
+    expect(clozeFromExample(ja)).toBe(`チェックイン${CLOZE_BLANK}。`);
+    const conjugated = clozeItem({ language: "ja", text: "行く", example: "駅まで行きます。" });
+    expect(clozeFromExample(conjugated)).toBeNull(); // 行きます ≠ 行く — don't force it
+  });
+});
+
+describe("E3 clozeFromExample — the answer must never survive in the prompt", () => {
+  it("blanks EVERY occurrence, not only the first", () => {
+    const out = clozeFromExample(
+      clozeItem({ example: "Let's circle back later; I'll circle back after lunch." }),
+    );
+    expect(out).toBe(`Let's ${CLOZE_BLANK} later; I'll ${CLOZE_BLANK} after lunch.`);
+    expect(out?.toLowerCase()).not.toContain("circle back");
+  });
+});
+
+describe("E3 clozeFor — prefer the free cloze, and VALIDATE the cached one", () => {
+  it("uses the example-derived cloze even when a cached one exists", () => {
+    const item = clozeItem({ example: "Let's circle back later.", cloze: `A cached ${CLOZE_BLANK}.` });
+    expect(clozeFor(item)).toBe(`Let's ${CLOZE_BLANK} later.`);
+  });
+
+  it("falls back to the cached cloze, and to null when there is neither", () => {
+    expect(clozeFor(clozeItem({ cloze: `Please ${CLOZE_BLANK} tomorrow.` }))).toBe(
+      `Please ${CLOZE_BLANK} tomorrow.`,
+    );
+    expect(clozeFor(clozeItem({ cloze: "   " }))).toBeNull();
+    expect(clozeFor(clozeItem({}))).toBeNull();
+  });
+
+  // The model is ASKED to insert the blank and withhold the answer; it does not
+  // always comply, and an unvalidated cache would show the answer as the question.
+  it("rejects a cached cloze with no blank, or one that leaks the answer", () => {
+    expect(clozeFor(clozeItem({ cloze: "Let's circle back on that tomorrow." }))).toBeNull();
+    expect(clozeFor(clozeItem({ cloze: `Let's ${CLOZE_BLANK}, then circle back.` }))).toBeNull();
+    expect(clozeFor(clozeItem({ cloze: `Let's ${CLOZE_BLANK} on that tomorrow.` }))).toBe(
+      `Let's ${CLOZE_BLANK} on that tomorrow.`,
+    );
+  });
+});
+
 import type { LearnedItem } from "../../kernel/types";
 import { countDue, dueQueue, isDue, rateItem, scaffoldTier } from "./srs";
 

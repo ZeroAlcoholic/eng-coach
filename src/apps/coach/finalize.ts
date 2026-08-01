@@ -11,7 +11,7 @@ import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/type
 import { extractLearnedItems, summariseSession, type SessionReview } from "./ai";
 import { advanceArc, episodeCanDos, markEpisodePlayed, nextEpisodeGenerator } from "./arcs";
 import { canonicalizeVerdicts, recordJudgeOutcomes } from "./objectives";
-import { applySessionToProfile } from "./progress";
+import { applyErrorsToProfile, applySessionToProfile } from "./progress";
 
 export interface FinalizeOutcome {
   items: number;
@@ -95,12 +95,16 @@ export async function finalizeSession(
     // W1 — fold subscores into the level remembered for the PRACTISED language
     // (which can differ from the current toggle when recovering a draft), then
     // restore the toggle so recovery never flips the UI language.
+    const at = new Date().toISOString();
     const folded = applySessionToProfile(
       { ...profile, language: scenario.targetLanguage },
       review,
-      new Date().toISOString(),
+      at,
     );
-    await putProfile({ ...folded, language: profile.language });
+    // E1 — tally this session's confirmed error types against the PRACTISED
+    // language, on the same write as the level fold (one profile put, not two).
+    const withErrors = applyErrorsToProfile(folded, scenario.targetLanguage, review.errors, at);
+    await putProfile({ ...withErrors, language: profile.language });
     // C1 — fold per-objective verdicts into the mastery ledger. Derived/aux
     // data: a failure here must NOT escalate to ResultsPersistError (the recap
     // and items are already stored), so it's best-effort.
@@ -122,13 +126,22 @@ export async function finalizeSession(
   // generation must leave the arc byte-identical so 「下一集」 simply retries.
   if (scenario.arc) {
     const { arcId, episode } = scenario.arc;
-    try {
-      await recordArcCanDos(arcId, episode, review);
-      await markEpisodePlayed(arcId, episode, new Date().toISOString());
-      await advanceArc(arcId, nextEpisodeGenerator(apiKey));
-    } catch (e) {
-      console.warn("arc advance failed (retried on 下一集)", e);
-    }
+    // ORDER MATTERS, and each step gets its own catch. Marking the episode played
+    // is the one authoritative fact: if a derived write (the can-do ledger) threw
+    // first and took this with it, `pendingEpisode` would still return the episode
+    // just finished and 「▶ 下一集」 would replay it — a lie the old single try/catch
+    // reported as "retried on 下一集".
+    await markEpisodePlayed(arcId, episode, new Date().toISOString()).catch((e) =>
+      console.warn("arc: marking the episode played failed — it may replay", e),
+    );
+    await recordArcCanDos(arcId, episode, review).catch((e) =>
+      console.warn("arc can-do ledger update failed", e),
+    );
+    // Genuinely retryable: a failed generation leaves the arc untouched, so the
+    // next tap on 「下一集」 tries again.
+    await advanceArc(arcId, nextEpisodeGenerator(apiKey)).catch((e) =>
+      console.warn("next episode not written yet (retried on 下一集)", e),
+    );
   }
   return outcome;
 }

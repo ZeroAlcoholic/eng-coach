@@ -25,10 +25,17 @@ export interface CoachClip {
   sampleRate: number;
 }
 
+// E2 — how often the mic level is reported. ~10 Hz is enough to see your voice
+// move and cheap enough that it can't compete with the audio path for cycles.
+const LEVEL_INTERVAL_MS = 100;
+
 export interface AudioEngineOptions {
   inputSampleRate: number; // provider expects (e.g. 16000 for Gemini)
   outputSampleRate: number; // provider produces (e.g. 24000 for Gemini)
   onChunk: (pcm: ArrayBuffer) => void;
+  // E2 — throttled RMS of the captured mic frames, 0..1. This is LOUDNESS, not
+  // stress and not a score; its honest use is "is the mic hearing me at all".
+  onLevel?: (rms: number) => void;
 }
 
 export class AudioEngine {
@@ -48,6 +55,8 @@ export class AudioEngine {
   private capturing: Float32Array[] | null = null;
   private capturedLength = 0;
   private lastTurn: CoachClip | null = null;
+  private lastLevelAt = 0; // E2 — throttle stamp for the loudness callback
+  private levelReporting = false; // E2 — opt-in; off until the learner asks
   private readonly opts: AudioEngineOptions;
 
   constructor(opts: AudioEngineOptions) {
@@ -77,20 +86,49 @@ export class AudioEngine {
     this.workletNode.port.onmessage = (ev: MessageEvent<Float32Array>) => {
       const resampled = resampleLinear(ev.data, captureRate, this.opts.inputSampleRate);
       this.opts.onChunk(float32ToPcm16(resampled));
+      this.reportLevel(ev.data);
     };
     this.source.connect(this.workletNode);
     // Worklet has no output we want audible; do not connect to destination.
   }
 
+  /** E2 — turn the loudness callback on/off at runtime. The meter is opt-in and
+   *  can be toggled mid-session, so the engine is told explicitly rather than
+   *  paying for the RMS pass on every frame just in case. */
+  setLevelReporting(on: boolean): void {
+    this.levelReporting = on;
+  }
+
+  // E2 — throttled RMS out of the frames we are already handing to the provider,
+  // so the meter costs one pass over an existing buffer and no extra graph nodes.
+  // Genuinely free while the meter is off: no callback, no loop.
+  private reportLevel(frame: Float32Array): void {
+    const onLevel = this.opts.onLevel;
+    if (!onLevel || !this.levelReporting) return;
+    const now = performance.now();
+    if (now - this.lastLevelAt < LEVEL_INTERVAL_MS) return;
+    this.lastLevelAt = now;
+    let sum = 0;
+    for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
+    onLevel(frame.length ? Math.sqrt(sum / frame.length) : 0);
+  }
+
   // --- D1: coach-turn capture for shadowing -------------------------------
 
-  /** The coach started speaking — start a fresh capture. */
+  /** The coach started speaking — start a fresh capture.
+   *
+   *  This also DROPS the previous model. Once a new turn begins, the old clip is no
+   *  longer 「教練剛才那句」, and handing it back would have the shadowing card
+   *  confidently play the wrong sentence. */
   beginCoachTurn(): void {
     this.capturing = [];
     this.capturedLength = 0;
+    this.lastTurn = null;
   }
 
-  /** The coach finished cleanly — this turn becomes the shadowing model. */
+  /** The coach finished cleanly — this turn becomes the shadowing model. Captured
+   *  nothing (a turn cut short, or one whose audio never arrived)? Then there is no
+   *  model, and `lastCoachTurn` stays null rather than resurrecting an older one. */
   endCoachTurn(): void {
     if (!this.capturing?.length) {
       this.capturing = null;

@@ -7,6 +7,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
+import { ERROR_TYPES } from "../../kernel/types";
 import type {
   Arc,
   ArcEpisode,
@@ -168,6 +169,20 @@ const REVIEW_SCHEMA = {
         required: ["objective", "met"],
       },
     },
+    // E1 — typed errors. `type` is constrained by the schema AND re-validated in
+    // code, because a model can still return a plausible-looking unknown label.
+    errors: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          type: { type: Type.STRING, enum: [...ERROR_TYPES] },
+          example: { type: Type.STRING },
+          correction: { type: Type.STRING },
+        },
+        required: ["type", "example", "correction"],
+      },
+    },
   },
   required: ["cefr", "reviewEn", "reviewZh", "progressNote"],
 };
@@ -198,7 +213,11 @@ export async function summariseSession(
     `gist); wins (1–3 short things they did well); fixes (1–3 short items to fix, each WITH the natural ` +
     `corrected version); progressNote (one or two concrete English sentences naming the specific ` +
     `pronunciation/grammar/phrase points to target next time so the next session can coach them ` +
-    `directly).\n\nTRANSCRIPT:\n${convo}`;
+    `directly); errors (E1 — up to 3 error PATTERNS in the learner's speech, each as: type, chosen ` +
+    `ONLY from this closed list [${ERROR_TYPES.join(", ")}]; example, the learner's own words ` +
+    `verbatim; correction, the natural version. Report a pattern only if you can point at a real ` +
+    `slip in the transcript — return an empty list rather than inventing one).` +
+    `\n\nTRANSCRIPT:\n${convo}`;
   // Self-consistency: sample a few times and median the numeric fields (W2).
   // Tolerant of partial failures — use whatever samples succeed.
   const SAMPLES = 3;
@@ -211,7 +230,12 @@ export async function summariseSession(
     .filter((r): r is Partial<SessionReview> => !!r)
     .map((r) => ({ ...fallback, ...r }) as SessionReview);
   if (!valid.length) return fallback;
-  return valid.length >= 2 ? medianReview(valid) : valid[0];
+  // ALWAYS merge, even for a single surviving sample. medianReview is a no-op on
+  // the numbers when there is one, but it is also the only place E1's error vote
+  // runs — returning valid[0] directly would let one noisy read put an error type
+  // into the permanent tally, which is exactly what the vote exists to stop (and
+  // one surviving sample is a realistic case: two throttled calls out of three).
+  return medianReview(valid);
 }
 
 // 4. anti-stuck: suggest a few things the learner could say next (W4) ---------
@@ -450,6 +474,50 @@ export async function generateNextEpisode(
         `as 1-based positions. Prefer ones earlier episodes haven't covered yet.`
       : `\n- canDoIndexes: return an empty array.`);
   return generateJson<EpisodeGeneration>(apiKey, prompt, NEXT_EPISODE_SCHEMA);
+}
+
+// 7. E3 — review extras for ONE item: a cloze sentence (only when the item's own
+// example can't supply one) and 2–3 collocations.
+//
+// Deliberately NO multiple-choice distractors. Generated distractors are wrong
+// about half the time in a way the learner can't detect, which teaches the wrong
+// form — the ROADMAP flagged exactly this. Recall-then-reveal needs no options, so
+// the failure mode is designed out instead of mitigated.
+const REVIEW_EXTRAS_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    cloze: { type: Type.STRING },
+    collocations: { type: Type.ARRAY, items: { type: Type.STRING } },
+  },
+  required: ["cloze", "collocations"],
+};
+
+export interface ReviewExtras {
+  cloze: string; // one sentence with the item replaced by the blank token
+  collocations: string[]; // 2–3 natural partners, target language
+}
+
+export async function generateReviewExtras(
+  apiKey: string,
+  opts: { item: LearnedItem; blank: string },
+): Promise<ReviewExtras> {
+  const lang = langName(opts.item.language);
+  const out = await generateJson<Partial<ReviewExtras>>(
+    apiKey,
+    `A Taiwanese learner is reviewing this ${lang} item: 「${opts.item.text}」` +
+      (opts.item.meaning ? ` (${opts.item.meaning})` : "") +
+      `.\nReturn:\n` +
+      `- cloze: ONE short, natural ${lang} sentence that needs this item, with the item itself ` +
+      `replaced by exactly "${opts.blank}". Keep every other word intact; do NOT include the ` +
+      `answer anywhere in the sentence.\n` +
+      `- collocations: 2-3 words or short phrases that naturally go WITH this item in ${lang} ` +
+      `(collocations or same word-family). No definitions, no translations.`,
+    REVIEW_EXTRAS_SCHEMA,
+  );
+  return {
+    cloze: (out.cloze ?? "").trim(),
+    collocations: (out.collocations ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3),
+  };
 }
 
 export async function translateLine(apiKey: string, text: string): Promise<string> {

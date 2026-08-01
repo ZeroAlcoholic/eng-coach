@@ -178,6 +178,110 @@ S1 依 ROADMAP 刻意不新增畫面，因此 E2E 在真實瀏覽器裡直接驅
   會漏成英文原文，已修並補單元測試。live session 隔離也實測：暫停中開跟讀後狀態仍為
   「已暫停」，「▶ 接續」「■ 停止並儲存」都還在（跟讀用自己的短命 stream，不碰 session）。
 
+## Batch E — 各項 E2E 判定（criterion 於 2026-08-01 開工前登錄）
+
+### E1 — 錯誤型態累積（fixed enum）
+| check | pass criterion | 判定 | 量測值 | 日期 |
+|---|---|---|---|---|
+| E1a | 判決回傳的錯誤型態一律落在固定 enum 內；未知型態被丟棄而非寫入 | **pass** | 3/3 型態在 enum 內 | 2026-08-01 |
+| E1b | 三次取樣中出現 ≥2 次的型態才計入（單次雜訊不進帳） | **pass** | — | 2026-08-01 |
+| E1c | 跨兩次 session 後同一型態 count 累加為 2，且以繁中名稱餵進 live prompt | **pass** | count = 2 | 2026-08-01 |
+
+判定細節：
+- **不另打一次 API**（偏離 ROADMAP 原文的「extra Gemini call/session」）：錯誤型態掛在
+  既有的判決呼叫上，所以成本為零；而既有的 3 次 self-consistency 取樣正好提供 E1
+  要的壓雜訊機制——型態必須在**多數取樣**（≥2）出現才算。這比多打一次呼叫更省也更準。
+- **E1a**：真判決（B1 程度、刻意寫錯的逐字稿）回傳 tense／plural／article，全數在
+  `ERROR_TYPES` 內；`isErrorType` 在 voteErrors／applyErrorsToProfile／recurringErrors
+  三個讀取邊界各擋一次（enum 外的標籤被丟棄，有 4 個單元測試涵蓋）。
+- **E1b**：投票由 6 個單元測試鎖住（多數才算、每個取樣一票所以同一取樣內重複無法自我
+  確認、enum 外丟棄、保留學習者原句）。**這一項原本有漏洞**：`summariseSession` 在只有
+  一個有效取樣時直接 `return valid[0]`，完全繞過投票，一次雜訊就會永久進帳。已改成一律
+  走 `medianReview`，並加測試鎖住「單一取樣 → 0 個確認錯誤」。
+- **E1c**：兩次 session 後 tense／plural／article 各 count=2，`recurringErrors` 以
+  繁中名稱＋學習者原句＋自然說法進 prompt，例如
+  「- 時態 (tense), seen in 2 sessions. e.g. they said「I go to Taipei yesterday…」
+  → natural:「I went to Taipei yesterday…」」。count=1 的一次性錯誤**不會**進 prompt
+  （4 個新的 prompt 測試鎖住這個門檻與 no-scoring 紅線）。
+
+### E2 — 音量指示（opt-in）
+| check | pass criterion | 判定 | 量測值 | 日期 |
+|---|---|---|---|---|
+| E2a | 預設**關閉**：live 畫面不出現任何量表（orb 保持乾淨） | **pass** | — | 2026-08-01 |
+| E2b | 開啟後即時反映真實麥克風 RMS，且文案標明是「音量」不是重音／分數 | **pass** | 2 秒 16 次、0–1 區間 | 2026-08-01 |
+| E2c | 偏好持久化（重開 session 後仍為上次的開關狀態） | **pass** | — | 2026-08-01 |
+
+判定細節：
+- **誠實範圍**：ROADMAP 記的疑慮是「音量 ≠ 重音」，所以這個功能就叫**音量**，畫面上永遠
+  寫著「這是音量，不是重音也不是分數」，真正的用途是回答「麥克風到底有沒有收到我」。
+  預設關閉、不碰 orb。
+- **E2a**：live 畫面只有「💡 卡住?／🐢 慢速／📊 音量」三顆，`[role="meter"]` 不存在。
+- **E2b**：引擎側 2 秒內發 16 次（~8/s，符合 100ms 節流），值全為有限數且落在 0–1，
+  真實靜音下 max=7.6e-6（正確反映本機無麥克風）。UI 側餵入已知 RMS 驗證映射：
+  0→0、0.05→20、0.125→50、0.25→100（滿刻度）、0.9→100（夾住）；文案在
+  「還沒收到聲音」與「麥克風收得到你的聲音」間切換。**未能驗證**：真人聲音讓長條跳動
+  ——同 V3b 的無麥克風硬體債。
+- **E2c**：`{slowSpeech:false, showLevelMeter:true}` 寫入 profile 並讀回。
+  **這一項原本有 bug**：`Practice` 的 `profile` prop 在 session 中不會更新，而
+  `stopAndFinalize` 會把舊 prefs 寫回去，所以停止練習後音量偏好會被靜靜還原。已改為
+  兩個 toggle 都寫完整 prefs、finalize 也帶上目前值。
+
+### E3 — 填空複習＋搭配詞
+| check | pass criterion | 判定 | 量測值 | 日期 |
+|---|---|---|---|---|
+| E3a | 例句含該詞時，填空句由**純函式**產生（零 API 呼叫、離線可用），且答案被遮住 | **pass** | — | 2026-08-01 |
+| E3b | 填空與「認／用」共用同一張 FSRS 卡 —— 切換方向不新增卡、不改變到期排程 | **pass** | 卡數 2→2 | 2026-08-01 |
+| E3c | 搭配詞取回後快取在該 item 上（第二次開啟不再呼叫 API），且**不產生選項／干擾項** | **pass** | 離線重開仍命中 | 2026-08-01 |
+
+判定細節：
+- **繞開 distractor 問題而非緩解它**：ROADMAP 記的疑慮是「干擾項品質約 50%」，所以這裡
+  **完全不生成選項**——填空是回想後自評，沿用原本的 4 顆 FSRS 按鈕。畫面上唯一的按鈕
+  就是 3 個方向 + 4 個評等，沒有任何選項。
+- **E3a**：離線下顯示 `Let's ＿＿＿＿ on that tomorrow.`（由 `clozeFromExample` 純函式
+  從該詞自己的例句挖空），無錯誤訊息；揭曉後才出現答案＋中文意思＋完整例句。
+  **原本有兩個答案洩漏漏洞**：只遮第一次出現（例句重複出現該詞時答案還在句中）、
+  以及快取的模型出題未經驗證（可能沒有空格或直接含答案）。已改為遮**所有**出現，
+  並對快取出題驗證「必須含空格且不得含答案」，各附回歸測試。
+- **E3b**：切到填空並評「記得」後，item 總數 2→2（沒有長出第二張卡），只有該 item 的
+  `srs.reps` 0→1、`due` 前移；另一張未受影響。
+- **E3c**：例句不含該詞的 item 觸發一次真 API，回傳的出題與 3 個搭配詞快取在 item 上；
+  **斷網後重開複習仍顯示同一題與搭配詞**（證明沒有第二次呼叫）。
+  **原本有一個會無限付費呼叫的迴圈**：模型回傳空出題時 `needsExtras` 仍為 true，而
+  `setExtras` 改變了 item 的物件識別 → effect 重跑 → 再打一次，永不停止。已改為
+  **以嘗試為準**的 id 集合（不論成敗每個 item 只試一次）。實測：離線觸發失敗後 12 秒內
+  對 Gemini 的嘗試次數為 **1**（先前會持續累加），且訊息顯示真實原因
+  「（搭配詞載入失敗：網路連線失敗 — 請確認手機網路後再試。）」而非誤導成卡片本身的問題。
+
+## Code Review — 2026-08-01（四個平行 reviewer 涵蓋 S1–S4、D1、E1–E3）
+
+四個獨立 reviewer（一般缺陷／沉默失敗／型別設計／測試覆蓋）跑完後，我逐條親自驗證再修。
+**修掉的真缺陷 13 項**，其中 4 項會直接讓功能對真實使用者失效：
+
+| # | 缺陷 | 為什麼嚴重 |
+|---|---|---|
+| 1 | `gemini-direct.ts` 在 `setTurn("coach")` **之前**就呼叫 `onAudio` | 教練輪的第一個 chunk 沒被擷取；單一訊息的短句整段落空，`endCoachTurn` 空轉後跟讀面板會播出**上一輪**並聲稱是「教練剛才那句」 |
+| 2 | `ReviewSheet` 的 extras effect 會無限重試 | 模型回空出題時每秒持續打付費 API，畫面只顯示「出題中…」 |
+| 3 | `clampRecap` 的終止符字元類缺 ASCII 句點，且無字數上限 | 英文／混合散文完全不會被 clamp，S2b 的「≤3 句」保證形同虛設 |
+| 4 | `summariseSession` 單一取樣時繞過 `voteErrors` | 一次雜訊就永久寫入錯誤型態帳本 |
+| 5 | `advanceArc` 的四種 `null` 被 Home 一律報成「已經完結了」 | 情境資料遺失時，卡片仍顯示「▶ 下一集」但每次點都說已完結，永久卡死且不說真話 |
+| 6 | `finalize` 尾段共用一個 try，衍生資料失敗會擋掉「標記已練」 | 下一集會**重播同一集**，而 log 卻寫「retried on 下一集」 |
+| 7 | `buildScenarioPack` 匯出 arc 卻只帶一個 scenario | 還原後 arc 指向不存在的集，故事永久無法繼續 |
+| 8 | 同上，且遺漏 arc 層 can-do mastery | 累積的 attempts 與**無法重建的自評**在匯出時靜靜消失 |
+| 9 | `importPack` 無版本閘、無驗證、盲目覆寫 | 舊備份會把進行中的示範 arc 倒退成孤兒；`plannedEpisodes` 可由資料檔驅動無上限生成 |
+| 10 | `clozeFor` 只遮第一次出現，且不驗證快取出題 | 答案留在題目裡，回想測驗變成閱讀測驗 |
+| 11 | `Shadowing` 沒有 `MediaRecorder.onerror`；卸載時不停錄音 | 裝置中途失效 → 按鈕永遠停在「錄完了」、**麥克風持續開著**、blob 洩漏 |
+| 12 | 零位元組錄音被當成成功的一次 | 靜音錄下的空檔案要到播放才發現，訊息還怪到音訊上 |
+| 13 | E2 音量偏好被 finalize 的舊 prefs 靜靜還原 | 「記住選擇」的承諾在停止練習後失效 |
+
+另修：`markEpisodePlayed` 對重複 `n` 會一次標記多集（改為按索引）、`getArc`+`putArc`
+兩段交易改為單一交易的 `updateArc`（多分頁互蓋）、`putArcWithScenario` 加集數守衛
+（另一分頁同時生成時不覆寫）、`normaliseStoryState` 對錯型別欄位會拋錯（匯入的 arc
+會讓每一集都無法開始）、`ReviewSheet.grade` 與 extras 的錯誤訊息保留真因、
+`AudioEngine` 的「沒人聽就不算 RMS」宣稱改為真的成立（`setLevelReporting`）、
+搭配詞原本只有在自由填空**失敗**時才取得（現在所有 item 都會有）。
+
+測試從 103 增到 **130**，新增的每一條都對應上面一個剛修掉的缺陷（不是為了數字）。
+
 ### 本批修掉的兩個真缺陷（E2E 抓出來的）
 1. **CSP 沒有 `media-src`** → `default-src 'self'` 讓 `blob:` 音訊被 Chrome 擋掉
    （`MEDIA_ELEMENT_ERROR: Media load rejected by URL safety check`），跟讀的兩段重播

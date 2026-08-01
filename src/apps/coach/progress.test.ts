@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import type { LearnerProfile, SessionReview } from "../../kernel/types";
+import { DEFAULT_PROFILE, type ErrorType, type LearnerProfile, type SessionReview } from "../../kernel/types";
 import {
+  applyErrorsToProfile,
   applySessionToProfile,
   cefrToNum,
   coachPolicy,
+  isErrorType,
   levelSummary,
   median,
   medianReview,
   numToCefr,
+  recurringErrors,
+  voteErrors,
 } from "./progress";
 
 const baseProfile: LearnerProfile = { language: "en", level: "B1", focus: [] };
@@ -104,5 +108,95 @@ describe("coachPolicy", () => {
     // measured EN level is high, but practising JA (no JA data) → falls back to scenario num
     const p = applySessionToProfile(baseProfile, review("C1", [6, 6, 6, 6]), "t");
     expect(coachPolicy(p, "ja", 2)).toMatchObject({ l1: "high" }); // ja has no levels → novice
+  });
+});
+
+// --- E1: typed error patterns -----------------------------------------------
+
+const errReview = (types: string[]): SessionReview => ({
+  cefr: "B1",
+  reviewEn: "",
+  reviewZh: "",
+  progressNote: "",
+  errors: types.map((t) => ({
+    type: t as ErrorType,
+    example: `said ${t}`,
+    correction: `fixed ${t}`,
+  })),
+});
+
+describe("E1 voteErrors — a single noisy sample must not enter the tally", () => {
+  it("keeps only types a MAJORITY of samples named", () => {
+    const voted = voteErrors([
+      errReview(["tense", "article"]),
+      errReview(["tense"]),
+      errReview(["plural"]),
+    ]);
+    expect(voted?.map((e) => e.type)).toEqual(["tense"]);
+  });
+
+  it("refuses to confirm anything from fewer than two samples", () => {
+    expect(voteErrors([errReview(["tense"])])).toEqual([]);
+    expect(voteErrors([])).toEqual([]);
+  });
+
+  it("counts one vote per sample, so a repeat inside one sample can't self-confirm", () => {
+    expect(voteErrors([errReview(["tense", "tense"]), errReview(["article"])])).toEqual([]);
+  });
+
+  it("drops types outside the closed enum instead of trusting the model", () => {
+    expect(voteErrors([errReview(["subjunctive-mood"]), errReview(["subjunctive-mood"])])).toEqual([]);
+    expect(isErrorType("tense")).toBe(true);
+    expect(isErrorType("subjunctive-mood")).toBe(false);
+    expect(isErrorType(undefined)).toBe(false);
+  });
+
+  it("carries the learner's OWN wording through from the first sample that named it", () => {
+    const voted = voteErrors([errReview(["particle"]), errReview(["particle"])]);
+    expect(voted?.[0]).toMatchObject({ example: "said particle", correction: "fixed particle" });
+  });
+
+  it("is applied by medianReview, so the judge's aggregate is already de-noised", () => {
+    const merged = medianReview([errReview(["tense"]), errReview(["tense"]), errReview(["article"])]);
+    expect(merged.errors?.map((e) => e.type)).toEqual(["tense"]);
+  });
+
+  // Regression: summariseSession used to return valid[0] when only one of the three
+  // self-consistency samples survived (a throttled minute), routing around the vote
+  // and letting one noisy read into the permanent tally. It now always merges, so
+  // merging a LONE sample must still yield zero confirmed errors while keeping prose.
+  it("merging a single sample keeps its prose but confirms no errors", () => {
+    const merged = medianReview([{ ...errReview(["tense"]), reviewEn: "solo", cefr: "B2" }]);
+    expect(merged.errors).toEqual([]);
+    expect(merged.reviewEn).toBe("solo");
+    expect(merged.cefr).toBe("B2");
+  });
+});
+
+describe("E1 applyErrorsToProfile / recurringErrors — accumulation across sessions", () => {
+  const at = (d: string) => `2026-08-0${d}T00:00:00.000Z`;
+
+  it("counts SESSIONS, not occurrences, and keys per language", () => {
+    let p = applyErrorsToProfile(DEFAULT_PROFILE, "en", errReview(["tense", "tense"]).errors, at("1"));
+    p = applyErrorsToProfile(p, "en", errReview(["tense"]).errors, at("2"));
+    p = applyErrorsToProfile(p, "ja", errReview(["particle"]).errors, at("2"));
+    expect(p.errorLog?.en?.tense).toMatchObject({ count: 2, lastAt: at("2") });
+    expect(p.errorLog?.ja?.particle?.count).toBe(1);
+    expect(p.errorLog?.ja?.tense).toBeUndefined();
+  });
+
+  it("is a no-op when nothing was confirmed", () => {
+    expect(applyErrorsToProfile(DEFAULT_PROFILE, "en", [], at("1"))).toBe(DEFAULT_PROFILE);
+    expect(applyErrorsToProfile(DEFAULT_PROFILE, "en", undefined, at("1"))).toBe(DEFAULT_PROFILE);
+  });
+
+  it("only calls something recurring after two sessions, most frequent first", () => {
+    let p = applyErrorsToProfile(DEFAULT_PROFILE, "en", errReview(["tense", "article"]).errors, at("1"));
+    expect(recurringErrors(p, "en")).toEqual([]); // one session is not a habit
+    p = applyErrorsToProfile(p, "en", errReview(["tense", "article"]).errors, at("2"));
+    p = applyErrorsToProfile(p, "en", errReview(["tense"]).errors, at("3"));
+    expect(recurringErrors(p, "en").map((r) => r.type)).toEqual(["tense", "article"]);
+    expect(recurringErrors(p, "en", 1).map((r) => r.type)).toEqual(["tense"]);
+    expect(recurringErrors(p, "ja")).toEqual([]);
   });
 });

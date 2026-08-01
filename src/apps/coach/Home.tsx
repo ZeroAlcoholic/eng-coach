@@ -198,14 +198,21 @@ export function Home(props: {
     setAdvancing(arc.id);
     setBusy(pendingEpisode(arc) ? "" : "正在寫下一集…");
     try {
-      const sc = await advanceArc(arc.id, nextEpisodeGenerator(apiKey));
-      if (!sc) {
+      const outcome = await advanceArc(arc.id, nextEpisodeGenerator(apiKey));
+      if (outcome.kind === "finished") {
         setBusy("這條故事線已經完結了。");
         props.onChanged();
         return;
       }
+      // "broken" is NOT "finished": a record the story points at is gone, so say
+      // that instead of congratulating them on an ending they never reached.
+      if (outcome.kind === "broken") {
+        setBusy(`${outcome.reason}這條故事線無法繼續 — 可從備份匯入，或建立一條新的。`);
+        props.onChanged();
+        return;
+      }
       setBusy("");
-      props.onPractice(sc);
+      props.onPractice(outcome.scenario);
     } catch (err) {
       setBusy(`下一集還沒寫好：${describeError(err)}（再點一次即可重試）`);
     } finally {
@@ -651,7 +658,13 @@ export function Home(props: {
         <VocabSheet lang={lang} items={items} onChanged={props.onChanged} onClose={() => setSheet(null)} />
       )}
       {sheet === "review" && (
-        <ReviewSheet lang={lang} items={items} onChanged={props.onChanged} onClose={() => setSheet(null)} />
+        <ReviewSheet
+          apiKey={apiKey}
+          lang={lang}
+          items={items}
+          onChanged={props.onChanged}
+          onClose={() => setSheet(null)}
+        />
       )}
     </main>
   );

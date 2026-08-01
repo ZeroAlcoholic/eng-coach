@@ -80,6 +80,22 @@ describe("clampRecap — S2's ≤3 sentence guard is enforced in code", () => {
   it("keeps an unterminated final sentence rather than dropping it", () => {
     expect(clampRecap("第一句。沒有句號結尾")).toBe("第一句。沒有句號結尾");
   });
+
+  // Regression: the terminator set originally omitted the ASCII period, so
+  // period-punctuated prose counted as ONE sentence and was never clamped.
+  it("clamps ASCII-period prose too, not just full-width punctuation", () => {
+    expect(clampRecap("One. Two. Three. Four.")).toBe("One. Two. Three.");
+    expect(countSentences("One. Two. Three. Four.")).toBe(4);
+    expect(clampRecap("抵達倫敦. 行李遺失. 明早開會. 今晚趕簡報.")).toBe(
+      "抵達倫敦. 行李遺失. 明早開會.",
+    );
+  });
+
+  it("caps an unpunctuated wall of text, which no sentence split can shorten", () => {
+    const wall = "很長的一句話".repeat(200); // 1200 chars, zero terminators
+    expect(countSentences(wall)).toBe(1);
+    expect(clampRecap(wall).length).toBeLessThanOrEqual(300);
+  });
 });
 
 describe("freezeCanDos — S3's syllabus is fixed at creation", () => {
@@ -104,13 +120,12 @@ describe("freezeCanDos — S3's syllabus is fixed at creation", () => {
     expect(freezeCanDos(undefined)).toBeUndefined();
   });
 
-  it("hasFullSyllabus accepts 6–8 only", () => {
+  it("hasFullSyllabus accepts 6–8 of what freezeCanDos produced", () => {
     const withN = (n: number) =>
       ({ ...arc([]), canDos: freezeCanDos(Array.from({ length: n }, (_, i) => `能 ${i}`)) }) as Arc;
     expect(hasFullSyllabus(withN(5))).toBe(false);
     expect(hasFullSyllabus(withN(6))).toBe(true);
     expect(hasFullSyllabus(withN(8))).toBe(true);
-    expect(hasFullSyllabus(withN(9))).toBe(true); // freezeCanDos already capped it to 8
     expect(hasFullSyllabus(arc([]))).toBe(false); // no syllabus at all
   });
 });
@@ -178,11 +193,36 @@ describe("normaliseStoryState — model output is untrusted and must stay bounde
     expect(state.openThreads).toHaveLength(5);
   });
 
-  it("returns an empty state for missing/garbage input rather than throwing", () => {
-    expect(normaliseStoryState(undefined)).toEqual({
-      characters: [],
-      events: [],
-      openThreads: [],
+  // An arc can arrive from a hand-editable LearningPack, so a field can be the
+  // wrong TYPE, not merely absent — `?? []` doesn't catch that and `.map` throws
+  // deep inside prompt assembly, making every episode of that arc unplayable.
+  it("survives wrong-typed fields, not just missing ones", () => {
+    const empty = { characters: [], events: [], openThreads: [] };
+    expect(normaliseStoryState(undefined)).toEqual(empty);
+    expect(normaliseStoryState(null)).toEqual(empty);
+    expect(normaliseStoryState({ characters: "Priya" } as never)).toEqual(empty);
+    expect(normaliseStoryState({ events: "landed" } as never)).toEqual(empty);
+    expect(normaliseStoryState({ openThreads: 42 } as never)).toEqual(empty);
+    expect(normaliseStoryState("garbage" as never)).toEqual(empty);
+  });
+
+  it("survives junk INSIDE the arrays", () => {
+    const state = normaliseStoryState({
+      characters: [null, 5, { name: "Maya" }] as never,
+      events: [null, 7, "抵達"] as never,
+      openThreads: [undefined, "還沒簽約"] as never,
     });
+    expect(state.characters).toEqual([{ name: "Maya", note: "" }]);
+    expect(state.events).toEqual(["7", "抵達"]);
+    expect(state.openThreads).toEqual(["還沒簽約"]);
+  });
+});
+
+describe("hasFullSyllabus — the upper bound, exercised directly", () => {
+  it("rejects a canDos array longer than 8 (not pre-capped by freezeCanDos)", () => {
+    const nine = Array.from({ length: 9 }, (_, i) => ({ id: `cd${i + 1}`, text: `能 ${i}` }));
+    expect(hasFullSyllabus({ ...arc([]), canDos: nine })).toBe(false);
+    expect(hasFullSyllabus({ ...arc([]), canDos: nine.slice(0, 8) })).toBe(true);
+    expect(hasFullSyllabus({ ...arc([]), canDos: nine.slice(0, 5) })).toBe(false);
   });
 });

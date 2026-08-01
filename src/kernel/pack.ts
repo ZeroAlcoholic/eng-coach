@@ -3,10 +3,12 @@
 // export learned items as Anki/Quizlet-friendly CSV — the bridge to other
 // practice systems. Import merges a pack back into the shared store.
 
-import type { LearnedItem, LearningPack, Scenario } from "./types";
+import type { Arc, LearnedItem, LearningPack, Scenario } from "./types";
+import { DEFAULT_ARC_LENGTH, DEFAULT_PROFILE } from "./types";
 import {
   getArc,
   getProfile,
+  getScenario,
   listArcs,
   listItems,
   listObjectives,
@@ -44,32 +46,97 @@ export async function buildPack(): Promise<LearningPack> {
 }
 
 /** A single-scenario pack — the lightweight "progress file". An episode carries
- *  its whole arc, otherwise the exported episode restores without its story. */
+ *  its whole arc AND every scenario the arc points at, otherwise the restored arc
+ *  references episodes that don't exist and the story can never continue. */
 export async function buildScenarioPack(scenario: Scenario): Promise<LearningPack> {
-  const [all, objectives, arc] = await Promise.all([
+  const arcId = scenario.arc?.arcId;
+  const [all, objectives, arcObjectives, arc] = await Promise.all([
     listItems(),
     listObjectivesFor(scenario.id),
-    scenario.arc ? getArc(scenario.arc.arcId) : Promise.resolve(undefined),
+    // S3 keys an arc's can-do mastery on the ARC id, so exporting only the
+    // scenario's rows would drop the accumulated attempts — and the learner's
+    // self-ratings, which cannot be reconstructed from transcripts.
+    arcId ? listObjectivesFor(arcId) : Promise.resolve([]),
+    arcId ? getArc(arcId) : Promise.resolve(undefined),
   ]);
+  const episodeScenarios = arc
+    ? (await Promise.all(arc.episodes.map((e) => getScenario(e.scenarioId)))).filter(
+        (s): s is Scenario => !!s,
+      )
+    : [];
+  const scenarios = [scenario, ...episodeScenarios.filter((s) => s.id !== scenario.id)];
   return {
     version: 1,
     kind: "learning-pack",
     exportedAt: new Date().toISOString(),
-    scenarios: [scenario],
-    items: all.filter((i) => i.sourceScenarioId === scenario.id),
-    objectives,
+    scenarios,
+    items: all.filter((i) => scenarios.some((s) => s.id === i.sourceScenarioId)),
+    objectives: [...objectives, ...arcObjectives],
     ...(arc ? { arcs: [arc] } : {}),
   };
 }
 
+/**
+ * Merge a pack back into the store.
+ *
+ * A pack is a hand-editable JSON file moved between devices, so NOTHING in it is
+ * trusted: the caller casts parsed JSON straight to `LearningPack`. Records without
+ * an `id` are skipped rather than allowed to abort a whole store's transaction
+ * midway, and arcs are reconciled (below) instead of blindly overwritten.
+ */
 export async function importPack(pack: LearningPack): Promise<void> {
-  if (pack.kind !== "learning-pack") throw new Error("not a learning pack");
-  if (pack.profile) await putProfile(pack.profile);
-  for (const sc of pack.scenarios ?? []) await putScenario(sc);
-  if (pack.items?.length) await putItems(pack.items);
-  for (const s of pack.sessions ?? []) await putSession(s);
-  if (pack.objectives?.length) await putObjectives(pack.objectives);
-  if (pack.arcs?.length) await putArcs(pack.arcs);
+  if (pack.kind !== "learning-pack") throw new Error("這不是學習資料備份檔。");
+  // The version literal is the entire forward-compatibility contract; reading a
+  // newer pack with an older reader would silently drop whatever it added.
+  if (pack.version !== undefined && pack.version !== 1)
+    throw new Error(`這個備份是版本 ${String(pack.version)}，這個版本的 app 看不懂 — 請先更新。`);
+  const withId = <T extends { id?: unknown }>(xs: T[] | undefined) =>
+    (Array.isArray(xs) ? xs : []).filter((x) => typeof x?.id === "string" && x.id);
+
+  // Merge over the defaults: a profile missing `language`/`level` would otherwise
+  // break level maths and new-scenario defaults app-wide (getProfile only falls
+  // back when the row is ABSENT, not when it is malformed).
+  if (pack.profile) await putProfile({ ...DEFAULT_PROFILE, ...pack.profile });
+  for (const sc of withId(pack.scenarios)) await putScenario(sc);
+  const items = withId(pack.items);
+  if (items.length) await putItems(items);
+  for (const s of withId(pack.sessions)) await putSession(s);
+  const objectives = withId(pack.objectives);
+  if (objectives.length) await putObjectives(objectives);
+  const arcs = withId(pack.arcs);
+  if (arcs.length) await putArcs(await Promise.all(arcs.map((a) => reconcileArc(a, pack))));
+}
+
+/**
+ * Make an incoming arc safe to store.
+ *
+ * Two failure modes this closes, both silent and both permanent:
+ *  1. An arc whose episodes point at scenarios that are in neither the pack nor the
+ *     store — 「下一集」 can never resolve them, so the story is dead. Episode order
+ *     is load-bearing, so we TRUNCATE at the first gap rather than filtering holes.
+ *  2. A stale arc overwriting a further-along one under the same (stable, for demo
+ *     arcs) id, orphaning the episodes it drops. Keep whichever side has more
+ *     episodes; tie-break on updatedAt.
+ * Also re-clamps plannedEpisodes, which otherwise lets a data file drive unbounded
+ * episode generation.
+ */
+async function reconcileArc(arc: Arc, pack: LearningPack): Promise<Arc> {
+  const inPack = new Set((pack.scenarios ?? []).map((s) => s?.id));
+  const episodes: Arc["episodes"] = [];
+  for (const ep of Array.isArray(arc.episodes) ? arc.episodes : []) {
+    const resolvable = inPack.has(ep?.scenarioId) || !!(await getScenario(ep?.scenarioId));
+    if (!resolvable) break;
+    episodes.push(ep);
+  }
+  const planned = Math.min(Math.max(Math.round(arc.plannedEpisodes) || DEFAULT_ARC_LENGTH, 2), DEFAULT_ARC_LENGTH);
+  const incoming: Arc = { ...arc, episodes, plannedEpisodes: planned };
+  const existing = await getArc(arc.id);
+  if (!existing) return incoming;
+  const keepExisting =
+    existing.episodes.length > incoming.episodes.length ||
+    (existing.episodes.length === incoming.episodes.length &&
+      (existing.updatedAt ?? "") > (incoming.updatedAt ?? ""));
+  return keepExisting ? existing : incoming;
 }
 
 // --- CSV (Anki/Quizlet): one row per item, header first ---

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_PROFILE, type LearnedItem, type Scenario } from "../../kernel/types";
+import {
+  DEFAULT_PROFILE,
+  type LearnedItem,
+  type LearnerProfile,
+  type Scenario,
+} from "../../kernel/types";
 import { band } from "./progress";
 import { composeSystemInstruction } from "./prompt";
 
@@ -157,6 +162,52 @@ describe("composeSystemInstruction — S2 story arcs", () => {
     const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
     expect(out).not.toContain("連續劇");
     expect(out).not.toContain("前情提要");
+  });
+});
+
+describe("composeSystemInstruction — E1 measured recurring mistakes", () => {
+  const withTally = (count: number): LearnerProfile => ({
+    ...DEFAULT_PROFILE,
+    errorLog: {
+      en: {
+        tense: {
+          count,
+          lastAt: "2026-08-01T00:00:00.000Z",
+          example: "I go yesterday",
+          correction: "I went yesterday",
+        },
+      },
+    },
+  });
+
+  it("names the 繁中 label with the learner's own slip once it recurs", () => {
+    const out = composeSystemInstruction(scenario, withTally(3));
+    expect(out).toContain("measured recurring mistakes");
+    expect(out).toContain("時態 (tense), seen in 3 sessions");
+    expect(out).toContain("I go yesterday");
+    expect(out).toContain("I went yesterday");
+    expect(out).toContain("prompt self-repair");
+  });
+
+  it("says NOTHING for a one-off — a single session is not a habit", () => {
+    const out = composeSystemInstruction(scenario, withTally(1));
+    expect(out).not.toContain("measured recurring mistakes");
+    expect(out).not.toContain("時態");
+  });
+
+  it("keeps the block out of a language the learner has no tally for", () => {
+    const ja: Scenario = { ...scenario, targetLanguage: "ja" };
+    expect(composeSystemInstruction(ja, withTally(3))).not.toContain("measured recurring mistakes");
+  });
+
+  // no-gamification red line: the LIVE coach must never be told to score the
+  // learner. (The end-of-session judge does produce a CEFR band — that is a
+  // different surface and deliberately not part of the conversation.)
+  it("never instructs the live coach to score, grade or rate the learner", () => {
+    const out = composeSystemInstruction(scenario, withTally(3));
+    expect(out).not.toMatch(/score (them|the learner)|give .*(a score|a grade)/i);
+    expect(out).not.toMatch(/out of (ten|10|five|5|100)/i);
+    expect(out).not.toMatch(/打分|給.{0,4}分數|評分/);
   });
 });
 

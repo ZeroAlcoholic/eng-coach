@@ -19,8 +19,8 @@ import {
   getArc,
   getScenario,
   listSessionsFor,
-  putArc,
   putArcWithScenario,
+  updateArc,
 } from "../../kernel/db";
 import type {
   Arc,
@@ -88,11 +88,22 @@ export function countSentences(text: string): number {
   return splitSentences(text).length;
 }
 
+// Sentence terminators. The ASCII PERIOD must be in here: a recap is 繁中 prose but
+// the model mixes in English names and sometimes punctuates with ".", and without
+// it "One. Two. Three. Four." counts as ONE sentence and the ≤3 guard never fires.
+// Splitting a shade too eagerly (an abbreviation, a decimal) only ever clamps MORE,
+// which is the safe direction for a hard cap.
+const SENTENCE_END = /[^。！？!?.]+[。！？!?.]?/g;
+
 function splitSentences(text: string): string[] {
-  return text.replace(/\s+/g, " ").trim().match(/[^。！？!?]+[。！？!?]?/g) ?? [];
+  return text.replace(/\s+/g, " ").trim().match(SENTENCE_END) ?? [];
 }
 
-/** Keep the first `max` sentences. Chinese and ASCII terminators both count.
+// Belt to the sentence cap's braces: an unpunctuated wall of text is a single
+// "sentence" no split can shorten, and the recap is spoken aloud as an opening beat.
+const MAX_RECAP_CHARS = 300;
+
+/** Keep the first `max` sentences (and at most MAX_RECAP_CHARS characters).
  *  A space after a full-width terminator is an artefact of flattening the model's
  *  line breaks — drop it, while leaving normal English spacing alone. */
 export function clampRecap(text: string, max = MAX_RECAP_SENTENCES): string {
@@ -100,7 +111,8 @@ export function clampRecap(text: string, max = MAX_RECAP_SENTENCES): string {
     .slice(0, max)
     .join("")
     .replace(/([。！？])\s+/g, "$1")
-    .trim();
+    .trim()
+    .slice(0, MAX_RECAP_CHARS);
 }
 
 // --- normalisation ----------------------------------------------------------
@@ -111,17 +123,28 @@ const flat = (s: unknown, cap: number) =>
     .trim()
     .slice(0, cap);
 
-/** Model output is untrusted prose: flatten, trim, drop empties, and BOUND it. */
-export function normaliseStoryState(raw: Partial<StoryState> | undefined): StoryState {
-  const characters = (raw?.characters ?? [])
-    .map((c) => ({ name: flat(c?.name, 60), note: flat(c?.note, 160) }))
+/**
+ * Model output is untrusted prose: flatten, trim, drop empties, and BOUND it.
+ *
+ * Also the validation boundary for IMPORTED arcs. A LearningPack is hand-editable
+ * JSON moved between devices, so `storyState` can arrive with a string where an
+ * array belongs; `?? []` doesn't catch that, and `.map` on a string throws deep
+ * inside prompt assembly. Hence the explicit Array.isArray gates.
+ */
+export function normaliseStoryState(raw: Partial<StoryState> | undefined | null): StoryState {
+  const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const characters = list(raw?.characters)
+    .map((c) => {
+      const o = (c ?? {}) as { name?: unknown; note?: unknown };
+      return { name: flat(o.name, 60), note: flat(o.note, 160) };
+    })
     .filter((c) => c.name)
     .slice(0, MAX_CHARACTERS);
-  const events = (raw?.events ?? [])
+  const events = list(raw?.events)
     .map((e) => flat(e, 200))
     .filter(Boolean)
     .slice(-MAX_EVENTS); // newest kept — the tail is what the next episode follows on from
-  const openThreads = (raw?.openThreads ?? [])
+  const openThreads = list(raw?.openThreads)
     .map((t) => flat(t, 200))
     .filter(Boolean)
     .slice(0, MAX_OPEN_THREADS);
@@ -129,7 +152,7 @@ export function normaliseStoryState(raw: Partial<StoryState> | undefined): Story
 }
 
 function cleanLines(xs: string[] | undefined, cap: number, max: number): string[] {
-  return (xs ?? []).map((x) => flat(x, cap)).filter(Boolean).slice(0, max);
+  return (Array.isArray(xs) ? xs : []).map((x) => flat(x, cap)).filter(Boolean).slice(0, max);
 }
 
 /**
@@ -142,7 +165,7 @@ function cleanLines(xs: string[] | undefined, cap: number, max: number): string[
 export function freezeCanDos(texts: string[] | undefined): ArcCanDo[] | undefined {
   const seen = new Set<string>();
   const out: ArcCanDo[] = [];
-  for (const t of texts ?? []) {
+  for (const t of Array.isArray(texts) ? texts : []) {
     const text = flat(t, 200);
     if (!text || seen.has(text)) continue;
     seen.add(text);
@@ -318,7 +341,9 @@ export async function installDemoArc(demo: DemoArc, now?: string): Promise<ArcSt
     plannedEpisodes: clampLength(demo.plannedEpisodes),
     storyState: normaliseStoryState(demo.storyState),
     canDos: freezeCanDos(demo.canDos),
-    outline: cleanLines(demo.outline, 200, demo.plannedEpisodes),
+    // Clamp against the CLAMPED length, not the declared one, or a demo asking for
+    // more episodes than allowed would keep beats no episode ever plays.
+    outline: cleanLines(demo.outline, 200, clampLength(demo.plannedEpisodes)),
     createdAt: at,
     updatedAt: at,
   };
@@ -350,35 +375,46 @@ export async function markEpisodePlayed(
   episode: number,
   at: string,
 ): Promise<void> {
-  const arc = await getArc(arcId);
-  if (!arc) return;
-  const target = arc.episodes.find((e) => e.n === episode);
-  if (!target || target.completedAt) return;
-  await putArc({
-    ...arc,
-    episodes: arc.episodes.map((e) => (e.n === episode ? { ...e, completedAt: at } : e)),
-    updatedAt: at,
+  await updateArc(arcId, (arc) => {
+    // Mark by INDEX, not by predicate over every element: an imported arc can
+    // carry a duplicate `n`, and marking all of them played would skip an episode.
+    const i = arc.episodes.findIndex((e) => e.n === episode);
+    if (i < 0 || arc.episodes[i].completedAt) return undefined; // absent or already done
+    const episodes = [...arc.episodes];
+    episodes[i] = { ...episodes[i], completedAt: at };
+    return { ...arc, episodes, updatedAt: at };
   });
 }
+
+/**
+ * Why 「下一集」 isn't available. "finished" is the happy ending; "broken" means the
+ * story CANNOT continue because a record it points at is gone — a very different
+ * thing to tell the learner, and previously both were reported as「已完結」while the
+ * card still offered the episode.
+ */
+export type AdvanceOutcome =
+  | { kind: "ready"; scenario: Scenario }
+  | { kind: "finished" }
+  | { kind: "broken"; reason: string };
 
 // Single-flight per arc: the end-of-episode pre-generate and a tap on「下一集」
 // can land together, and each costs a model call plus a write. Both callers must
 // observe the SAME outcome, so they share one in-flight promise.
-const inFlight = new Map<string, Promise<Scenario | null>>();
+const inFlight = new Map<string, Promise<AdvanceOutcome>>();
 
 /**
- * Ensure the arc has an episode ready to practise, and return it.
+ * Ensure the arc has an episode ready to practise, and say what happened.
  *
- * Idempotent by design — a no-op read when 「下一集」 already exists. Returns null
- * when the arc has run its course. THROWS on generation/write failure, leaving the
- * arc untouched; callers decide whether that's fatal (a tap on 下一集 → tell the
- * user, they can tap again) or best-effort (end-of-episode pre-generate → warn).
+ * Idempotent by design — a no-op read when 「下一集」 already exists. THROWS on
+ * generation/write failure, leaving the arc untouched; callers decide whether
+ * that's fatal (a tap on 下一集 → tell the user, they can tap again) or
+ * best-effort (end-of-episode pre-generate → warn).
  */
 export function advanceArc(
   arcId: string,
   generate: NextEpisodeGenerator,
   now?: string,
-): Promise<Scenario | null> {
+): Promise<AdvanceOutcome> {
   const existing = inFlight.get(arcId);
   if (existing) return existing;
   const task = grow(arcId, generate, now).finally(() => inFlight.delete(arcId));
@@ -390,19 +426,25 @@ async function grow(
   arcId: string,
   generate: NextEpisodeGenerator,
   now?: string,
-): Promise<Scenario | null> {
+): Promise<AdvanceOutcome> {
   const arc = await getArc(arcId);
-  if (!arc) return null;
+  if (!arc) return { kind: "broken", reason: "找不到這條故事線的資料。" };
 
   // Already ready — the common path, and the reason this is safe to call freely.
   const pending = pendingEpisode(arc);
-  if (pending) return (await getScenario(pending.scenarioId)) ?? null;
-  if (arc.episodes.length >= arc.plannedEpisodes) return null; // story complete
+  if (pending) {
+    const scenario = await getScenario(pending.scenarioId);
+    return scenario
+      ? { kind: "ready", scenario }
+      : { kind: "broken", reason: `第 ${pending.n} 集的情境資料不見了。` };
+  }
+  if (arc.episodes.length >= arc.plannedEpisodes) return { kind: "finished" };
 
   const last = arc.episodes[arc.episodes.length - 1];
-  if (!last) return null; // an arc with no episodes at all: nothing to follow on from
+  if (!last) return { kind: "broken", reason: "這條故事線沒有任何一集。" };
   const lastScenario = await getScenario(last.scenarioId);
-  if (!lastScenario) return null; // its scenario was deleted — don't invent continuity
+  // Don't invent continuity from a scenario that no longer exists.
+  if (!lastScenario) return { kind: "broken", reason: `第 ${last.n} 集的情境資料不見了。` };
 
   const sessions = await listSessionsFor(last.scenarioId);
   const transcript: TranscriptTurn[] = sessions[0]?.transcript ?? [];
@@ -428,8 +470,10 @@ async function grow(
     ],
     updatedAt: at,
   };
-  await putArcWithScenario(updated, scenario);
-  return scenario;
+  // Guarded on the episode count we read above: another tab that grew this arc
+  // while the model was thinking must not be overwritten.
+  await putArcWithScenario(updated, scenario, arc.episodes.length);
+  return { kind: "ready", scenario };
 }
 
 // --- production wiring (the injected generators, bound to a key) -------------

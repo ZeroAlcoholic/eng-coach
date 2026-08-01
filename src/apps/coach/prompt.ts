@@ -18,7 +18,8 @@ import type {
   StoryState,
   TargetLanguage,
 } from "../../kernel/types";
-import { cefrToNum, coachPolicy } from "./progress";
+import { ERROR_TYPE_LABEL } from "../../kernel/types";
+import { cefrToNum, coachPolicy, recurringErrors } from "./progress";
 import { scaffoldTier } from "./srs";
 
 /**
@@ -228,6 +229,22 @@ export function composeSystemInstruction(
   }
   if (profile.focus.length) {
     lines.push("", `Pay special attention to their recurring weak spots: ${profile.focus.join(", ")}.`);
+  }
+  // E1 — measured recurring errors beat the learner's self-declared focus list:
+  // these come with the learner's OWN slip and its natural correction, so the
+  // coach can create a situation that needs the right form instead of lecturing.
+  const recurring = recurringErrors(profile, s.targetLanguage);
+  if (recurring.length) {
+    lines.push(
+      "",
+      "── Their measured recurring mistakes (from past sessions) ──",
+      "Engineer moments that REQUIRE the correct form, and prompt self-repair when the old habit shows up. Do NOT open by listing these.",
+      ...recurring.map(({ type, tally }) => {
+        const slip = tally.example ? ` e.g. they said「${tally.example}」` : "";
+        const fix = tally.correction ? ` → natural: 「${tally.correction}」` : "";
+        return `- ${ERROR_TYPE_LABEL[type]} (${type}), seen in ${tally.count} sessions.${slip}${fix}`;
+      }),
+    );
   }
 
   // S2 — story continuity. Placed last so it frames HOW the session opens and

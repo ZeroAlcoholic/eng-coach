@@ -45,8 +45,23 @@ export function Shadowing(props: { clip: CoachClip | null }) {
   useEffect(() => (coachUrl ? () => URL.revokeObjectURL(coachUrl) : undefined), [coachUrl]);
 
   // Release the mic, stop playback and free my clip if the screen goes away.
+  // Tapping ▶ 接續 mid-recording unmounts this, so the recorder must be silenced
+  // FIRST — otherwise its onstop fires after cleanup and mints an object URL that
+  // nothing will ever revoke.
   useEffect(
     () => () => {
+      const recorder = recorderRef.current;
+      recorderRef.current = null;
+      if (recorder) {
+        recorder.onstop = null;
+        recorder.ondataavailable = null;
+        recorder.onerror = null;
+        try {
+          if (recorder.state !== "inactive") recorder.stop();
+        } catch {
+          /* already torn down */
+        }
+      }
       stopPlayback();
       stopTracks();
       if (mineUrlRef.current) URL.revokeObjectURL(mineUrlRef.current);
@@ -104,11 +119,26 @@ export function Shadowing(props: { clip: CoachClip | null }) {
       };
       recorder.onstop = () => {
         stopTracks();
+        setRecording(false);
+        // A muted mic or a hardware mute switch yields zero bytes. That must not
+        // masquerade as a take — otherwise the learner only finds out on playback,
+        // and the message would blame the audio instead of the recording.
+        if (!chunks.reduce((n, c) => n + c.size, 0)) {
+          setError("沒有錄到聲音 — 確認麥克風沒有被靜音，再按「換我說」。");
+          return;
+        }
         if (mineUrlRef.current) URL.revokeObjectURL(mineUrlRef.current);
         const url = URL.createObjectURL(new Blob(chunks, { type: recorder.mimeType }));
         mineUrlRef.current = url;
         setMine(url);
+      };
+      // Without this, a device that dies mid-recording (headset unplugged, OS takes
+      // the mic) never fires onstop: the button would stay 「■ 錄完了」 forever and
+      // the mic would stay open with nothing said about it.
+      recorder.onerror = (event) => {
+        stopTracks();
         setRecording(false);
+        setError(describeError((event as unknown as { error?: unknown }).error ?? event));
       };
       recorderRef.current = recorder;
       recorder.start();
@@ -121,8 +151,17 @@ export function Shadowing(props: { clip: CoachClip | null }) {
   }
 
   function stopRecording() {
-    recorderRef.current?.stop();
+    const recorder = recorderRef.current;
     recorderRef.current = null;
+    try {
+      recorder?.stop();
+    } catch (err) {
+      // stop() on an already-failed recorder throws InvalidStateError; that would
+      // escape a sync click handler and leave the UI stuck with no message.
+      stopTracks();
+      setRecording(false);
+      setError(describeError(err));
+    }
   }
 
   if (!props.clip) {

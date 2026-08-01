@@ -193,10 +193,19 @@ pass criterion，完工時逐條判定，追加進 `docs/DEVICE_E2E.md`；例：
 `endCoachTurn`，由 transport 的 turn state 驅動）；barge-in 打斷的半句丟棄，單輪上限
 30 秒。面板只在**暫停**時出現 —— live 時麥克風正串給 Gemini，跟讀會被當成一句回應。
 
-### Batch E — optional, only if a real need shows
-- **E1** LLM error-log extraction (fixed error-type enum to bound noise) — extra Gemini call/session.
-- **E2** RMS stress/energy envelope viz — loudness ≠ stress; risks cluttering the clean orb.
-- **E3** LLM cloze cards + collocations/word-families — distractor quality ~50%; adds review-mode complexity; not the "speak more" core.
+### Batch E — ✅ 2026-08-01（使用者明確要求做完；每一項都用設計避開它自己記的疑慮）
+- **E1** ✅ 錯誤型態帳本，closed enum（`ERROR_TYPES`，10 種，含 JA 的助詞／敬語）。
+  **沒有多打一次 API**：掛在既有判決呼叫上，而既有的 3 次 self-consistency 取樣正好是
+  E1 要的壓雜訊機制——型態需在多數取樣出現才計入。`count` 計 **session** 不計次數；
+  ≥2 個 session 才算「常犯」，然後以繁中名稱＋學習者原句＋自然說法進 live prompt。
+- **E2** ✅ 音量指示，**預設關閉**、不碰 orb。疑慮是「音量 ≠ 重音」，所以它就叫音量，
+  畫面永遠寫「這是音量，不是重音也不是分數」，真正用途是回答「麥克風有沒有收到我」。
+  RMS 從既有的擷取 frame 算（無新增音訊節點），~10Hz 節流，關閉時完全不算。
+- **E3** ✅ 填空複習＋搭配詞，**完全不生成選項**——疑慮是干擾項品質約 50%，所以直接
+  繞開：回想後自評，沿用同一張 FSRS 卡（認／用／填空是三種提示、一個排程）。填空優先
+  由**純函式**從該詞自己的例句挖空（零 API、離線可用、品質最高）；只有例句不含該詞時
+  才呼叫模型，結果連同搭配詞快取在 item 上並隨 LearningPack 走。
+  快取出題會被驗證（必須含空格、不得含答案），答案的**每一次**出現都會被遮住。
 
 ## Deferred — needs a missing precondition
 - **Cross-scenario objective scheduler (interleaving across scenarios)** — needs a stable objective-identity / tagging scheme; objective free-text doesn't match across regenerated scenarios. Build C1's ledger first.
@@ -216,8 +225,13 @@ mobile).
 
 ---
 **Where things stand (2026-08-01).** Shipped: W1–W7, Batches A/B/C, phone-first
-ease-of-use, **V-desktop**, **Batch S (S1–S4)**, **Batch D (D1)**. Batch E stays
-optional and unstarted (only if a real need shows).
+ease-of-use, **V-desktop**, **Batch S (S1–S4)**, **Batch D (D1)**, **Batch E
+(E1–E3)**. The whole worklist is now built. A four-reviewer code-review pass over
+everything from S1 onward found and fixed 13 real defects — four of which broke a
+feature outright for real users (shadowing played the wrong turn; a review-sheet
+effect billed the API in an unbounded loop; an episode pack restored an arc that
+could never continue; the ≤3-sentence recap guard never fired on English prose).
+The findings and fixes are itemised in `docs/DEVICE_E2E.md`.
 
 **Two verification debts, both waiting on hardware, neither blocking:**
 1. **A microphone on the dev machine** unblocks three already-registered checks —
