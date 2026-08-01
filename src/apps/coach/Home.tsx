@@ -19,6 +19,8 @@ import {
   type TargetLanguage,
 } from "../../kernel/types";
 import { clearDraft, deleteScenario, putScenario, putSession } from "../../kernel/db";
+import { describeError } from "../../kernel/errors";
+import { DEFAULT_LIVE_MODEL, getLiveModelOverride, setLiveModelOverride } from "../../kernel/overrides";
 import {
   backupPack,
   buildScenarioPack,
@@ -28,7 +30,7 @@ import {
   readTextFile,
 } from "../../kernel/pack";
 import { persistedState, type PersistState } from "../../kernel/storage";
-import { generateScenario } from "./ai";
+import { generateScenario, validateApiKey } from "./ai";
 import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError } from "./finalize";
 import { HistorySheet } from "./HistorySheet";
@@ -57,6 +59,8 @@ export function Home(props: {
   const { apiKey, profile, scenarios, items, sessionCount, draft } = props;
   const lang = profile.language; // the active "mode" — set by the top toggle
   const [keyInput, setKeyInput] = useState("");
+  const [savingKey, setSavingKey] = useState(false); // validating the pasted key
+  const [modelInput, setModelInput] = useState(getLiveModelOverride); // ⚙️ 進階
   const [brief, setBrief] = useState("");
   const [busy, setBusy] = useState("");
   const [building, setBuilding] = useState(false); // dedicated flag — not a magic busy string
@@ -75,6 +79,7 @@ export function Home(props: {
   const [sheet, setSheet] = useState<"history" | "vocab" | "review" | null>(null);
   const levelId = useId();
   const briefId = useId();
+  const modelId = useId();
 
   const mine = scenarios.filter((s) => s.targetLanguage === lang);
   const samples = DEFAULT_SCENARIOS[lang].filter((d) => !scenarios.some((s) => s.id === d.id));
@@ -88,8 +93,27 @@ export function Home(props: {
       await fn();
       setBusy("");
     } catch (err) {
-      setBusy(`錯誤：${err instanceof Error ? err.message : String(err)}`);
+      setBusy(`錯誤：${describeError(err)}`);
     }
+  }
+
+  // Validate BEFORE saving: a typo'd key must fail here with a Chinese message,
+  // not minutes later mid-practice with a raw English blob.
+  async function saveKey() {
+    const k = keyInput.trim();
+    if (!k) return setBusy("請先貼上金鑰。");
+    if (savingKey) return;
+    setSavingKey(true);
+    setBusy("驗證金鑰中…");
+    try {
+      await validateApiKey(k);
+      props.onApiKey(k);
+      setKeyInput("");
+      setBusy("✓ 金鑰有效，已儲存在這台裝置。");
+    } catch (err) {
+      setBusy(`金鑰驗證失敗：${describeError(err)}`);
+    }
+    setSavingKey(false);
   }
 
   async function build() {
@@ -175,7 +199,7 @@ export function Home(props: {
         setBusy(`已儲存逐字稿（${sc ? "未設定金鑰" : "原情境已刪除"}，未分析）。`);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = describeError(err);
       // PersistError → nothing saved, draft still here, retry is meaningful.
       // ResultsPersistError → saved AND analysed, results partially stored.
       // Anything else → the transcript IS saved; only the analysis failed.
@@ -292,6 +316,14 @@ export function Home(props: {
           <label className="label" htmlFor="key">
             連結你的 Gemini API 金鑰 — 只存在這台裝置
           </label>
+          <p className="muted" style={{ margin: "6px 0 10px" }}>
+            還沒有金鑰？到{" "}
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+              Google AI Studio
+            </a>{" "}
+            登入 Google 帳號 → 點「Create API key」→ 複製貼回這裡（有免費額度）。建議順手在
+            Google Cloud 設預算上限。
+          </p>
           <div className="row">
             <input
               id="key"
@@ -301,8 +333,8 @@ export function Home(props: {
               onChange={(e) => setKeyInput(e.target.value)}
               placeholder="貼上金鑰"
             />
-            <button className="btn btn--primary" onClick={() => props.onApiKey(keyInput)}>
-              儲存
+            <button className="btn btn--primary" onClick={saveKey} disabled={savingKey}>
+              {savingKey ? "驗證中…" : "儲存"}
             </button>
           </div>
         </div>
@@ -443,6 +475,34 @@ export function Home(props: {
               <a className="btn btn--ghost btn--sm" href="index.html">
                 ← 工具
               </a>
+            </div>
+            {/* Escape hatch for a live-model rename (no server = no remote fix).
+                Only needed if Google retires the default; empty = default. */}
+            <label className="label" htmlFor={modelId} style={{ marginTop: 12 }}>
+              語音模型（進階 — 留空用預設；官方改名導致連不上時才需要填）
+            </label>
+            <div className="row">
+              <input
+                id={modelId}
+                className="input grow"
+                value={modelInput}
+                onChange={(e) => setModelInput(e.target.value)}
+                placeholder={DEFAULT_LIVE_MODEL}
+              />
+              <button
+                className="btn btn--ghost"
+                onClick={() => {
+                  setLiveModelOverride(modelInput);
+                  setModelInput(getLiveModelOverride());
+                  setBusy(
+                    getLiveModelOverride()
+                      ? `✓ 語音模型改用 ${getLiveModelOverride()}。`
+                      : `✓ 語音模型恢復預設（${DEFAULT_LIVE_MODEL}）。`,
+                  );
+                }}
+              >
+                套用
+              </button>
             </div>
           </div>
         </>

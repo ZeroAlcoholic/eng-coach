@@ -26,6 +26,13 @@ function client(apiKey: string): GoogleGenAI {
   return new GoogleGenAI({ apiKey });
 }
 
+// Cheapest possible liveness probe for a pasted key: models.list is a GET that
+// costs no tokens. A typo'd key must fail HERE, at save time, not minutes later
+// mid-practice with a raw English error.
+export async function validateApiKey(apiKey: string): Promise<void> {
+  await client(apiKey).models.list({ config: { pageSize: 1 } });
+}
+
 async function generateJson<T>(apiKey: string, prompt: string, schema: unknown): Promise<T> {
   const res = await client(apiKey).models.generateContent({
     model: TEXT_MODEL,

@@ -10,6 +10,8 @@ import { useEffect, useRef, useState } from "react";
 import { AudioEngine } from "../../audio/AudioEngine";
 import { GeminiLiveDirect } from "../../api/gemini-direct";
 import { listItems, putDraft, putProfile } from "../../kernel/db";
+import { describeError } from "../../kernel/errors";
+import { liveModel } from "../../kernel/overrides";
 import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
 import { suggestReplies, translateLine, type ReplySuggestion, type SessionReview } from "./ai";
 import { CanDoSelfCheck } from "./CanDoSelfCheck";
@@ -20,7 +22,6 @@ import { composeSystemInstruction } from "./prompt";
 import { dueQueue } from "./srs";
 import { pickVoice } from "./voices";
 
-const LIVE_MODEL = "gemini-3.1-flash-live-preview";
 const RECYCLE_CAP = 5; // W7 — due items woven into a session: recycle, not drill
 
 type Status = "ready" | "connecting" | "live" | "saving" | "done";
@@ -190,7 +191,7 @@ export function Practice(props: {
       // finally still resets startingRef — otherwise Start would wedge.
       const client = new GeminiLiveDirect({
         apiKey,
-        model: LIVE_MODEL,
+        model: liveModel(), // ⚙️ override wins — repairable from the phone if renamed
         systemInstruction: composeSystemInstruction(scenario, profile, dueItems, weak),
         voiceName: pickVoice(scenario.targetLanguage),
         handlers: {
@@ -203,13 +204,19 @@ export function Practice(props: {
           onTurnState: (t) => setPhase(t), // transport is the single source of truth
           onUserTranscript: (t) => pushDelta("user", t),
           onAssistantTranscript: (t) => pushDelta("coach", t),
-          onError: (m) => setNotice(`錯誤：${m}`),
-          onClose: () => {
+          onError: (m) => setNotice(`錯誤：${describeError(m)}`),
+          onClose: (reason) => {
             if (finalizingRef.current) return;
             if (pausedRef.current) return; // paused: keep state; resume() will reconnect
             void teardown();
             setStatus("ready");
-            setNotice("連線中斷 — 點一下重新開始。");
+            // A close reason like "quota exceeded" tells the user whether
+            // retrying can even work — surface it translated when we have one.
+            setNotice(
+              reason && reason !== "closed"
+                ? `連線中斷：${describeError(reason)}`
+                : "連線中斷 — 點一下重新開始。",
+            );
           },
         },
       });
@@ -229,7 +236,7 @@ export function Practice(props: {
       finalizingRef.current = true;
       await teardown();
       setStatus("ready");
-      setNotice(`無法開始：${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`無法開始：${describeError(err)}`);
     } finally {
       startingRef.current = false;
     }
@@ -265,7 +272,7 @@ export function Practice(props: {
       setPaused(false);
     } catch (err) {
       pausedRef.current = true; // stay paused so the user can retry or stop
-      setNotice(`無法接續：${err instanceof Error ? err.message : String(err)}`);
+      setNotice(`無法接續：${describeError(err)}`);
     } finally {
       resumingRef.current = false;
     }
@@ -332,7 +339,7 @@ export function Practice(props: {
       });
       setSummary(outcome);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = describeError(err);
       // Three honest cases: PersistError = NOTHING saved (draft survives for
       // Home's recovery card); ResultsPersistError = transcript saved AND
       // analysis done, but the results only partially stored (still show the

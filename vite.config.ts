@@ -41,7 +41,10 @@ export default defineConfig(({ mode }) => ({
         background_color: "#0a1410",
         display: "standalone",
         orientation: "portrait",
-        start_url: ".",
+        // The installed app opens the coach directly — the launcher is one tool
+        // deep with two "coming soon" tiles, an extra tap on EVERY launch. The
+        // launcher stays reachable via the ⚙️「← 工具」link for future tools.
+        start_url: "coach.html",
         // Raster PNGs are mandatory for real installs: iOS/Safari ignore SVG
         // icons entirely (no home-screen icon / splash). The SVG stays first as
         // the crisp option for engines that honour it. Maskable is a full-bleed
