@@ -15,7 +15,6 @@ import {
   type DraftSession,
   type LearnedItem,
   type LearnerProfile,
-  type LearningPack,
   type Scenario,
   type TargetLanguage,
 } from "../../kernel/types";
@@ -25,9 +24,10 @@ import { DEFAULT_LIVE_MODEL, getLiveModelOverride, setLiveModelOverride } from "
 import {
   backupPack,
   buildScenarioPack,
+  commitImport,
   downloadFile,
-  importPack,
   itemsToCsv,
+  planImport,
   readTextFile,
 } from "../../kernel/pack";
 import { persistedState, type PersistState } from "../../kernel/storage";
@@ -224,12 +224,30 @@ export function Home(props: {
     setBrief(await readTextFile(file));
   }
 
+  // Validate the WHOLE file first and say what would change; nothing is written
+  // until the user confirms. A file that fails validation is refused entirely.
   async function importPackFile(file: File) {
-    await withBusy("匯入中…", async () => {
-      const pack = JSON.parse(await readTextFile(file)) as LearningPack;
-      await importPack(pack);
+    setBusy("檢查備份檔…");
+    try {
+      let json: unknown;
+      try {
+        json = JSON.parse(await readTextFile(file));
+      } catch {
+        throw new Error("這個檔案不是 JSON。");
+      }
+      const plan = await planImport(json);
+      const { added, overwritten } = plan.summary;
+      if (!window.confirm(`匯入將新增 ${added} 筆、覆蓋 ${overwritten} 筆現有資料。要繼續嗎？`)) {
+        setBusy("");
+        return;
+      }
+      setBusy("匯入中…");
+      await commitImport(plan);
       props.onChanged();
-    });
+      setBusy(`已匯入：新增 ${added} 筆、覆蓋 ${overwritten} 筆。`);
+    } catch (err) {
+      setBusy(`匯入失敗，沒有任何資料被更動：${describeError(err)}`);
+    }
   }
 
   // A2 — one-tap backup: shares the file to Files/NAS on phones, downloads on
