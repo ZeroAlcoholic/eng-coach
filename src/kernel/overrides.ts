@@ -6,14 +6,15 @@
 //
 // Live: 3.1-flash-live-preview went legacy in 2026-09; `gemini-3.8-live` is the
 // stable default and the old name still works as an override on a key that
-// misbehaves on 3.8. Text: `gemini-3.5-flash` stays until the fixture screening
-// (scripts/screen-judge) says 3.8-flash is not worse.
+// misbehaves on 3.8. Text: `gemini-3.8-flash` 晉級 in the fixture screening
+// (docs/SCREENING_2026-09-24.md: 1.3% validator failures vs 29.3%).
 
 export const DEFAULT_LIVE_MODEL = "gemini-3.8-live";
-export const DEFAULT_TEXT_MODEL = "gemini-3.5-flash";
+export const DEFAULT_TEXT_MODEL = "gemini-3.8-flash";
 // How many times the judge samples the transcript before medianing the numbers.
-// 3 = self-consistency; 1 = cheapest. Set by the same screening as the model.
-export const DEFAULT_JUDGE_SAMPLES = 3;
+// The same screening found median-of-3 did not reduce the CEFR spread by a band,
+// so 1 is the default; 3 remains available as an override.
+export const DEFAULT_JUDGE_SAMPLES = 1;
 const JUDGE_SAMPLES_RANGE = { min: 1, max: 5 };
 
 const LIVE_MODEL_KEY = "live_model_override";

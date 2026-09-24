@@ -204,7 +204,7 @@ export interface SkillScores {
   interaction: number;
 }
 
-/** End-of-session recap produced by gemini-3.5-flash over the transcript. */
+/** End-of-session recap produced by the text model (kernel/overrides) over the transcript. */
 export interface SessionReview {
   cefr: string; // overall CEFR estimate of THIS session, e.g. "B1"
   subscores?: SkillScores;

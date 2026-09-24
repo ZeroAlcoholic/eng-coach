@@ -43,7 +43,7 @@ flowchart TB
 
   subgraph Ext["Google · only external dependency"]
     Live["Gemini Live API · voice · gemini-3.8-live (⚙️ override → any name)"]
-    Flash["text model · gemini-3.5-flash (⚙️ override)"]
+    Flash["text model · gemini-3.8-flash (⚙️ override)"]
   end
 
   C --> Home --> Practice
@@ -127,7 +127,7 @@ flowchart TB
     Mic["Mic audio · speech"]
   end
 
-  Gen["generateScenario<br/>gemini-3.5-flash · structured JSON"]
+  Gen["generateScenario<br/>text model · structured JSON · validated"]
   Scen[("Scenario<br/>2-layer context · level · objectives · targetPhrases")]
   Brief --> Gen --> Scen
   Defaults --> Scen
@@ -173,7 +173,7 @@ flowchart TB
 
 ### Scoring mechanism (the "judge")
 At session end the transcript is sent to the text model (`kernel/overrides.ts`:
-`textModel()`, default `gemini-3.5-flash`) **N times** (`judgeSamples()`, default 3)
+`textModel()`, default `gemini-3.8-flash`) **N times** (`judgeSamples()`, default 1 — see `docs/SCREENING_2026-09-24.md`)
 as an **LLM-as-rubric judge** (`ai/review.ts`). Every sample passes `reviewParser`
 or is discarded:
 
@@ -184,8 +184,9 @@ or is discarded:
   text transcript, so it does not drive the level).
 - **errors** — a closed set of types (`pronunciation` is never accepted: text
   cannot evidence it), and each `example` must be a substring of a learner turn;
-  otherwise that error is dropped. Types must survive a majority vote across
-  samples (`progress.voteErrors`).
+  otherwise that error is dropped. With several samples a type must survive a
+  majority vote (`progress.voteErrors`); with the default single sample the
+  validator is the evidence.
 - **objectivesMet / wins / fixes / progressNote** — shape-checked; progressNote is
   **fed back** into the next session's prompt (the feedback loop above).
 

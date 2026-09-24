@@ -125,7 +125,7 @@ const errReview = (types: string[]): SessionReview => ({
   })),
 });
 
-describe("E1 voteErrors — a single noisy sample must not enter the tally", () => {
+describe("E1 voteErrors — types must agree across samples; a lone sample stands on its validator", () => {
   it("keeps only types a MAJORITY of samples named", () => {
     const voted = voteErrors([
       errReview(["tense", "article"]),
@@ -135,8 +135,8 @@ describe("E1 voteErrors — a single noisy sample must not enter the tally", () 
     expect(voted?.map((e) => e.type)).toEqual(["tense"]);
   });
 
-  it("refuses to confirm anything from fewer than two samples", () => {
-    expect(voteErrors([errReview(["tense"])])).toEqual([]);
+  it("a single sample keeps its (already validated) errors, deduped by type; none → none", () => {
+    expect(voteErrors([errReview(["tense", "tense", "article"])])?.map((e) => e.type)).toEqual(["tense", "article"]);
     expect(voteErrors([])).toEqual([]);
   });
 

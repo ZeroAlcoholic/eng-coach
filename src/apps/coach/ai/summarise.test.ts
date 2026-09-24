@@ -60,6 +60,6 @@ describe("summariseSession — orchestration over validated samples", () => {
   it("uses the configured sample count when none is given", async () => {
     mocked.mockResolvedValue(sample(3));
     await summariseSession("k", { transcript, level: "B1" });
-    expect(mocked).toHaveBeenCalledTimes(3); // DEFAULT_JUDGE_SAMPLES in overrides.ts
+    expect(mocked).toHaveBeenCalledTimes(1); // DEFAULT_JUDGE_SAMPLES in overrides.ts
   });
 });

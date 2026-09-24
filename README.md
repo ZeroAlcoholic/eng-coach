@@ -47,5 +47,5 @@ green; the live `coach.html` must reference the same hashed asset names as the
 local `dist/` for that commit.
 
 Models are set in `src/kernel/overrides.ts` (live: `gemini-3.8-live`; text:
-`gemini-3.5-flash`; judge samples: 3) and can be overridden from ⚙️ on the
+`gemini-3.8-flash`; judge samples: 1, per `docs/SCREENING_2026-09-24.md`) and can be overridden from ⚙️ on the
 device without a redeploy.

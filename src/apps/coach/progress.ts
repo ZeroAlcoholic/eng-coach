@@ -56,15 +56,16 @@ export function medianReview(reviews: SessionReview[]): SessionReview {
   return { ...base, cefr, subscores, errors: voteErrors(reviews) };
 }
 
-// E1 — noise control for typed errors. A single sample naming an error type is
-// not evidence: the judge is a probabilistic reader of a noisy transcript, and one
-// spurious "article" would enter the running tally forever. So a type must appear
-// in a MAJORITY of the samples (≥2) to survive, and with fewer than two samples to
-// compare, nothing does. The example/correction come from the first sample that
-// named it, so the learner sees their own words rather than a merged paraphrase.
+// E1 — noise control for typed errors across samples. With several samples a
+// type must appear in a MAJORITY (≥2) to survive. With ONE sample there is no
+// vote to hold: its errors are kept, because each has already passed the
+// judge's validator (the example is a substring of a learner turn), which is the
+// evidence the vote used to stand in for. The example/correction come from the
+// first sample that named it, so the learner sees their own words.
 const MIN_ERROR_VOTES = 2;
 
 export function voteErrors(reviews: SessionReview[]): SessionReview["errors"] {
+  if (reviews.length === 1) return dedupeByType(reviews[0].errors ?? []);
   if (reviews.length < MIN_ERROR_VOTES) return [];
   const votes = new Map<ErrorType, { n: number; first: NonNullable<SessionReview["errors"]>[number] }>();
   for (const review of reviews) {
@@ -80,6 +81,11 @@ export function voteErrors(reviews: SessionReview[]): SessionReview["errors"] {
     }
   }
   return [...votes.values()].filter((v) => v.n >= MIN_ERROR_VOTES).map((v) => v.first);
+}
+
+function dedupeByType(errors: NonNullable<SessionReview["errors"]>): NonNullable<SessionReview["errors"]> {
+  const seen = new Set<ErrorType>();
+  return errors.filter((e) => isErrorType(e?.type) && !seen.has(e.type) && seen.add(e.type));
 }
 
 const ERROR_TYPE_SET = new Set<string>(ERROR_TYPES);
