@@ -165,9 +165,9 @@ describe("E1 voteErrors — types must agree across samples; a lone sample stand
   // self-consistency samples survived (a throttled minute), routing around the vote
   // and letting one noisy read into the permanent tally. It now always merges, so
   // merging a LONE sample must still yield zero confirmed errors while keeping prose.
-  it("merging a single sample keeps its prose but confirms no errors", () => {
+  it("merging a single sample keeps its prose and its validator-grounded errors", () => {
     const merged = medianReview([{ ...errReview(["tense"]), reviewEn: "solo", cefr: "B2" }]);
-    expect(merged.errors).toEqual([]);
+    expect(merged.errors?.map((e) => e.type)).toEqual(["tense"]);
     expect(merged.reviewEn).toBe("solo");
     expect(merged.cefr).toBe("B2");
   });
