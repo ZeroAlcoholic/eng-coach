@@ -1,39 +1,63 @@
-// Minimal bottom sheet — the W5 home for anything that isn't the primary
-// action. One overlay, scrollable body, closes on backdrop tap, Esc, or ✕.
+// Minimal bottom sheet — the W5 home for anything that isn't the primary action.
+//
+// A native <dialog> opened with showModal(): the browser owns focus (Tab stays
+// inside, focus returns to the opener on close), Esc fires `cancel`, and the
+// page behind is inert — none of which the old div-with-role="dialog" did.
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 export function Sheet(props: { title: string; onClose: () => void; children: ReactNode }) {
-  const { onClose } = props;
-
-  // Esc closes (desktop nicety; harmless on touch).
+  const ref = useRef<HTMLDialogElement>(null);
+  // Parents pass a fresh arrow every render; reading it through a ref keeps the
+  // dialog open across re-renders instead of closing and re-opening (which would
+  // replay the animation and throw focus away).
+  const onCloseRef = useRef(props.onClose);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+    onCloseRef.current = props.onClose;
+  });
+
+  // Close the ELEMENT first, then tell React. The browser restores focus to the
+  // opener only when close() runs on a connected dialog; unmounting an open
+  // dialog drops focus on <body>.
+  const requestClose = () => {
+    const el = ref.current;
+    if (el?.open) el.close();
+    onCloseRef.current();
+  };
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.showModal();
+    // Esc → the dialog's `cancel` event; route it through the same close path.
+    const onCancel = (e: Event) => {
+      e.preventDefault();
+      requestClose();
     };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    // Backdrop tap = close: a click whose target is the dialog element itself
+    // landed on ::backdrop (children swallow their own clicks). Keyboard users
+    // have Esc and the ✕ button, so this is pointer-only on purpose.
+    const onBackdrop = (e: MouseEvent) => {
+      if (e.target === el) requestClose();
+    };
+    el.addEventListener("cancel", onCancel);
+    el.addEventListener("click", onBackdrop);
+    return () => {
+      el.removeEventListener("cancel", onCancel);
+      el.removeEventListener("click", onBackdrop);
+      if (el.open) el.close();
+    };
+  }, []);
 
   return (
-    // Backdrop tap = close. Keyboard users have Esc and the ✕ button, so the
-    // presentation role is honest here.
-    <div
-      className="sheet-backdrop"
-      role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="sheet" role="dialog" aria-modal="true" aria-label={props.title}>
-        <div className="sheet-head">
-          <b>{props.title}</b>
-          <button className="btn btn--ghost btn--sm" onClick={onClose}>
-            ✕ 關閉
-          </button>
-        </div>
-        <div className="sheet-body">{props.children}</div>
+    <dialog ref={ref} className="sheet" aria-label={props.title}>
+      <div className="sheet-head">
+        <b>{props.title}</b>
+        <button className="btn btn--ghost btn--sm" onClick={requestClose}>
+          ✕ 關閉
+        </button>
       </div>
-    </div>
+      <div className="sheet-body">{props.children}</div>
+    </dialog>
   );
 }

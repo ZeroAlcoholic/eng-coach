@@ -599,31 +599,34 @@ h1 {
   color: inherit;
 }
 
-/* ---- bottom sheet — the W5 home for secondary surfaces ---- */
-.sheet-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  background: #000000aa;
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-}
+/* ---- bottom sheet — the W5 home for secondary surfaces (native <dialog>) ---- */
 .sheet {
+  /* <dialog> defaults: reset, then place it as a bottom sheet */
+  position: fixed;
+  inset: auto 0 0 0;
+  margin: 0 auto;
+  padding: 0;
   width: 100%;
   max-width: var(--maxw);
   max-height: 86dvh;
-  display: flex;
+  display: none;
   flex-direction: column;
+  color: inherit;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-bottom: 0;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   box-shadow: var(--shadow);
 }
+.sheet[open] {
+  display: flex;
+}
+.sheet::backdrop {
+  background: #000000aa;
+  backdrop-filter: blur(2px);
+}
 @media (prefers-reduced-motion: no-preference) {
-  .sheet {
+  .sheet[open] {
     animation: rise 0.3s cubic-bezier(0.22, 0.61, 0.36, 1) both;
   }
 }
