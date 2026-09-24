@@ -207,6 +207,23 @@ pass criterion，完工時逐條判定，追加進 `docs/DEVICE_E2E.md`；例：
   才呼叫模型，結果連同搭配詞快取在 item 上並隨 LearningPack 走。
   快取出題會被驗證（必須含空格、不得含答案），答案的**每一次**出現都會被遮住。
 
+### Batch R — ✅ 2026-09-25 可靠性與學習效度（Phase A／B＋C，`docs/BLUEPRINT_2026-09-24.md`）
+- **A · Session 生命週期** ✅ `gemini-3.8-live`；單一 owner（`session.ts`）持有 transport／
+  audio／wake lock＋generation 計數；GoAway → 以 resumption handle 續接一次（15 秒逾時）；
+  「換你說」＝turnComplete **且** 播放清空；斷線保留逐字稿可「儲存這段」。
+- **B · 資料真實** ✅ `db.run` 於 tx commit 才 resolve；judge 回 `review | unavailable`，
+  樣本逐一驗證（subscore 1–6、cefr ∈ CEFR、錯誤例句須出現在學習者 turn、不接受發音），
+  CEFR 由 grammar／vocab／interaction 推，零有效樣本＝不寫數字＋可重試；finalize 以
+  `FinalizeLedger`＋claim 冪等；`planImport(unknown)` 全驗→確認→單 tx 寫入。
+- **C · 學習效度** ✅ Home 三讀數（定義見 ARCHITECTURE「Readouts」）皆可點回來源 session；
+  集尾一個焦點（阻礙意義 > 復發 > 未達 can-do）＋「再練 90 秒」微 session
+  （`kind:"micro"`，不進等級估計、無提醒）；Sheet 改原生 `<dialog>`。
+- **Screening**：`SCREEN=1 npx vitest run src/apps/coach/ai/review.screen.test.ts`
+  以 6 份合成逐字稿比較文字模型與 judge 取樣次數，結果寫入 `docs/SCREENING_<date>.md`，
+  用詞只有「晉級／淘汰」。預設值在 `kernel/overrides.ts`，⚙️ 可覆寫。
+- **仍 blocked（本機無麥克風）**：真機 12 分鐘不中斷、proactive audio 節奏、微 session、
+  恢復卡實測；解鎖條件不變＝一支 USB 麥克風。
+
 ## Deferred — needs a missing precondition
 - **Cross-scenario objective scheduler (interleaving across scenarios)** — needs a stable objective-identity / tagging scheme; objective free-text doesn't match across regenerated scenarios. Build C1's ledger first.
 - **Pitch-contour overlay & Gemini "spoken impression"** — phone-mic F0 is noisy (compare *shape* only, needs voiced-gating + smoothing); the LLM note is an *impression, not a score*. Experimental add-ons on top of D1, not core.

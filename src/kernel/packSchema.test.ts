@@ -94,6 +94,49 @@ describe("parsePack — one invalid record refuses the whole pack", () => {
   });
 });
 
+describe("parsePack — learning state survives the round-trip", () => {
+  it("keeps profile levels / history / error log / prefs, and the new session fields", () => {
+    const profile = {
+      language: "en",
+      level: "B1",
+      focus: ["articles"],
+      levels: { en: { grammar: 3.2, vocab: 3.4, fluency: 3, interaction: 3.5 } },
+      levelHistory: { en: [{ at: "2026-09-01T00:00:00.000Z", cefr: "B1", overall: 3.3 }] },
+      prefs: { slowSpeech: true },
+      errorLog: { en: { tense: { count: 2, lastAt: "2026-09-02T00:00:00.000Z", example: "I goed", correction: "I went" } } },
+    };
+    const s2 = {
+      ...session,
+      id: "s2",
+      review: undefined,
+      judgeUnavailable: "503",
+      aids: { suggestions: 1, translations: 0 },
+      finalize: { claimedAt: "2026-09-02T00:00:00.000Z", itemsSaved: true, reviewApplied: false, arcAdvanced: false },
+      kind: "micro",
+      focus: "tense",
+    };
+    const p = parsePack({ ...valid, arcs: [], profile, sessions: [session, s2], items: [{ ...item, uses: [{ sessionId: "s1", at: "2026-09-02T00:00:00.000Z" }] }] });
+    expect(p.profile).toEqual(profile);
+    expect(p.sessions[1]).toMatchObject({ judgeUnavailable: "503", aids: { suggestions: 1, translations: 0 }, kind: "micro", focus: "tense" });
+    expect(p.sessions[1].finalize).toEqual(s2.finalize);
+    expect(p.items[0].uses).toEqual([{ sessionId: "s1", at: "2026-09-02T00:00:00.000Z" }]);
+  });
+
+  it("a negative aid count is refused (it would fake「無提示」)", () => {
+    expect(() => parsePack({ ...valid, arcs: [], sessions: [{ ...session, aids: { suggestions: -1, translations: 0 } }] })).toThrow(/aids\.suggestions/);
+  });
+
+  it("judgeUnavailable is dropped when a review is present (the write paths keep them exclusive)", () => {
+    const p = parsePack({ ...valid, arcs: [], sessions: [{ ...session, judgeUnavailable: "stale" }] });
+    expect(p.sessions[0].judgeUnavailable).toBeUndefined();
+  });
+
+  it("plannedEpisodes is re-clamped to 2..6", () => {
+    expect(parsePack({ ...valid, arcs: [{ ...arc, plannedEpisodes: 99 }] }).arcs[0].plannedEpisodes).toBe(6);
+    expect(parsePack({ ...valid, arcs: [{ ...arc, plannedEpisodes: 0 }] }).arcs[0].plannedEpisodes).toBe(6);
+  });
+});
+
 describe("parsePack — older packs without newer fields still read", () => {
   it("accepts a pack with no objectives/arcs lists and a profile with no focus", () => {
     const old = { kind: "learning-pack", exportedAt: "2026-06-01T00:00:00.000Z", profile: { language: "ja", level: "A2" }, scenarios: [scenario], items: [{ ...item, srs: undefined }] };
@@ -118,8 +161,9 @@ describe("summariseImport — tells the user adds vs overwrites before writing",
       scenarios: new Set(["sc1"]),
       items: new Set(),
       sessions: new Set(),
+      objectives: new Set(),
       arcs: new Set(["arc1"]),
     });
-    expect(s).toEqual({ added: 2, overwritten: 2 });
+    expect(s).toEqual({ added: 2, overwritten: 2, replacesProfile: false });
   });
 });

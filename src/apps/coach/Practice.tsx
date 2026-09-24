@@ -220,6 +220,8 @@ export function Practice(props: {
       scenarioId: scenario.id,
       startedAt: startedAtRef.current,
       transcript: turnsRef.current,
+      aids: { ...aidsRef.current },
+      ...(microRef.current ? { kind: "micro" as const, focus: describeFocus(microRef.current) } : {}),
     };
   }
 
@@ -408,7 +410,10 @@ export function Practice(props: {
     }
     // Flush (not just cancel) the pending backup: if the save below fails, the
     // surviving draft must hold the FULL conversation, not one 1.2s short.
-    await putDraft(currentDraft()).catch(() => {});
+    const draftOk = await putDraft(currentDraft()).then(
+      () => true,
+      () => false,
+    );
     await session().stop(); // devices first, then the snapshot; no-op after a drop
     setStatus("saving");
 
@@ -439,10 +444,12 @@ export function Practice(props: {
       } else {
         setNotice(
           err instanceof PersistError
-            ? `儲存失敗 — 逐字稿暫存為草稿，回首頁可再「分析並儲存」：${msg}`
+            ? draftOk
+              ? `儲存失敗 — 逐字稿暫存為草稿，回首頁可再「分析並儲存」：${msg}`
+              : `儲存失敗，草稿也存不進去 — 請先複製下方逐字稿再離開：${msg}`
             : `已儲存，但分析失敗：${msg}`,
         );
-        setSummary({ kind: "done", items: 0, judge: { kind: "unavailable", reason: msg } });
+        setSummary(err instanceof PersistError ? { kind: "not-saved", reason: msg } : { kind: "done", items: 0, itemsFailed: true, judge: { kind: "unavailable", reason: msg } });
       }
     }
     setStatus("done");
@@ -613,11 +620,30 @@ function Recap(props: { outcome: FinalizeOutcome; scenarioId: string }) {
   switch (outcome.kind) {
     case "micro":
       return <b>已儲存這段加練</b>;
+    case "not-saved":
+      return (
+        <>
+          <b>這場沒有儲存</b>
+          <p className="muted" style={{ marginTop: 8 }}>
+            逐字稿還在草稿裡，回首頁可再「分析並儲存」。原因：{outcome.reason}
+          </p>
+        </>
+      );
     case "already":
       return (
         <>
           <b>這場已經分析並儲存過了</b>
           {outcome.review && <ReviewBody review={outcome.review} scenarioId={props.scenarioId} />}
+        </>
+      );
+    case "in-progress":
+      return (
+        <>
+          <b>逐字稿已儲存</b>
+          <p className="muted" style={{ marginTop: 8 }}>
+            這場正由另一個分頁分析中，或上次分析中斷（{new Date(outcome.claimedAt).toLocaleTimeString("zh-TW")}）。
+            十分鐘後可在首頁「練習紀錄」重試評量。
+          </p>
         </>
       );
     case "done":
@@ -635,13 +661,21 @@ function Recap(props: { outcome: FinalizeOutcome; scenarioId: string }) {
             <>
               <b>已儲存逐字稿</b>
               <p className="muted" style={{ marginTop: 8 }}>
-                評量未完成：{outcome.judge.reason}。等級與下次重點沒有更新；可在首頁「練習紀錄」重試評量。
+                評量未完成：{describeError(outcome.judge.reason)}。等級與下次重點沒有更新；可在首頁「練習紀錄」重試評量。
               </p>
             </>
           )}
           <p className="muted" style={{ marginTop: 8 }}>
-            已新增 {outcome.items} 個單字／語句到你的詞庫。
+            {outcome.itemsFailed
+              ? "這次沒能抽出單字／語句（下次在練習紀錄重試評量時會一起補）。"
+              : `已新增 ${outcome.items} 個單字／語句到你的詞庫。`}
           </p>
+          {outcome.story && !outcome.story.played && (
+            <p className="notice">故事線進度沒能記錄 — 「下一集」可能會重播這一集。</p>
+          )}
+          {outcome.story?.played && !outcome.story.advanced && (
+            <p className="muted">下一集還沒寫好；回首頁點「下一集」會再試一次。</p>
+          )}
         </>
       );
     default:

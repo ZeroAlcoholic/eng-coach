@@ -26,8 +26,8 @@ describe("judge validator — the recap claims only what the transcript can show
     expect(r.objectivesMet).toEqual([{ objective: "defend the budget", met: true }]);
   });
 
-  it("rejects a sample whose cefr is not a CEFR level", () => {
-    expect(() => parse({ ...good, cefr: "B7" }, "$")).toThrow(Invalid);
+  it("does not void a sample over the model's own cefr label (it is derived, not used)", () => {
+    expect(parse({ ...good, cefr: "B1+" }, "$").cefr).toBe("B2");
   });
 
   it("rejects a sample with a subscore outside 1–6 (or missing)", () => {
@@ -39,6 +39,15 @@ describe("judge validator — the recap claims only what the transcript can show
   it("drops an error whose example the learner never said (invented evidence)", () => {
     const r = parse(
       { ...good, errors: [{ type: "article", example: "I bought a apple", correction: "an apple" }] },
+      "$",
+    );
+    expect(r.errors).toEqual([]);
+  });
+
+  it("an example that appears only in a COACH turn is still invented evidence", () => {
+    const withCoach = reviewParser(["I goed home."]);
+    const r = withCoach(
+      { ...good, errors: [{ type: "tense", example: "I goed to the office", correction: "went" }] },
       "$",
     );
     expect(r.errors).toEqual([]);

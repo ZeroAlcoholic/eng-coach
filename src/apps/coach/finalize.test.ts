@@ -144,10 +144,72 @@ describe("finalizeSession — every result lands exactly once", () => {
       transcript: input.transcript,
       finalize: { claimedAt: "2026-09-24T23:55:00.000Z", itemsSaved: false, reviewApplied: false, arcAdvanced: false },
     }));
+    // NOTE: the in-memory updateSession is synchronous, so this pins the
+    // claimedAt rule, not IndexedDB atomicity (db.updateSession's single
+    // read-modify-write transaction carries that).
+    const out = await finalizeSession("k", input, m.deps);
+    expect(out).toEqual({ kind: "in-progress", claimedAt: "2026-09-24T23:55:00.000Z" });
+    expect(m.deps.judge).not.toHaveBeenCalled();
+    expect(m.deps.extractItems).not.toHaveBeenCalled();
+  });
+
+  it("a claim exactly 10 minutes old is stale and taken over", async () => {
+    const m = memory();
+    await m.deps.updateSession("s1", () => ({
+      id: "s1",
+      scenarioId: "sc1",
+      startedAt: input.startedAt,
+      transcript: input.transcript,
+      finalize: { claimedAt: "2026-09-24T23:50:00.000Z", itemsSaved: false, reviewApplied: false, arcAdvanced: false },
+    }));
+    expect((await finalizeSession("k", input, m.deps)).kind).toBe("done");
+  });
+
+  it("a reviewed record from before the ledger existed is left alone", async () => {
+    const m = memory();
+    await m.deps.updateSession("s1", () => ({
+      id: "s1",
+      scenarioId: "sc1",
+      startedAt: input.startedAt,
+      transcript: input.transcript,
+      review: review().kind === "review" ? (review() as { review: import("../../kernel/types").SessionReview }).review : undefined,
+    }));
     const out = await finalizeSession("k", input, m.deps);
     expect(out.kind).toBe("already");
     expect(m.deps.judge).not.toHaveBeenCalled();
-    expect(m.deps.extractItems).not.toHaveBeenCalled();
+  });
+
+  it("stores the aids record the readouts depend on", async () => {
+    const m = memory();
+    await finalizeSession("k", { ...input, aids: { suggestions: 2, translations: 0 } }, m.deps);
+    expect(m.sessions.get("s1")!.aids).toEqual({ suggestions: 2, translations: 0 });
+  });
+
+  it("a results-write failure keeps the review on the record, releases the claim, and a re-run folds once", async () => {
+    const m = memory();
+    let fail = true;
+    const realPut = m.deps.putProfile;
+    m.deps.putProfile = async (p) => {
+      if (fail) throw new Error("QuotaExceededError");
+      return realPut(p);
+    };
+    await expect(finalizeSession("k", input, m.deps)).rejects.toMatchObject({ name: "ResultsPersistError" });
+    const rec = m.sessions.get("s1")!;
+    expect(rec.review?.cefr).toBe("B1"); // the truth is on the record
+    expect(rec.finalize).toMatchObject({ reviewApplied: false });
+    expect(rec.finalize?.claimedAt).toBeUndefined(); // not「in progress」for ten minutes
+    fail = false;
+    const again = await finalizeSession("k", input, m.deps);
+    expect(again.kind).toBe("done");
+    expect(m.deps.judge).toHaveBeenCalledTimes(1); // stored review reused, not re-judged
+    expect(m.profile.levels?.en?.grammar).toBe(3); // folded exactly once
+    expect(m.ledger).toHaveLength(1);
+  });
+
+  it("records a use when the learner says an item taught in an earlier session", async () => {
+    const m = memory({ items: [{ ...item("taught", "s0"), text: "office" }] });
+    await finalizeSession("k", input, m.deps);
+    expect(m.items.find((i) => i.id === "taught")!.uses).toEqual([{ sessionId: "s1", at: "2026-09-25T00:00:00.000Z" }]);
   });
 
   it("a stale claim (tab killed mid-analysis) is taken over", async () => {
@@ -175,12 +237,29 @@ describe("finalizeSession — every result lands exactly once", () => {
     expect(m.items).toHaveLength(1);
   });
 
-  it("items extraction failing alone: review still applied, 0 items reported, retry saves items later", async () => {
+  it("items extraction failing alone: review applied, itemsFailed reported, a later run completes items without re-judging", async () => {
     const m = memory();
     (m.deps.extractItems as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("429"));
     const out = await finalizeSession("k", input, m.deps);
-    expect(out).toMatchObject({ kind: "done", items: 0, judge: { kind: "review" } });
+    expect(out).toMatchObject({ kind: "done", items: 0, itemsFailed: true, judge: { kind: "review" } });
     expect(m.sessions.get("s1")!.finalize).toMatchObject({ itemsSaved: false, reviewApplied: true });
+    // stale claim → a recovery run may complete the missing step
+    m.deps.now = () => "2026-09-25T00:20:00.000Z";
+    const again = await finalizeSession("k", input, m.deps);
+    expect(again).toMatchObject({ kind: "done", items: 1, itemsFailed: false });
+    expect(m.deps.judge).toHaveBeenCalledTimes(1); // stored review reused
+    expect(m.ledger).toHaveLength(1); // review not applied twice
+    expect(m.sessions.get("s1")!.finalize).toMatchObject({ itemsSaved: true, reviewApplied: true });
+  });
+
+  it("retryReview also saves the items a first run failed to extract", async () => {
+    const m = memory();
+    (m.deps.extractItems as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("429"));
+    await finalizeSession("k", input, m.deps);
+    expect(m.items).toHaveLength(0);
+    await retryReview("k", { session: m.sessions.get("s1")!, scenario, profile: input.profile }, m.deps);
+    expect(m.items).toHaveLength(1);
+    expect(m.deps.judge).toHaveBeenCalledTimes(1);
   });
 
   it("items already stored for this session (old run without ledger) are not duplicated", async () => {
@@ -231,6 +310,19 @@ describe("finalizeSession — an unavailable judge writes no numbers", () => {
     expect(m.sessions.get("s1")!.review).toBeUndefined();
   });
 
+  it("retryReview re-reads the record: a review that landed meanwhile is not folded again", async () => {
+    const m = memory();
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce(unavailable);
+    await finalizeSession("k", input, m.deps);
+    const stale = m.sessions.get("s1")!; // the row HistorySheet loaded
+    // another tab retried and succeeded in the meantime
+    await retryReview("k", { session: stale, scenario, profile: input.profile }, m.deps);
+    const foldsBefore = m.ledger.length;
+    await retryReview("k", { session: stale, scenario, profile: input.profile }, m.deps);
+    expect(m.ledger).toHaveLength(foldsBefore);
+    expect(m.deps.judge).toHaveBeenCalledTimes(2); // first run + one retry, not two retries
+  });
+
   it("retryReview later applies the review once and clears the reason", async () => {
     const m = memory();
     (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce(unavailable);
@@ -248,13 +340,14 @@ describe("finalizeSession — an unavailable judge writes no numbers", () => {
 });
 
 describe("finalizeSession — micro sessions", () => {
-  it("saves the transcript with kind micro and touches nothing else", async () => {
-    const m = memory();
+  it("saves the transcript with kind micro; no judge, no items, no level — but chunk uses are recorded", async () => {
+    const m = memory({ items: [{ ...item("taught", "s0"), text: "office" }] });
     const out = await finalizeSession("k", { ...input, sessionId: "m1", kind: "micro", focus: "past tense" }, m.deps);
     expect(out).toEqual({ kind: "micro" });
     expect(m.sessions.get("m1")).toMatchObject({ kind: "micro", focus: "past tense" });
     expect(m.deps.judge).not.toHaveBeenCalled();
     expect(m.deps.extractItems).not.toHaveBeenCalled();
     expect(m.profile.levels).toBeUndefined();
+    expect(m.items[0].uses).toEqual([{ sessionId: "m1", at: "2026-09-25T00:00:00.000Z" }]);
   });
 });

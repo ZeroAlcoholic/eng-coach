@@ -22,11 +22,17 @@ import { applyErrorsToProfile, applySessionToProfile } from "./progress";
 import { recordItemUses } from "./uses";
 
 export type FinalizeOutcome =
-  // This run did the analysis. `judge` says whether a review exists.
-  | { kind: "done"; items: number; judge: JudgeOutcome }
-  // Another run (an earlier finalize, or one in flight in another tab) owns this
-  // session; nothing was changed. `review` is whatever is already stored.
+  // This run did the analysis. `judge` says whether a review exists;
+  // `itemsFailed` means extraction threw (a later retryReview re-runs it).
+  | { kind: "done"; items: number; itemsFailed: boolean; judge: JudgeOutcome; story?: StoryOutcome }
+  // The LOCAL transcript write failed. Only Practice constructs this (from
+  // PersistError) so the recap can say so instead of「已儲存」.
+  | { kind: "not-saved"; reason: string }
+  // An earlier finalize completed this session; nothing was changed.
   | { kind: "already"; review?: SessionReview }
+  // Another runner claimed this session within the last 10 minutes and has not
+  // finished (or died). Nothing was changed; 練習紀錄 can retry once it is stale.
+  | { kind: "in-progress"; claimedAt: string }
   // A micro session: transcript saved, no judge, no items, no level fold.
   | { kind: "micro" };
 
@@ -54,9 +60,16 @@ export class ResultsPersistError extends Error {
   }
 }
 
+/** Whether the story-arc bookkeeping landed; a false here means「下一集」may
+ *  replay this episode, and the recap says so. */
+export interface StoryOutcome {
+  played: boolean;
+  advanced: boolean;
+}
+
 export interface FinalizeInput {
   scenario: Scenario;
-  profile: LearnerProfile; // only its `prefs` are trusted — the rest is re-read fresh
+  profile: Pick<LearnerProfile, "prefs">; // only prefs are trusted — the rest is re-read fresh
   sessionId: string;
   startedAt: string;
   transcript: TranscriptTurn[];
@@ -149,17 +162,23 @@ export async function finalizeSession(
   // re-runs this pipeline, which the claim below makes a no-op.
   await deps.clearDraft().catch(() => {});
 
-  if (input.kind === "micro") return { kind: "micro" };
+  if (input.kind === "micro") {
+    // A micro session is where taught chunks get produced: it counts for uses.
+    await recordItemUses(deps, sessionId, transcript, scenario.targetLanguage, now).catch(() => {});
+    return { kind: "micro" };
+  }
   if (!transcript.length) {
     await tick(deps, sessionId, { reviewApplied: true, itemsSaved: true });
-    return { kind: "done", items: 0, judge: { kind: "unavailable", reason: "沒有對話內容。" } };
+    return { kind: "done", items: 0, itemsFailed: false, judge: { kind: "unavailable", reason: "沒有對話內容。" } };
   }
 
   // 2. Claim. Exactly one runner proceeds past this line per session.
   const claimed = await claim(deps, sessionId, now);
   if (!claimed) {
     const stored = await deps.getSession(sessionId);
-    return { kind: "already", review: stored?.review };
+    const done = stored?.finalize ? stored.finalize.reviewApplied && stored.finalize.itemsSaved : !!stored?.review;
+    if (done || !stored?.finalize?.claimedAt) return { kind: "already", review: stored?.review };
+    return { kind: "in-progress", claimedAt: stored.finalize.claimedAt };
   }
   const ledger = { ...EMPTY_LEDGER, ...(claimed.finalize ?? {}) };
 
@@ -168,7 +187,9 @@ export async function finalizeSession(
     ledger.itemsSaved
       ? Promise.resolve<LearnedItem[]>([])
       : deps.extractItems({ scenario, sessionId, transcript }),
-    ledger.reviewApplied && claimed.review
+    // A review already on the record (stored before a fold that then failed) is
+    // reused, never re-judged: the record is the truth.
+    claimed.review
       ? Promise.resolve<JudgeOutcome>({ kind: "review", review: claimed.review, samples: 0 })
       : deps.judge({
           transcript,
@@ -182,7 +203,7 @@ export async function finalizeSession(
     judgeResult.status === "fulfilled"
       ? judgeResult.value
       : { kind: "unavailable", reason: describe(judgeResult.reason) };
-  const outcome: FinalizeOutcome = { kind: "done", items: items.length, judge };
+  const outcome: FinalizeOutcome = { kind: "done", items: items.length, itemsFailed: itemsResult.status === "rejected", judge };
 
   // 4. Apply, ticking the ledger after each step so a re-run skips what landed.
   try {
@@ -192,26 +213,34 @@ export async function finalizeSession(
     }
     if (!ledger.reviewApplied) {
       if (judge.kind === "review") {
+        // The record is the truth: store the review FIRST, then fold it into
+        // profile / scenario / ledger. A fold failure leaves the review visible
+        // and the step open, so a re-run folds once — never twice.
+        await tick(deps, sessionId, {}, (rec) => ({ ...rec, review: judge.review, judgeUnavailable: undefined }));
         await applyReview(deps, input, judge.review, now);
-        await tick(deps, sessionId, { reviewApplied: true }, (rec) => ({ ...rec, review: judge.review, judgeUnavailable: undefined }));
+        await tick(deps, sessionId, { reviewApplied: true });
       } else {
         await tick(deps, sessionId, {}, (rec) => ({ ...rec, judgeUnavailable: judge.reason }));
       }
     }
     // Chunk-use tracking is derived data: best-effort, after the load-bearing writes.
-    await recordItemUses(deps, sessionId, transcript, scenario.targetLanguage, now).catch(() => {});
+    await recordItemUses(deps, sessionId, transcript, scenario.targetLanguage, now).catch((e) =>
+      console.warn("item-use tracking failed", sessionId, e),
+    );
   } catch (err) {
     // Storage died mid-pipeline (e.g. quota). The analysis itself succeeded —
     // a plain throw would be reported as "analysis failed", which is false.
+    // Release the claim so recovery is not told「in progress」for ten minutes.
+    await tick(deps, sessionId, {}, (rec) => ({ ...rec, finalize: { ...EMPTY_LEDGER, ...rec.finalize, claimedAt: undefined } })).catch(() => {});
     throw new ResultsPersistError(err, outcome);
   }
 
   // 5. Story arc. Best-effort and AFTER the ResultsPersistError boundary: the
   //    recap, items and level are stored; a failed generation must leave the arc
-  //    byte-identical so「下一集」simply retries.
+  //    byte-identical so「下一集」simply retries. The outcome carries what landed.
   if (scenario.arc && !ledger.arcAdvanced) {
-    await advanceStory(deps, scenario, judge.kind === "review" ? judge.review : undefined);
-    await tick(deps, sessionId, { arcAdvanced: true }).catch(() => {});
+    outcome.story = await advanceStory(deps, scenario, judge.kind === "review" ? judge.review : undefined);
+    if (outcome.story.played) await tick(deps, sessionId, { arcAdvanced: true }).catch(() => {});
   }
   return outcome;
 }
@@ -221,10 +250,21 @@ export async function finalizeSession(
  *  because the user is asking for exactly this. */
 export async function retryReview(
   apiKey: string,
-  input: { session: SessionRecord; scenario: Scenario; profile: LearnerProfile },
+  input: { session: SessionRecord; scenario: Scenario; profile: Pick<LearnerProfile, "prefs"> },
   deps: FinalizeDeps = defaultDeps(apiKey),
 ): Promise<JudgeOutcome> {
-  const { session, scenario } = input;
+  const { scenario } = input;
+  // Re-read: the row on screen may predate a finalize that already landed (or
+  // another tab's retry), and folding a review twice would move the level twice.
+  const session = (await deps.getSession(input.session.id)) ?? input.session;
+  // Items that failed on the first run are the other half of「補跑」.
+  if (session.finalize && !session.finalize.itemsSaved && session.transcript.length) {
+    const items = await deps.extractItems({ scenario, sessionId: session.id, transcript: session.transcript }).catch(() => null);
+    if (items) {
+      await saveItemsOnce(deps, session.id, items);
+      await tick(deps, session.id, { itemsSaved: true });
+    }
+  }
   if (session.review) return { kind: "review", review: session.review, samples: 0 };
   const judge = await deps.judge({
     transcript: session.transcript,
@@ -234,8 +274,16 @@ export async function retryReview(
   });
   if (judge.kind === "review") {
     const now = deps.now();
+    await tick(deps, session.id, {}, (rec) => ({ ...rec, review: judge.review, judgeUnavailable: undefined }));
     await applyReview(deps, { scenario, profile: input.profile }, judge.review, now);
-    await tick(deps, session.id, { reviewApplied: true }, (rec) => ({ ...rec, review: judge.review, judgeUnavailable: undefined }));
+    await tick(deps, session.id, { reviewApplied: true });
+    // The first run advanced the story without a review; the can-do ledger is
+    // the one piece it could not record then.
+    if (scenario.arc) {
+      await recordArcCanDos(deps, scenario.arc.arcId, scenario.arc.episode, judge.review).catch((e) =>
+        console.warn("arc can-do ledger update failed", e),
+      );
+    }
   } else {
     await tick(deps, session.id, {}, (rec) => ({ ...rec, judgeUnavailable: judge.reason }));
   }
@@ -249,8 +297,9 @@ async function claim(deps: FinalizeDeps, sessionId: string, now: string): Promis
   await deps.updateSession(sessionId, (rec) => {
     if (!rec) return undefined;
     const ledger = rec.finalize;
-    // A record from before the ledger existed with a review = fully done.
-    if (ledger?.reviewApplied || (!ledger && rec.review)) return undefined;
+    // Done = review applied AND items saved; a record from before the ledger
+    // existed with a review counts as done. Otherwise a re-run may complete it.
+    if ((ledger?.reviewApplied && ledger.itemsSaved) || (!ledger && rec.review)) return undefined;
     if (ledger?.claimedAt && Date.parse(now) - Date.parse(ledger.claimedAt) < CLAIM_TTL_MS) return undefined;
     taken = { ...rec, finalize: { ...EMPTY_LEDGER, ...ledger, claimedAt: now } };
     return taken;
@@ -304,19 +353,30 @@ async function applyReview(
     .catch((e) => console.warn("objective ledger update failed", e));
 }
 
-async function advanceStory(deps: FinalizeDeps, scenario: Scenario, review: SessionReview | undefined): Promise<void> {
+async function advanceStory(deps: FinalizeDeps, scenario: Scenario, review: SessionReview | undefined): Promise<StoryOutcome> {
   const { arcId, episode } = scenario.arc!;
   // ORDER MATTERS, each step with its own catch. Marking the episode played is
   // the one authoritative fact; if a derived write threw first and took it
   // along,「▶ 下一集」would replay the episode just finished.
-  await deps.arc
+  const played = await deps.arc
     .markEpisodePlayed(arcId, episode, deps.now())
-    .catch((e) => console.warn("arc: marking the episode played failed — it may replay", e));
+    .then(() => true)
+    .catch((e) => {
+      console.warn("arc: marking the episode played failed — it may replay", e);
+      return false;
+    });
   if (review) {
     await recordArcCanDos(deps, arcId, episode, review).catch((e) => console.warn("arc can-do ledger update failed", e));
   }
   // Genuinely retryable: a failed generation leaves the arc untouched.
-  await deps.arc.advance(arcId).catch((e) => console.warn("next episode not written yet (retried on 下一集)", e));
+  const advanced = await deps.arc
+    .advance(arcId)
+    .then(() => true)
+    .catch((e) => {
+      console.warn("next episode not written yet (retried on 下一集)", e);
+      return false;
+    });
+  return { played, advanced };
 }
 
 /**

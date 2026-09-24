@@ -87,16 +87,29 @@ export interface ImportPlan {
 }
 
 export async function planImport(input: unknown): Promise<ImportPlan> {
-  const [scenarios, items, sessions, arcs] = await Promise.all([listScenarios(), listItems(), listSessions(), listArcs()]);
+  const parsed = await parseAgainstStore(input);
+  // Decide the arc merge NOW, so the summary counts only arcs that will change.
+  const arcs = await Promise.all(parsed.pack.arcs.map(keepFurtherAlong));
+  const pack: ParsedPack = { ...parsed.pack, arcs: arcs.filter((a, i) => a !== parsed.existingArcs.get(parsed.pack.arcs[i].id)) };
+  return { pack, summary: summariseImport(pack, parsed.known) };
+}
+
+async function parseAgainstStore(input: unknown) {
+  const [scenarios, items, sessions, objectives, arcs] = await Promise.all([
+    listScenarios(),
+    listItems(),
+    listSessions(),
+    listObjectives(),
+    listArcs(),
+  ]);
   const ids = <T extends { id: string }>(xs: T[]) => new Set(xs.map((x) => x.id));
-  const known = { scenarios: ids(scenarios), items: ids(items), sessions: ids(sessions), arcs: ids(arcs) };
+  const known = { scenarios: ids(scenarios), items: ids(items), sessions: ids(sessions), objectives: ids(objectives), arcs: ids(arcs) };
   const pack = parsePack(input, known.scenarios);
-  return { pack, summary: summariseImport(pack, known) };
+  return { pack, known, existingArcs: new Map(arcs.map((a) => [a.id, a])) };
 }
 
 export async function commitImport(plan: ImportPlan): Promise<void> {
   const { pack } = plan;
-  const arcs = await Promise.all(pack.arcs.map(keepFurtherAlong));
   await importAll({
     // Merge over the defaults: a profile missing optional maps would otherwise
     // break level maths app-wide (getProfile only falls back when the row is ABSENT).
@@ -105,7 +118,7 @@ export async function commitImport(plan: ImportPlan): Promise<void> {
     items: pack.items,
     sessions: pack.sessions,
     objectives: pack.objectives,
-    arcs,
+    arcs: pack.arcs,
   });
 }
 

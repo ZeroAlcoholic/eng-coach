@@ -39,9 +39,17 @@ export async function generateJson<T>(
     contents: prompt,
     config: { responseMimeType: "application/json", responseSchema: schema },
   });
+  const text = res.text ?? "";
+  if (!text) {
+    // Empty text has a reason worth showing: a safety block or a truncated
+    // candidate is something the user can act on; "not JSON" is not.
+    const block = res.promptFeedback?.blockReason;
+    const finish = res.candidates?.[0]?.finishReason;
+    throw new Invalid("$", block ? `模型拒絕回應（${block}）` : finish ? `模型沒有回傳內容（${finish}）` : "模型沒有回傳內容");
+  }
   let raw: unknown;
   try {
-    raw = JSON.parse(res.text ?? "");
+    raw = JSON.parse(text);
   } catch {
     throw new Invalid("$", "model response was not JSON");
   }

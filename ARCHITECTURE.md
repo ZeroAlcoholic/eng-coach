@@ -21,14 +21,16 @@ flowchart TB
     Practice["Practice · UI only · recap"]
     Session["session.ts · PracticeSession · owns transport + audio + wake lock + turn cue"]
     Prompt["prompt.ts · composeSystemInstruction"]
-    AI["ai.ts · generateScenario / summariseSession / extractLearnedItems"]
+    AI["ai/ · one file per capability · prompt + schema + validator"]
+    Readouts["readouts.ts · focus.ts · uses.ts · zero-API progress"]
     Content["voices.ts · frames.ts · defaults.ts"]
   end
 
   subgraph Kernel["Kernel · src/kernel · shared, no UI"]
     Types["types.ts · data contracts"]
-    DB["db.ts"]
-    Pack["pack.ts · LearningPack + CSV"]
+    DB["db.ts · resolves on tx commit"]
+    Pack["pack.ts + packSchema.ts · LearningPack validated whole, written in one tx"]
+    Validate["validate.ts · narrowing primitives (no `as T`)"]
     Key["apikey.ts"]
   end
 
@@ -41,13 +43,13 @@ flowchart TB
 
   subgraph Ext["Google · only external dependency"]
     Live["Gemini Live API · voice · gemini-3.8-live (⚙️ override → any name)"]
-    Flash["gemini-3.5-flash · text"]
+    Flash["text model · gemini-3.5-flash (⚙️ override)"]
   end
 
   C --> Home --> Practice
   Practice --> Prompt & AI & Session
   Session --> Audio & Direct
-  Home --> AI & Content
+  Home --> AI & Content & Readouts
   Coach --> Kernel
   DB --> IDB
   Key --> LS
@@ -138,14 +140,16 @@ flowchart TB
   end
   Scen --> Prompt["composeSystemInstruction<br/>+ progressNote + level + scaffold"] --> GLD
 
-  subgraph Scoring["End-of-session scoring · gemini-3.5-flash"]
-    Judge["summariseSession<br/><b>LLM-as-rubric judge</b>"]
-    Extract["extractLearnedItems"]
+  subgraph Scoring["End-of-session scoring · text model"]
+    Judge["summariseSession<br/><b>LLM-as-rubric judge</b> × N samples"]
+    Val["reviewParser<br/>subscores 1–6 · cefr ∈ CEFR · error example ⊂ learner turns · no pronunciation"]
+    Extract["extractLearnedItems + parseRawItems"]
   end
-  TR --> Judge
+  TR --> Judge --> Val
   TR --> Extract
-  Judge --> Review["SessionReview<br/>CEFR + subscores 1–6<br/>(grammar/vocab/fluency/interaction)<br/>+ wins / fixes + objectivesMet<br/>+ progressNote"]
-  Extract --> Items[("LearnedItem(s)<br/>SRS / Anki-ready")]
+  Val -->|"≥1 valid sample · median"| Review["SessionReview<br/>CEFR derived from grammar/vocab/interaction<br/>+ wins / fixes + objectivesMet + errors<br/>+ progressNote"]
+  Val -->|"0 valid samples"| Unavail["judgeUnavailable(reason)<br/>transcript kept · no numbers · retry in 練習紀錄"]
+  Extract --> Items[("LearnedItem(s)<br/>SRS / Anki-ready · uses[]")]
 
   subgraph Store["IndexedDB · local-first"]
     Sess[("SessionRecord + review")]
@@ -155,7 +159,9 @@ flowchart TB
   end
   TR --> Sess
   Review --> Sess
+  Unavail --> Sess
   Review -->|"progressNote · feedback loop"| Scen
+  Sess -->|"readouts.ts · zero API"| Read["Home readouts<br/>unaided can-do · chunk use · error recurrence<br/>each → source sessions"]
 
   subgraph Out["Outputs"]
     CSV["Items → CSV (Anki)"]
@@ -166,23 +172,64 @@ flowchart TB
 ```
 
 ### Scoring mechanism (the "judge")
-At session end, the stored transcript is sent **once** to `gemini-3.5-flash` as an
-**LLM-as-rubric judge** (`summariseSession`):
+At session end the transcript is sent to the text model (`kernel/overrides.ts`:
+`textModel()`, default `gemini-3.5-flash`) **N times** (`judgeSamples()`, default 3)
+as an **LLM-as-rubric judge** (`ai/review.ts`). Every sample passes `reviewParser`
+or is discarded:
 
-- **CEFR** — an honest overall estimate of *this* conversation.
-- **Per-skill subscores** — integers **1–6 (A1…C2)** for grammar / vocab /
-  fluency / interaction (numeric so a running level estimate can be derived).
-- **objectivesMet** — each of the scenario's own objectives graded met/not from
-  the learner's actual speech.
-- **wins / fixes** — what went well, and the top items to fix *with the natural
-  correction*.
-- **progressNote** — concrete points to target next time; **fed back** into the
-  next session's prompt (the feedback loop above), so coaching compounds.
+- **subscores** — integers **1–6 (A1…C2)** for grammar / vocab / fluency /
+  interaction; a float or an out-of-range value voids the sample.
+- **cefr** — the model's label must be a CEFR level, but the stored **CEFR is
+  derived** from grammar / vocab / interaction (fluency is mostly inaudible in a
+  text transcript, so it does not drive the level).
+- **errors** — a closed set of types (`pronunciation` is never accepted: text
+  cannot evidence it), and each `example` must be a substring of a learner turn;
+  otherwise that error is dropped. Types must survive a majority vote across
+  samples (`progress.voteErrors`).
+- **objectivesMet / wins / fixes / progressNote** — shape-checked; progressNote is
+  **fed back** into the next session's prompt (the feedback loop above).
 
-A second cheap call (`extractLearnedItems`) turns the transcript into
-`LearnedItem`s (vocab/phrase/grammar), the interop unit other tools/export consume.
+Surviving samples are medianed (`medianReview`). **Zero surviving samples**, or a
+transcript in which the learner never spoke, yields `JudgeOutcome.unavailable`:
+the session is stored with its transcript and `judgeUnavailable(reason)`, the
+level / error tally / progress note are **not** touched, and 練習紀錄 offers
+「重試評量」(`finalize.retryReview`). The target level is never used as a score.
+
+### Finalize (`finalize.ts`) — every result exactly once
+Order: transcript saved → draft cleared → **claim** (a `FinalizeLedger` on the
+session; a second runner within 10 minutes gets `already`) → items + judge run
+independently (`allSettled`) → each result applied and **ticked** on the ledger
+(`itemsSaved`, `reviewApplied`, `arcAdvanced`), so a re-run (draft recovery,
+another tab, a retry) applies only what is missing. Items are deduped by
+`sourceSessionId`; the profile is re-read before the level fold so another
+tab's change survives; the story arc advances after the results boundary.
+Everything the pipeline touches is injected (`FinalizeDeps`) and tested in memory.
+
+### Readouts (`readouts.ts`) — zero API, traceable
+| readout | numerator / denominator | source sessions |
+|---|---|---|
+| 無提示做到 | met verdicts / all verdicts, in the last 10 judged sessions whose `aids` record is zero (sessions without an aids record are excluded, not assumed unaided) | those sessions |
+| 教過的用出來 | items with ≥1 `uses` entry / items taught before the latest session of the language (`uses.ts`: item text appears in a later learner turn; under-counts by design) | the sessions in `uses` |
+| 錯誤復發 | error types seen in ≥2 sessions / types seen, last 10 judged sessions (lower is better) | the sessions those types recurred in |
+
+A readout is `null` (not shown) when its denominator is empty. Trend compares the
+recent half of the window with the earlier half. Tapping a line opens 練習紀錄
+filtered to its sources.
+
+### Focus and micro session (`focus.ts`)
+The recap shows **one** focus: a meaning-blocking error (word choice / order,
+particle, tense) > an error recurring in ≥2 sessions > an unmet can-do.
+「再練 90 秒」restarts the same scenario with a drill-only instruction and
+finalizes as `kind:"micro"`: transcript saved (it counts for chunk use), no judge,
+no items, no level fold, no reminder anywhere.
+
+### Import (`pack.ts` + `packSchema.ts`)
+`planImport(unknown)` rebuilds every record from narrowed fields — one invalid
+record refuses the whole file with its path (illegal enum, wrong transcript shape,
+an arc episode pointing at a scenario in neither pack nor store, unsupported
+version) — and reports adds vs overwrites; after the user confirms,
+`commitImport` writes everything in **one** cross-store transaction.
 
 > Honest scope: speaking-CEFR from a transcript is an *estimate*, treated as
-> holistic guidance, not a calibrated grade. No server-side acoustic scoring.
-> Planned hardening (see ROADMAP.md): self-consistency (median of samples),
-> per-skill EWMA level state, and a deterministic lexical second opinion.
+> holistic guidance, not a calibrated grade. No acoustic scoring; pronunciation
+> feedback lives in the live coach turn, not in the judge.

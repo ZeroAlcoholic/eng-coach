@@ -268,6 +268,12 @@ export interface DraftSession {
   scenarioId: string;
   startedAt: string; // ISO
   transcript: TranscriptTurn[];
+  // Carried so a recovered draft finalizes the way the live session would have:
+  // a 90-second micro session must not be judged as a full one, and its aids
+  // still count.
+  kind?: "micro";
+  focus?: string;
+  aids?: SessionAids;
 }
 
 /**

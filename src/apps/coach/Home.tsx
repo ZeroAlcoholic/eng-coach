@@ -19,7 +19,7 @@ import {
   type SessionRecord,
   type TargetLanguage,
 } from "../../kernel/types";
-import { clearDraft, deleteScenario, putScenario, putSession } from "../../kernel/db";
+import { clearDraft, deleteScenario, putScenario, updateSession } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
 import {
   DEFAULT_LIVE_MODEL,
@@ -251,8 +251,9 @@ export function Home(props: {
         throw new Error("這個檔案不是 JSON。");
       }
       const plan = await planImport(json);
-      const { added, overwritten } = plan.summary;
-      if (!window.confirm(`匯入將新增 ${added} 筆、覆蓋 ${overwritten} 筆現有資料。要繼續嗎？`)) {
+      const { added, overwritten, replacesProfile } = plan.summary;
+      const profileNote = replacesProfile ? "並取代學習者設定（等級／錯誤紀錄／偏好）。" : "";
+      if (!window.confirm(`匯入將新增 ${added} 筆、覆蓋 ${overwritten} 筆現有資料${profileNote ? "，" + profileNote : "。"}要繼續嗎？`)) {
         setBusy("");
         return;
       }
@@ -309,17 +310,34 @@ export function Home(props: {
           sessionId: draft.id,
           startedAt: draft.startedAt,
           transcript: draft.transcript,
+          aids: draft.aids,
+          kind: draft.kind,
+          focus: draft.focus,
         });
         setBusy(describeOutcome(out, "已救回上次練習"));
       } else {
-        await putSession({
-          id: draft.id,
-          scenarioId: draft.scenarioId,
-          startedAt: draft.startedAt,
-          transcript: draft.transcript,
+        // Never overwrite a record a completed finalize already wrote (a draft
+        // can outlive its session when clearDraft failed): keep what exists.
+        let existed = false;
+        await updateSession(draft.id, (existing) => {
+          existed = !!existing;
+          return (
+            existing ?? {
+              id: draft.id,
+              scenarioId: draft.scenarioId,
+              startedAt: draft.startedAt,
+              transcript: draft.transcript,
+              ...(draft.aids ? { aids: draft.aids } : {}),
+              ...(draft.kind ? { kind: draft.kind, focus: draft.focus } : {}),
+            }
+          );
         });
-        await clearDraft();
-        setBusy(`已儲存逐字稿（${sc ? "未設定金鑰" : "原情境已刪除"}，未分析）。`);
+        try {
+          await clearDraft();
+          setBusy(existed ? "這場先前已經儲存過了。" : `已儲存逐字稿（${sc ? "未設定金鑰" : "原情境已刪除"}，未分析）。`);
+        } catch (e) {
+          setBusy(`已儲存逐字稿，但草稿清不掉：${describeError(e)}`);
+        }
       }
     } catch (err) {
       const msg = describeError(err);
@@ -339,7 +357,11 @@ export function Home(props: {
   }
 
   async function discardDraft() {
-    await clearDraft().catch(() => {});
+    try {
+      await clearDraft();
+    } catch (e) {
+      setBusy(`無法捨棄草稿：${describeError(e)}`);
+    }
     props.onChanged();
   }
 
@@ -759,9 +781,13 @@ function ReadoutLine(props: { label: string; readout: Readout; onOpen: (ids: str
   if (readout.value === null) return null;
   const pct = Math.round(readout.value * 100);
   const mark = readout.trend ? TREND_MARK[readout.trend] : "";
+  // An arrow is good or bad depending on the readout: 錯誤復發 falling is progress.
+  const improving = readout.trend === (readout.betterWhen === "high" ? "up" : "down");
+  const worsening = readout.trend === (readout.betterWhen === "high" ? "down" : "up");
   return (
     <button type="button" className="statbtn" onClick={() => props.onOpen(readout.sourceSessionIds)}>
-      {props.label} <b>{pct}%</b> {mark}
+      {props.label} <b>{pct}%</b>{" "}
+      <span style={{ color: improving ? "var(--primary)" : worsening ? "var(--warn)" : undefined }}>{mark}</span>
       <span className="muted">（{readout.n}）</span>
     </button>
   );
@@ -989,16 +1015,23 @@ function describeOutcome(out: FinalizeOutcome, lead: string): string {
   switch (out.kind) {
     case "micro":
       return `${lead}：已儲存加練逐字稿。`;
+    case "not-saved":
+      return `沒有儲存：${out.reason}`;
     case "already":
       return "這場先前已經分析並儲存過了。";
+    case "in-progress":
+      return `這場正由另一個分頁分析中，或上次分析在 ${new Date(out.claimedAt).toLocaleTimeString("zh-TW")} 中斷；十分鐘後可在練習紀錄重試評量。`;
     case "done":
       return out.judge.kind === "review"
-        ? `${lead}：CEFR ${out.judge.review.cefr}，新增 ${out.items} 個詞彙。`
-        : `${lead}：逐字稿已存、新增 ${out.items} 個詞彙；評量未完成（${out.judge.reason}），可在練習紀錄重試。`;
+        ? `${lead}：CEFR ${out.judge.review.cefr}，${itemsText(out)}。`
+        : `${lead}：逐字稿已存、${itemsText(out)}；評量未完成（${describeError(out.judge.reason)}），可在練習紀錄重試。`;
     default:
       return assertNever(out);
   }
 }
+
+const itemsText = (out: { items: number; itemsFailed: boolean }) =>
+  out.itemsFailed ? "抽詞失敗（重試評量時補）" : `新增 ${out.items} 個詞彙`;
 
 function assertNever(x: never): never {
   throw new Error(`unhandled outcome: ${JSON.stringify(x)}`);

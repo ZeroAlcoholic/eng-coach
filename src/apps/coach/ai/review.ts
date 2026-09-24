@@ -13,7 +13,7 @@
 import { Type } from "@google/genai";
 
 import { judgeSamples } from "../../../kernel/overrides";
-import { CEFR_LEVELS, ERROR_TYPES } from "../../../kernel/types";
+import { ERROR_TYPES } from "../../../kernel/types";
 import type { CEFRLevel, ErrorType, SessionReview, TranscriptTurn } from "../../../kernel/types";
 import {
   arrayKeeping,
@@ -31,7 +31,7 @@ import {
 import { medianReview, numToCefr } from "../progress";
 import { generateJson, transcriptText, type GenerateOptions } from "./client";
 
-const REVIEW_SCHEMA = {
+export const REVIEW_SCHEMA = {
   type: Type.OBJECT,
   properties: {
     cefr: { type: Type.STRING },
@@ -113,10 +113,9 @@ export function reviewParser(learnerTurns: string[]): Parser<SessionReview> {
       fluency: field(s, "fluency", score, `${path}.subscores`),
       interaction: field(s, "interaction", score, `${path}.subscores`),
     };
-    // Sanity-check the model's own label, then DERIVE the headline from the
-    // three skills a transcript can show. Fluency (pace, hesitation) is mostly
-    // inaudible in text, so it does not drive the level.
-    field(r, "cefr", enumOf(CEFR_LEVELS as readonly CEFRLevel[]), path);
+    // The headline is DERIVED from the three skills a transcript can show —
+    // fluency (pace, hesitation) is mostly inaudible in text. The model's own
+    // `cefr` label is not used, so a "B1+" or "A2/B1" must not void the sample.
     const cefr = numToCefr((subscores.grammar + subscores.vocab + subscores.interaction) / 3);
     const list = (key: string) => field(r, key, optional(arrayKeeping(nonEmptyString)), path);
     const errors = field(r, "errors", optional(arrayKeeping(parseError)), path);

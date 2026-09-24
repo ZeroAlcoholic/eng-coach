@@ -248,19 +248,22 @@ const parseSession: Parser<SessionRecord> = (v, path) => {
   const r = record(v, path);
   const ledger = field(r, "finalize", optional(record), path);
   const aids = field(r, "aids", optional(record), path);
+  const review = field(r, "review", optional(parseStoredReview), path);
+  const count = integerIn(0, Number.MAX_SAFE_INTEGER); // a negative aid count would fake「無提示」
   return compact({
     id: field(r, "id", nonEmptyString, path),
     scenarioId: field(r, "scenarioId", nonEmptyString, path),
     startedAt: field(r, "startedAt", isoDate, path),
     transcript: field(r, "transcript", arrayOf(parseTurn), path),
-    review: field(r, "review", optional(parseStoredReview), path),
-    judgeUnavailable: field(r, "judgeUnavailable", optStr, path),
+    review,
+    // Mutually exclusive on every write path; keep the stored record that way.
+    judgeUnavailable: review ? undefined : field(r, "judgeUnavailable", optStr, path),
     kind: field(r, "kind", optional(enumOf(["micro"] as const)), path),
     focus: field(r, "focus", optStr, path),
     aids: aids
       ? {
-          suggestions: field(aids, "suggestions", number, `${path}.aids`),
-          translations: field(aids, "translations", number, `${path}.aids`),
+          suggestions: field(aids, "suggestions", count, `${path}.aids`),
+          translations: field(aids, "translations", count, `${path}.aids`),
         }
       : undefined,
     finalize: ledger
@@ -383,11 +386,18 @@ export function parsePack(input: unknown, knownScenarioIds: ReadonlySet<string> 
 export interface ImportSummary {
   added: number;
   overwritten: number;
+  replacesProfile: boolean; // the pack carries a profile, which replaces the local one wholesale
 }
 
 export function summariseImport(
   pack: ParsedPack,
-  existing: { scenarios: ReadonlySet<string>; items: ReadonlySet<string>; sessions: ReadonlySet<string>; arcs: ReadonlySet<string> },
+  existing: {
+    scenarios: ReadonlySet<string>;
+    items: ReadonlySet<string>;
+    sessions: ReadonlySet<string>;
+    objectives: ReadonlySet<string>;
+    arcs: ReadonlySet<string>;
+  },
 ): ImportSummary {
   let added = 0;
   let overwritten = 0;
@@ -397,6 +407,7 @@ export function summariseImport(
   count(pack.scenarios.map((s) => s.id), existing.scenarios);
   count(pack.items.map((s) => s.id), existing.items);
   count(pack.sessions.map((s) => s.id), existing.sessions);
+  count(pack.objectives.map((s) => s.id), existing.objectives);
   count(pack.arcs.map((s) => s.id), existing.arcs);
-  return { added, overwritten };
+  return { added, overwritten, replacesProfile: !!pack.profile };
 }

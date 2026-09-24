@@ -89,6 +89,14 @@ describe("computeReadouts — hand-computed fixtures", () => {
     expect(r.unaidedCanDo.sourceSessionIds).not.toContain("micro");
   });
 
+  it("a session whose scenario was deleted is excluded (its language is unknowable) rather than guessed", () => {
+    const zero = { suggestions: 0, translations: 0 };
+    const kept = session("kept", 1, { review: review([true]), aids: zero });
+    const orphan = session("orphan", 2, { review: review([false, false]), aids: zero, scenarioId: "gone" });
+    const r = computeReadouts({ sessions: [kept, orphan], items: [], scenarios, language: "en" });
+    expect(r.unaidedCanDo).toMatchObject({ value: 1, n: 1, sourceSessionIds: ["kept"] });
+  });
+
   it("chunk use: only items taught before the latest session count; used ones point at the sessions they were used in", () => {
     const item = (id: string, firstSeenAt: string, uses?: LearnedItem["uses"]): LearnedItem => ({
       id,

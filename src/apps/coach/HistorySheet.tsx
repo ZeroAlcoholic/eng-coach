@@ -35,7 +35,7 @@ export function HistorySheet(props: {
   const only = props.onlyIds && !showAll ? new Set(props.onlyIds) : null;
   // "error" is its own state: rendering a load failure as「還沒有練習紀錄」
   // would read as data loss — the scariest possible lie in a local-first app.
-  const [sessions, setSessions] = useState<SessionRecord[] | null | "error">(null);
+  const [sessions, setSessions] = useState<SessionRecord[] | null | { error: string }>(null);
   const [open, setOpen] = useState<string | null>(null); // expanded session id
   const [showTx, setShowTx] = useState<string | null>(null); // transcript shown for id
   const [retrying, setRetrying] = useState<string | null>(null); // session id being re-judged
@@ -77,7 +77,7 @@ export function HistorySheet(props: {
       return acc.length < PAGE;
     })
       .then(() => setSessions(acc))
-      .catch(() => setSessions("error"));
+      .catch((e) => setSessions({ error: describeError(e) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -96,7 +96,9 @@ export function HistorySheet(props: {
         </p>
       )}
       {sessions === null && <p className="muted">載入中…</p>}
-      {sessions === "error" && <p className="notice">⚠ 紀錄載入失敗 — 資料還在，請關閉後再試。</p>}
+      {sessions !== null && !Array.isArray(sessions) && (
+        <p className="notice">⚠ 紀錄載入失敗（{sessions.error}）— 資料還在，請關閉後再試。</p>
+      )}
       {Array.isArray(sessions) && mine.length === 0 && <p className="muted">還沒有練習紀錄。</p>}
       {mine.map((s) => {
         const sc = titleOf(s);
@@ -147,7 +149,7 @@ export function HistorySheet(props: {
                     {s.kind === "micro"
                       ? "（加練片段，只有逐字稿）"
                       : s.judgeUnavailable
-                        ? `評量未完成：${s.judgeUnavailable}`
+                        ? `評量未完成：${describeError(s.judgeUnavailable)}`
                         : "（這場沒有分析結果，只有逐字稿）"}
                   </p>
                 )}
