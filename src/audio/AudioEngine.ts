@@ -10,6 +10,7 @@
 // in pcm.ts and is unit-tested. Real audio is verified in the Field car test.
 
 import { float32ToPcm16, pcm16ToFloat32, resampleLinear } from "./pcm";
+import { PlaybackTracker } from "./playbackTracker";
 
 const MIC_CONSTRAINTS: MediaStreamConstraints = {
   audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -36,6 +37,17 @@ export interface AudioEngineOptions {
   // E2 — throttled RMS of the captured mic frames, 0..1. This is LOUDNESS, not
   // stress and not a score; its honest use is "is the mic hearing me at all".
   onLevel?: (rms: number) => void;
+  // The last scheduled coach chunk finished playing on its own (not flushed).
+  // The session owner gates「換你說」on this, not on the protocol's turnComplete.
+  onDrained?: () => void;
+}
+
+/** `start()` was overtaken by `stop()`; the resources it held are released. */
+export class StartCancelled extends Error {
+  constructor() {
+    super("audio start cancelled by stop");
+    this.name = "StartCancelled";
+  }
 }
 
 export class AudioEngine {
@@ -45,9 +57,11 @@ export class AudioEngine {
   private source: MediaStreamAudioSourceNode | null = null;
   private playHead = 0;
   // Scheduled-but-not-yet-finished playback nodes. Tracked so barge-in can truly
-  // silence the assistant — resetting playHead alone leaves already-started
-  // BufferSources audible.
-  private scheduled: AudioBufferSourceNode[] = [];
+  // silence the assistant (resetting playHead alone leaves already-started
+  // BufferSources audible) and so the owner learns when playback drains.
+  private readonly scheduled = new PlaybackTracker<AudioBufferSourceNode>(() =>
+    this.opts.onDrained?.(),
+  );
   private rate = 1; // playback speed (W4 slow-speech toggle); <1 = slower
   // D1 — the coach's voice for shadowing. `capturing` accumulates the turn that
   // is playing right now; it is promoted to `lastTurn` only when the turn ENDS
@@ -68,21 +82,45 @@ export class AudioEngine {
     this.rate = rate;
   }
 
-  /** Must be called from a user gesture (autoplay policy). */
+  /** Must be called from a user gesture (autoplay policy).
+   *
+   *  Three acquisitions in order: AudioContext, mic stream, worklet module. A
+   *  failure at any step releases what the earlier steps acquired — otherwise a
+   *  denied mic leaves a running AudioContext behind, and a worklet 404 leaves a
+   *  live mic track (red indicator on) that nothing owns. */
   async start(): Promise<void> {
-    this.ctx = new AudioContext();
-    await this.ctx.resume();
-    this.playHead = this.ctx.currentTime;
+    const ctx = new AudioContext();
+    this.ctx = ctx;
+    // `stop()` may run between any two awaits below (the learner tapped Stop
+    // while the permission prompt was up). It nulls `this.ctx`, so each step
+    // re-checks identity and releases what IT just acquired before bailing.
+    const cancelled = () => this.ctx !== ctx;
+    let stream: MediaStream | null = null;
+    try {
+      await ctx.resume();
+      if (cancelled()) throw new StartCancelled();
+      this.playHead = ctx.currentTime;
 
-    this.stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
-    // Base-relative (NOT "/capture-worklet.js") so it resolves under a project
-    // subpath like https://user.github.io/<repo>/ — an absolute path would 404
-    // there and the mic would never start.
-    await this.ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}capture-worklet.js`);
-    this.source = this.ctx.createMediaStreamSource(this.stream);
-    this.workletNode = new AudioWorkletNode(this.ctx, "capture-processor");
+      stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+      if (cancelled()) throw new StartCancelled();
+      this.stream = stream;
+      // Base-relative (NOT "/capture-worklet.js") so it resolves under a project
+      // subpath like https://user.github.io/<repo>/ — an absolute path would 404
+      // there and the mic would never start.
+      await ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}capture-worklet.js`);
+      if (cancelled()) throw new StartCancelled();
+      this.source = ctx.createMediaStreamSource(stream);
+      this.workletNode = new AudioWorkletNode(ctx, "capture-processor");
+    } catch (err) {
+      // Cleanup errors must not replace the root cause (a denied mic must still
+      // read as「麥克風權限被拒」).
+      stream?.getTracks().forEach((t) => t.stop());
+      if (ctx.state !== "closed") await ctx.close().catch(() => {});
+      if (!cancelled()) await this.stop().catch(() => {});
+      throw err;
+    }
 
-    const captureRate = this.ctx.sampleRate;
+    const captureRate = ctx.sampleRate;
     this.workletNode.port.onmessage = (ev: MessageEvent<Float32Array>) => {
       const resampled = resampleLinear(ev.data, captureRate, this.opts.inputSampleRate);
       this.opts.onChunk(float32ToPcm16(resampled));
@@ -182,11 +220,13 @@ export class AudioEngine {
     // Wall-clock playback time scales with rate (<1 = longer), so advance the
     // gapless play-head by the real duration or chunks overlap in slow mode.
     this.playHead += buffer.duration / this.rate;
-    this.scheduled.push(node);
-    node.onended = () => {
-      const i = this.scheduled.indexOf(node);
-      if (i !== -1) this.scheduled.splice(i, 1);
-    };
+    this.scheduled.scheduled(node);
+    node.onended = () => this.scheduled.ended(node);
+  }
+
+  /** Is any coach audio still scheduled or audible? */
+  isPlaying(): boolean {
+    return this.scheduled.isPlaying();
   }
 
   /** Drop any scheduled playback — used on barge-in ('interrupted' state). */
@@ -195,7 +235,7 @@ export class AudioEngine {
     // become a shadowing model. Covers both callers: barge-in and pauseMic.
     this.discardCoachTurn();
     if (!this.ctx) return;
-    for (const node of this.scheduled) {
+    for (const node of this.scheduled.flush()) {
       node.onended = null;
       try {
         node.stop();
@@ -203,7 +243,6 @@ export class AudioEngine {
         /* node may have finished already */
       }
     }
-    this.scheduled = [];
     this.playHead = this.ctx.currentTime;
   }
 
@@ -220,23 +259,35 @@ export class AudioEngine {
   /** Resume after pauseMic: re-acquire the mic and re-wire it to the worklet.
    *  Must be called from a user gesture. */
   async resumeMic(): Promise<void> {
-    if (!this.ctx || !this.workletNode) return;
-    await this.ctx.resume();
-    this.playHead = this.ctx.currentTime;
-    this.stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
-    this.source = this.ctx.createMediaStreamSource(this.stream);
-    this.source.connect(this.workletNode);
+    const ctx = this.ctx;
+    const workletNode = this.workletNode;
+    if (!ctx || !workletNode) return;
+    await ctx.resume();
+    this.playHead = ctx.currentTime;
+    const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+    if (this.ctx !== ctx) {
+      // stop() ran while the permission prompt was up: nothing owns this
+      // stream any more, so end it here or the mic indicator stays on.
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    this.stream = stream;
+    this.source = ctx.createMediaStreamSource(stream);
+    this.source.connect(workletNode);
   }
 
+  /** Release every device resource. Safe to call at any point of `start()` and
+   *  more than once: each field is released only if it was acquired. */
   async stop(): Promise<void> {
     this.workletNode?.disconnect();
     this.source?.disconnect();
     this.stream?.getTracks().forEach((t) => t.stop());
-    this.scheduled = [];
-    await this.ctx?.close();
+    for (const node of this.scheduled.flush()) node.onended = null;
+    const ctx = this.ctx;
     this.ctx = null;
     this.stream = null;
     this.workletNode = null;
     this.source = null;
+    if (ctx && ctx.state !== "closed") await ctx.close();
   }
 }

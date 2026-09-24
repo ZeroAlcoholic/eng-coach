@@ -1,14 +1,13 @@
-// Live spoken practice for one scenario. Reuses the proven audio + direct-Gemini
-// transport; on stop it finalises: save the session, extract LearnedItems into
-// the shared kernel, and refresh the scenario's rolling progress note.
+// Live spoken practice for one scenario: the UI over a PracticeSession (which
+// owns the transport, the audio engine and the turn cue). On stop it finalises:
+// save the session, extract LearnedItems into the shared kernel, and refresh
+// the scenario's rolling progress note.
 //
 // In-car UX: one big circular mic button is the whole control surface — start
 // is a large green target, stop is a large red one, status is glanceable.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { AudioEngine, type CoachClip } from "../../audio/AudioEngine";
-import { GeminiLiveDirect } from "../../api/gemini-direct";
 import { getArc, listItems, putDraft, putProfile } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
 import { liveModel } from "../../kernel/overrides";
@@ -22,18 +21,31 @@ import { normaliseStoryState } from "./arcs";
 import { weakObjectives } from "./objectives";
 import { band } from "./progress";
 import { composeSystemInstruction, type ArcContext } from "./prompt";
+import {
+  defaultSessionDeps,
+  PracticeSession,
+  type CoachClip,
+  type SessionListener,
+  type SessionPhase,
+  type Turn,
+} from "./session";
 import { Shadowing } from "./Shadowing";
 import { dueQueue } from "./srs";
 import { pickVoice } from "./voices";
 
 const RECYCLE_CAP = 5; // W7 — due items woven into a session: recycle, not drill
 
-type Status = "ready" | "connecting" | "live" | "saving" | "done";
+// Screen states. The session's own phases map onto the first four; "dropped"
+// is a lost connection with the transcript still on screen, so the learner can
+// save what was said or start over; saving/done are the finalize pipeline.
+type Status = "ready" | "connecting" | "awaiting-mic" | "live" | "dropped" | "saving" | "done";
 
 const STATUS_LABEL: Record<Status, string> = {
   ready: "準備好",
   connecting: "連線中…",
+  "awaiting-mic": "等待麥克風…",
   live: "練習中",
+  dropped: "連線中斷",
   saving: "分析中…",
   done: "完成",
 };
@@ -68,8 +80,9 @@ export function Practice(props: {
   const [transcript, setTranscript] = useState<TranscriptTurn[]>([]);
   const [notice, setNotice] = useState("");
   const [summary, setSummary] = useState<{ items: number; review: SessionReview } | null>(null);
-  const [phase, setPhase] = useState<"coach" | "you">("coach"); // whose turn (voice UX)
+  const [turn, setTurn] = useState<Turn>("coach"); // whose turn (voice UX), drain-gated
   const [paused, setPaused] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [suggestions, setSuggestions] = useState<ReplySuggestion[] | null>(null);
   const [helping, setHelping] = useState(false);
   const [slow, setSlow] = useState(!!profile.prefs?.slowSpeech);
@@ -79,50 +92,94 @@ export function Practice(props: {
   // still-growing streamed line doesn't show a stale partial translation.
   const [tx, setTx] = useState<Record<number, { src: string; zh: string }>>({});
 
-  const engineRef = useRef<AudioEngine | null>(null);
-  const pausedRef = useRef(false);
-  const resumingRef = useRef(false); // guards double-tap on ▶ 接續
-  const clientRef = useRef<GeminiLiveDirect | null>(null);
+  const sessionRef = useRef<PracticeSession | null>(null);
   const startedAtRef = useRef<string>("");
   const sessionIdRef = useRef<string>("");
   const finalizingRef = useRef(false);
   const startingRef = useRef(false); // guards the async start() window against re-entry
+  const cancelledRef = useRef(false); // 取消 tapped while start() was still reading IndexedDB
   const turnsRef = useRef<TranscriptTurn[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
-  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const draftTimerRef = useRef<number | null>(null);
-  // E2 — the meter subscribes itself so 10 Hz level updates re-render only the
-  // meter, never this screen's transcript. No listener = the engine skips the maths.
-  const levelListenerRef = useRef<((rms: number) => void) | null>(null);
   const draftFailsRef = useRef(0); // consecutive backup failures
   const [draftWarning, setDraftWarning] = useState(false);
 
-  // Authoritative safety net: tear down mic + WebSocket if the screen unmounts
+  // The session owner is created once per screen. Its listener touches only
+  // setState and refs, so it never goes stale across renders.
+  function session(): PracticeSession {
+    if (!sessionRef.current) sessionRef.current = new PracticeSession(defaultSessionDeps, listener);
+    return sessionRef.current;
+  }
+
+  const listener: SessionListener = {
+    onPhase: (p: SessionPhase) => {
+      switch (p.kind) {
+        case "idle":
+        case "stopping":
+          return;
+        case "connecting":
+          setStatus("connecting");
+          return;
+        case "awaiting-mic":
+          setStatus("awaiting-mic");
+          return;
+        case "live":
+          setStatus("live");
+          setPaused(p.paused);
+          setReconnecting(p.reconnecting);
+          return;
+        case "ended":
+          if (finalizingRef.current) return; // stopAndFinalize / unmount drive their own status
+          setPaused(false); // live-only flags must not colour the pill after the session ended
+          setReconnecting(false);
+          switch (p.by) {
+            case "user":
+              setStatus("ready"); // cancelled while connecting
+              return;
+            case "start-failed":
+              setStatus("ready");
+              setNotice(`無法開始：${describeError(p.reason)}`);
+              return;
+            case "connection":
+              setStatus("dropped");
+              // A close reason like "quota exceeded" tells the user whether
+              // retrying can even work — surface it translated when we have one.
+              setNotice(
+                p.reason && p.reason !== "closed"
+                  ? `連線中斷：${describeError(p.reason)}`
+                  : turnsRef.current.length > 0
+                    ? "連線中斷。逐字稿還在，可以儲存這段或重新開始。"
+                    : "連線中斷，可以重新開始。",
+              );
+              return;
+            default:
+              return assertNever(p);
+          }
+        default:
+          return assertNever(p);
+      }
+    },
+    onCue: setTurn,
+    onTranscript: (who, text) => pushDelta(who, text),
+    onCoachClip: setCoachClip,
+    onNotice: setNotice,
+  };
+
+  // Authoritative safety net: release mic + WebSocket if the screen unmounts
   // for any reason (not just the guarded Back button). finalizingRef is set so
-  // the resulting onClose doesn't try to setState on an unmounted component.
+  // the resulting phase events don't setState on an unmounted component.
   useEffect(() => {
     return () => {
       finalizingRef.current = true;
-      void teardown();
+      void sessionRef.current?.stop();
     };
   }, []);
 
-  // Keep the screen awake during a session — hands-off phone/car practice dies
-  // the moment the screen locks (mic + WebSocket get suspended). Best-effort:
-  // unsupported browsers / battery-saver refusals are non-fatal.
-  async function acquireWakeLock() {
-    try {
-      wakeLockRef.current = (await navigator.wakeLock?.request("screen")) ?? null;
-    } catch {
-      wakeLockRef.current = null;
-    }
-  }
-
   // The OS silently releases the wake lock whenever the page is hidden —
-  // re-acquire on return while a session is still running.
+  // the session re-acquires it on return while still running.
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible" && clientRef.current) void acquireWakeLock();
+      if (document.visibilityState === "visible") sessionRef.current?.pageVisible();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
@@ -187,22 +244,22 @@ export function Practice(props: {
       setNotice("尚未設定金鑰 — 請先在首頁設定。");
       return;
     }
-    if (startingRef.current || clientRef.current) return; // ignore double taps / re-entry
+    const current = session().currentPhase().kind;
+    if (startingRef.current || (current !== "idle" && current !== "ended")) return; // double tap / re-entry
     startingRef.current = true;
+    cancelledRef.current = false;
     setStatus("connecting");
     setNotice("");
     setTranscript([]);
     turnsRef.current = [];
     finalizingRef.current = false;
-    setPhase("coach"); // coach greets first
-    pausedRef.current = false;
     setPaused(false);
+    setReconnecting(false);
     setSuggestions(null);
     setCoachClip(null); // D1 — a new session starts with no shadowing model
     setTx({});
     startedAtRef.current = new Date().toISOString();
     sessionIdRef.current = crypto.randomUUID();
-    void acquireWakeLock();
 
     try {
       // W7 — read due items NOW (not at render): the app can sit open for hours
@@ -229,69 +286,23 @@ export function Practice(props: {
           return undefined;
         }),
       ]);
-      // Build inside the try: composeSystemInstruction/pickVoice run here, so a
-      // synchronous throw (e.g. a malformed imported scenario) is caught and the
-      // finally still resets startingRef — otherwise Start would wedge.
-      const client = new GeminiLiveDirect({
+      if (finalizingRef.current) return; // Back was tapped while the reads ran
+      if (cancelledRef.current) {
+        setStatus("ready"); // 取消 was tapped before the session even existed
+        return;
+      }
+      // composeSystemInstruction/pickVoice run inside the try, so a synchronous
+      // throw (e.g. a malformed imported scenario) is caught and the finally
+      // still resets startingRef — otherwise Start would wedge.
+      const spec = {
         apiKey,
         model: liveModel(), // ⚙️ override wins — repairable from the phone if renamed
         systemInstruction: composeSystemInstruction(scenario, profile, dueItems, weak, arcContext),
         voiceName: pickVoice(scenario.targetLanguage),
-        handlers: {
-          onOpen: () => setStatus("live"),
-          onAudio: (pcm) => {
-            if (pausedRef.current) return; // ignore late audio while paused
-            engineRef.current?.playPcm(pcm);
-          },
-          onInterrupted: () => engineRef.current?.flushPlayback(),
-          onTurnState: (t) => {
-            setPhase(t); // transport is the single source of truth
-            // D1 — bracket the coach's turn so its audio can be shadowed. The
-            // clip is only offered once the turn ENDS (a cut-off turn is dropped
-            // inside flushPlayback), so 跟讀 always models a complete phrase.
-            if (t === "coach") {
-              engineRef.current?.beginCoachTurn();
-              setCoachClip(null); // a new turn started — the old clip isn't「剛才那句」
-            } else {
-              engineRef.current?.endCoachTurn();
-              setCoachClip(engineRef.current?.lastCoachTurn() ?? null);
-            }
-          },
-          onUserTranscript: (t) => pushDelta("user", t),
-          onAssistantTranscript: (t) => pushDelta("coach", t),
-          onError: (m) => setNotice(`錯誤：${describeError(m)}`),
-          onClose: (reason) => {
-            if (finalizingRef.current) return;
-            if (pausedRef.current) return; // paused: keep state; resume() will reconnect
-            void teardown();
-            setStatus("ready");
-            // A close reason like "quota exceeded" tells the user whether
-            // retrying can even work — surface it translated when we have one.
-            setNotice(
-              reason && reason !== "closed"
-                ? `連線中斷：${describeError(reason)}`
-                : "連線中斷 — 點一下重新開始。",
-            );
-          },
-        },
-      });
-      clientRef.current = client; // hold the ref BEFORE connecting so an unmount
-      await client.connect(); //     during connect can still tear the socket down
-      const engine = new AudioEngine({
-        inputSampleRate: GeminiLiveDirect.INPUT_SAMPLE_RATE,
-        outputSampleRate: GeminiLiveDirect.OUTPUT_SAMPLE_RATE,
-        onChunk: (pcm) => clientRef.current?.sendAudio(pcm),
-        onLevel: (rms) => levelListenerRef.current?.(rms),
-      });
-      await engine.start();
-      engine.setPlaybackRate(slow ? 0.85 : 1);
-      engine.setLevelReporting(showLevel); // E2 — only pay for RMS when it's shown
-      engineRef.current = engine;
+      };
+      // Outcome arrives through the phase stream (live / start-failed / cancelled).
+      await session().start(spec);
     } catch (err) {
-      // Silence the onClose our own teardown triggers, so the REAL cause
-      // (mic denied, bad key…) survives instead of "Connection closed".
-      finalizingRef.current = true;
-      await teardown();
       setStatus("ready");
       setNotice(`無法開始：${describeError(err)}`);
     } finally {
@@ -299,40 +310,20 @@ export function Practice(props: {
     }
   }
 
-  async function teardown() {
-    clientRef.current?.close();
-    clientRef.current = null;
-    wakeLockRef.current?.release().catch(() => {});
-    wakeLockRef.current = null;
-    await engineRef.current?.stop();
-    engineRef.current = null;
+  /** Back out while connecting / waiting for the mic. */
+  function cancelStart() {
+    cancelledRef.current = true; // covers the pre-connect reads, where stop() has nothing to stop
+    void session().stop();
   }
 
   function pauseSession() {
-    if (pausedRef.current) return;
-    pausedRef.current = true;
-    setPaused(true);
-    engineRef.current?.pauseMic(); // mic off + silence coach; live socket stays open
+    session().pause(); // mic off + silence coach; live socket stays open
     // keep any 卡住 suggestions visible so the learner can rehearse them while paused
   }
 
   async function resumeSession() {
-    if (!pausedRef.current || resumingRef.current) return; // guard double-tap
-    resumingRef.current = true;
     setNotice("");
-    try {
-      // If the socket dropped during a long pause, reconnect & continue the
-      // same conversation via the resumption handle.
-      if (clientRef.current && !clientRef.current.isOpen()) await clientRef.current.reconnect();
-      pausedRef.current = false; // let resumed coach audio through before mic is back
-      await engineRef.current?.resumeMic();
-      setPaused(false);
-    } catch (err) {
-      pausedRef.current = true; // stay paused so the user can retry or stop
-      setNotice(`無法接續：${describeError(err)}`);
-    } finally {
-      resumingRef.current = false;
-    }
+    await session().resume(); // reconnects through the resumption handle if needed
   }
 
   async function helpMe() {
@@ -359,7 +350,7 @@ export function Practice(props: {
   function toggleSpeed() {
     const next = !slow;
     setSlow(next);
-    engineRef.current?.setPlaybackRate(next ? 0.85 : 1);
+    session().setPlaybackRate(next ? 0.85 : 1);
     savePrefs({ slowSpeech: next, showLevelMeter: showLevel });
   }
 
@@ -368,18 +359,14 @@ export function Practice(props: {
   function toggleLevelMeter() {
     const next = !showLevel;
     setShowLevel(next);
-    engineRef.current?.setLevelReporting(next);
+    session().setLevelReporting(next);
     savePrefs({ slowSpeech: slow, showLevelMeter: next });
   }
 
   // Stable across renders — the meter uses it as an effect dependency, so a new
   // identity each render would re-subscribe on every level tick.
-  const subscribeLevel = useCallback<LevelSubscribe>((listener) => {
-    levelListenerRef.current = listener;
-    return () => {
-      if (levelListenerRef.current === listener) levelListenerRef.current = null;
-    };
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- session() reads a ref
+  const subscribeLevel = useCallback<LevelSubscribe>((l) => session().subscribeLevel(l), []);
 
   async function translateAt(i: number, text: string) {
     if (tx[i]?.src === text) {
@@ -409,7 +396,7 @@ export function Practice(props: {
     // Flush (not just cancel) the pending backup: if the save below fails, the
     // surviving draft must hold the FULL conversation, not one 1.2s short.
     await putDraft(currentDraft()).catch(() => {});
-    await teardown();
+    await session().stop(); // devices first, then the snapshot; no-op after a drop
     setStatus("saving");
 
     try {
@@ -446,18 +433,22 @@ export function Practice(props: {
     setStatus("done");
   }
 
-  const busy = status === "live" || status === "connecting" || status === "saving";
+  // Back is guarded only where leaving would lose something: live (use Stop)
+  // and saving. While connecting, Back simply cancels — the unmount stops the
+  // session and no transcript exists yet.
+  const backLocked = status === "live" || status === "saving";
+  const starting = status === "connecting" || status === "awaiting-mic";
+  const pillTone = paused || reconnecting ? "pill--warn" : status === "live" ? "pill--live" : "pill--neutral";
+  const pillText = paused ? "已暫停" : reconnecting ? "重新連線中…" : STATUS_LABEL[status];
 
   return (
     <main className="app">
       <div className="topbar">
-        <button className="btn btn--ghost btn--sm" onClick={props.onExit} disabled={busy}>
+        <button className="btn btn--ghost btn--sm" onClick={props.onExit} disabled={backLocked}>
           ← 返回
         </button>
         <span className="grow" />
-        <span className={`pill ${paused ? "pill--warn" : status === "live" ? "pill--live" : "pill--neutral"}`}>
-          {paused ? "已暫停" : STATUS_LABEL[status]}
-        </span>
+        <span className={`pill ${pillTone}`}>{pillText}</span>
       </div>
 
       <h1 style={{ marginTop: 16 }}>{scenario.title}</h1>
@@ -481,8 +472,8 @@ export function Practice(props: {
             // live in the pinned bottom bar so a tap here can't end the session.
             <>
               <div className="mic-btn mic-btn--live mic-btn--status" role="status" aria-live="polite">
-                <span className="mic-emoji">{paused ? "⏸" : phase === "coach" ? "🔊" : "🎤"}</span>
-                {paused ? "已暫停" : phase === "coach" ? "教練說話中" : "換你說"}
+                <span className="mic-emoji">{paused ? "⏸" : turn === "coach" ? "🔊" : "🎤"}</span>
+                {paused ? "已暫停" : turn === "coach" ? "教練說話中" : "換你說"}
               </div>
               {!paused && (
                 <div className="row" style={{ justifyContent: "center", marginTop: 4 }}>
@@ -515,13 +506,30 @@ export function Practice(props: {
                 </div>
               )}
             </>
+          ) : status === "dropped" ? (
+            // The connection is gone but the words are not: offer to keep them.
+            <div className="row" style={{ justifyContent: "center" }}>
+              {transcript.length > 0 && (
+                <button className="btn btn--primary" onClick={stopAndFinalize}>
+                  ■ 儲存這段
+                </button>
+              )}
+              <button className="btn btn--ghost" onClick={start}>
+                🎙️ 重新開始
+              </button>
+            </div>
           ) : (
             <>
-              <button className="mic-btn" onClick={start} disabled={status === "connecting"}>
+              <button className="mic-btn" onClick={start} disabled={starting}>
                 <span className="mic-emoji">🎙️</span>
-                {status === "connecting" ? "連線中…" : "開始"}
+                {starting ? STATUS_LABEL[status] : "開始"}
               </button>
-              {status === "connecting" && <p className="muted">會請求麥克風權限，請允許</p>}
+              {status === "awaiting-mic" && <p className="muted">會請求麥克風權限，請允許</p>}
+              {starting && (
+                <button className="btn btn--ghost btn--sm" onClick={cancelStart}>
+                  取消
+                </button>
+              )}
             </>
           )}
         </div>
@@ -620,4 +628,8 @@ export function Practice(props: {
       )}
     </main>
   );
+}
+
+function assertNever(x: never): never {
+  throw new Error(`unhandled phase: ${JSON.stringify(x)}`);
 }

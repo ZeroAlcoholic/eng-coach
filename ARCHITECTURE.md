@@ -18,7 +18,8 @@ flowchart TB
 
   subgraph Coach["Coach app · src/apps/coach"]
     Home["Home · scenarios / build / settings / EN-JA toggle"]
-    Practice["Practice · live session · turn cue · recap"]
+    Practice["Practice · UI only · recap"]
+    Session["session.ts · PracticeSession · owns transport + audio + wake lock + turn cue"]
     Prompt["prompt.ts · composeSystemInstruction"]
     AI["ai.ts · generateScenario / summariseSession / extractLearnedItems"]
     Content["voices.ts · frames.ts · defaults.ts"]
@@ -32,19 +33,20 @@ flowchart TB
   end
 
   subgraph Runtime["Browser runtime"]
-    Audio["AudioEngine + capture-worklet · mic 16k / play 24k"]
-    Direct["GeminiLiveDirect · WebSocket"]
+    Audio["AudioEngine + capture-worklet · mic 16k / play 24k · onDrained"]
+    Direct["GeminiLiveDirect · WebSocket · GoAway hand-over via resumption handle"]
     IDB[("IndexedDB · scenarios / sessions / items / profile")]
     LS[("localStorage · Gemini API key")]
   end
 
   subgraph Ext["Google · only external dependency"]
-    Live["Gemini Live API · voice · gemini-3.1-flash-live-preview"]
+    Live["Gemini Live API · voice · gemini-3.8-live (⚙️ override → any name)"]
     Flash["gemini-3.5-flash · text"]
   end
 
   C --> Home --> Practice
-  Practice --> Prompt & AI & Audio & Direct
+  Practice --> Prompt & AI & Session
+  Session --> Audio & Direct
   Home --> AI & Content
   Coach --> Kernel
   DB --> IDB
@@ -59,6 +61,58 @@ flowchart TB
 browser talks straight to Gemini. All learner data is local (`IndexedDB`),
 portable via a `LearningPack` JSON file. Tools share one origin so they share the
 same kernel/DB.
+
+### Live session lifecycle (`src/apps/coach/session.ts`)
+
+```mermaid
+stateDiagram-v2
+  [*] --> connecting: start()
+  connecting --> awaiting_mic: socket open
+  awaiting_mic --> live: mic + worklet ready
+  live --> live: GoAway → resumed socket (reconnecting flag)
+  live --> live: pause / resume
+  connecting --> stopping: stop() / Back / unmount
+  awaiting_mic --> stopping: stop() / Back / unmount
+  live --> stopping: 停止並儲存
+  stopping --> ended_user
+  connecting --> ended_start_failed: connect / mic / worklet error
+  awaiting_mic --> ended_start_failed
+  live --> ended_connection: socket lost (not paused, not GoAway)
+  live --> live: socket lost while paused → ▶ 接續 reconnects via handle
+  awaiting_mic --> ended_start_failed: server closes before live (setup rejected)
+```
+
+- **One owner, one generation counter.** `PracticeSession` holds the transport,
+  the `AudioEngine` and the wake lock. `start()` is three awaits (connect, mic,
+  worklet); each re-checks the generation it began under, so a Stop landing
+  between two awaits releases the resource that arrives late instead of storing
+  it. Callbacks from a superseded transport or engine are dropped the same way.
+  `Practice.tsx` depends only on the session interface; it never sees SDK types
+  or device handles, and tests drive the owner with stand-ins at exactly the
+  transport / audio boundary.
+- **Session length is the learner's.** Setup asks for
+  `contextWindowCompression.slidingWindow` (the server trims old turns instead of
+  ending the session at its context limit) and `sessionResumption`. When the
+  server sends `goAway`, the transport opens a new socket with the latest
+  resumption handle, retires the old one, buffers mic audio in between, and
+  emits `onReconnecting` / `onResumed`; the UI shows「重新連線中…」and the
+  transcript continues. One attempt per `goAway`, with a 15 s deadline; a failed
+  or timed-out hand-over ends the session through `onClose`. A `goAway` that
+  lands after the user's Stop is ignored, and a `goAway` mid coach turn closes
+  that turn like a barge-in (its `turnComplete` will never arrive).
+- **「換你說」follows the loudspeaker.** The protocol's `turnComplete` means the
+  model finished *generating*; at 0.85× speed or on a long sentence the audio is
+  still playing. The engine tracks scheduled buffer nodes and reports
+  `onDrained` when the last one ends; the owner flips the cue only when
+  `turnComplete` **and** drained both hold. `interrupted` (barge-in) flips it at
+  once. A drain that arrives mid-turn (network slower than playback) is not a cue.
+- **Model features.** `proactivity.proactiveAudio` and `enableAffectiveDialog`
+  are independent flags (both on) supported by `gemini-3.8-live`; they are not
+  prompt changes. The ⚙️ override can name any live model, including the legacy
+  `gemini-3.1-flash-live-preview`; whether that legacy model accepts these flags
+  has not been verified — if setup is rejected, the flags are the first suspect.
+- **Lost connection ≠ lost words.** A drop leaves the transcript on screen in
+  the「連線中斷」state with「儲存這段」(runs the normal finalize) and「重新開始」.
 
 ## 2) Data pipeline (sources → scoring → storage → feedback)
 
