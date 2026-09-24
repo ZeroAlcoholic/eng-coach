@@ -64,18 +64,56 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-/** Run one request in a transaction and resolve its result. */
+/** The slice of IDBTransaction / IDBRequest that `settle` needs — small enough
+ *  for a test to stand in for without a database. */
+export interface SettleableTransaction {
+  oncomplete: ((ev: Event) => void) | null;
+  onerror: ((ev: Event) => void) | null;
+  onabort: ((ev: Event) => void) | null;
+  error: DOMException | null;
+}
+export interface SettleableRequest<T> {
+  onsuccess: ((ev: Event) => void) | null;
+  onerror: ((ev: Event) => void) | null;
+  result: T;
+  error: DOMException | null;
+}
+
+/**
+ * Resolve with the request's result only once the TRANSACTION has committed.
+ *
+ * A request's `onsuccess` fires before the write is durable: the transaction
+ * can still abort (quota, a later request failing, a version change). Resolving
+ * there let「已儲存」be shown for a record that never landed — and let the draft
+ * be cleared on the strength of it. `oncomplete` is the commit.
+ */
+export function settle<T>(tx: SettleableTransaction, req: SettleableRequest<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let result: T | undefined;
+    let succeeded = false;
+    req.onsuccess = () => {
+      result = req.result;
+      succeeded = true;
+    };
+    req.onerror = () => reject(req.error ?? new Error("IndexedDB request failed"));
+    tx.oncomplete = () => {
+      if (succeeded) resolve(result as T);
+      else reject(new Error("IndexedDB transaction completed without the request succeeding"));
+    };
+    tx.onabort = () => reject(tx.error ?? new Error("IndexedDB transaction aborted"));
+    tx.onerror = () => reject(tx.error ?? new Error("IndexedDB transaction failed"));
+  });
+}
+
+/** Run one request in a transaction and resolve its result after commit. */
 async function run<T>(
   store: StoreName,
   mode: IDBTransactionMode,
-  op: (s: IDBObjectStore) => IDBRequest,
+  op: (s: IDBObjectStore) => IDBRequest<T>,
 ): Promise<T> {
   const db = await openDB();
-  return new Promise<T>((resolve, reject) => {
-    const req = op(db.transaction(store, mode).objectStore(store));
-    req.onsuccess = () => resolve(req.result as T);
-    req.onerror = () => reject(req.error);
-  });
+  const tx = db.transaction(store, mode);
+  return settle(tx, op(tx.objectStore(store)));
 }
 
 // --- scenarios ---
@@ -90,6 +128,37 @@ export const deleteScenario = (id: string) =>
 // --- sessions ---
 export const putSession = (rec: SessionRecord) =>
   run<IDBValidKey>("sessions", "readwrite", (s) => s.put(rec));
+export const getSession = (id: string) =>
+  run<SessionRecord | undefined>("sessions", "readonly", (s) => s.get(id));
+
+/**
+ * Read-modify-write one session inside ONE transaction. `mutate` returning
+ * undefined leaves the record untouched (and resolves undefined). Used by the
+ * finalize pipeline to claim a session and to tick off its steps, so two tabs
+ * finalising the same draft cannot both believe they went first.
+ */
+export async function updateSession(
+  id: string,
+  mutate: (rec: SessionRecord | undefined) => SessionRecord | undefined,
+): Promise<SessionRecord | undefined> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("sessions", "readwrite");
+    const store = tx.objectStore("sessions");
+    const read: IDBRequest<SessionRecord | undefined> = store.get(id);
+    let result: SessionRecord | undefined;
+    read.onsuccess = () => {
+      const next = mutate(read.result);
+      if (!next) return;
+      result = next;
+      store.put(next);
+    };
+    read.onerror = () => reject(read.error);
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
 /** Full records incl. transcripts — only for whole-dataset jobs (pack export). */
 export const listSessions = () => run<SessionRecord[]>("sessions", "readonly", (s) => s.getAll());
 /** Cheap count — no record deserialization. */
@@ -110,7 +179,7 @@ export async function scanSessionsDesc(
     req.onsuccess = () => {
       const cursor = req.result;
       if (!cursor) return resolve();
-      if (cb(cursor.value as SessionRecord) === false) return resolve();
+      if (cb(cursor.value) === false) return resolve();
       cursor.continue();
     };
     req.onerror = () => reject(req.error);
@@ -168,8 +237,8 @@ export async function listObjectivesFor(scenarioId: string): Promise<ObjectiveMa
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const index = db.transaction("objectives", "readonly").objectStore("objectives").index("scenarioId");
-    const req = index.getAll(scenarioId);
-    req.onsuccess = () => resolve(req.result as ObjectiveMastery[]);
+    const req: IDBRequest<ObjectiveMastery[]> = index.getAll(scenarioId);
+    req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
@@ -208,10 +277,10 @@ export async function updateArc(
   return new Promise((resolve, reject) => {
     const tx = db.transaction("arcs", "readwrite");
     const store = tx.objectStore("arcs");
-    const read = store.get(id);
+    const read: IDBRequest<Arc | undefined> = store.get(id);
     let result: Arc | undefined;
     read.onsuccess = () => {
-      const current = read.result as Arc | undefined;
+      const current = read.result;
       if (!current) return; // nothing to update; tx completes as a no-op
       const next = mutate(current);
       if (!next) return;
@@ -251,9 +320,9 @@ export async function putArcWithScenario(
   return new Promise((resolve, reject) => {
     const tx = db.transaction(["arcs", "scenarios"], "readwrite");
     const arcs = tx.objectStore("arcs");
-    const read = arcs.get(arc.id);
+    const read: IDBRequest<Arc | undefined> = arcs.get(arc.id);
     read.onsuccess = () => {
-      const stored = read.result as Arc | undefined;
+      const stored = read.result;
       if (expectedEpisodes !== undefined && (stored?.episodes.length ?? 0) !== expectedEpisodes) {
         tx.abort();
         reject(new ArcRaceError());
@@ -275,12 +344,38 @@ export async function listSessionsFor(scenarioId: string): Promise<SessionRecord
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const index = db.transaction("sessions", "readonly").objectStore("sessions").index("scenarioId");
-    const req = index.getAll(scenarioId);
-    req.onsuccess = () =>
-      resolve(
-        (req.result as SessionRecord[]).sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
-      );
+    const req: IDBRequest<SessionRecord[]> = index.getAll(scenarioId);
+    req.onsuccess = () => resolve(req.result.sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
     req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Write a whole LearningPack in ONE transaction across every store, so an import
+ * is all-or-nothing: a quota error on the last arc cannot leave half the
+ * scenarios replaced and the sessions untouched. The caller has already
+ * validated the pack; this only writes.
+ */
+export async function importAll(pack: {
+  profile?: LearnerProfile;
+  scenarios: Scenario[];
+  items: LearnedItem[];
+  sessions: SessionRecord[];
+  objectives: ObjectiveMastery[];
+  arcs: Arc[];
+}): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(["kv", "scenarios", "items", "sessions", "objectives", "arcs"], "readwrite");
+    if (pack.profile) tx.objectStore("kv").put(pack.profile, "profile");
+    for (const sc of pack.scenarios) tx.objectStore("scenarios").put(sc);
+    for (const it of pack.items) tx.objectStore("items").put(it);
+    for (const s of pack.sessions) tx.objectStore("sessions").put(s);
+    for (const o of pack.objectives) tx.objectStore("objectives").put(o);
+    for (const a of pack.arcs) tx.objectStore("arcs").put(a);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
   });
 }
 
