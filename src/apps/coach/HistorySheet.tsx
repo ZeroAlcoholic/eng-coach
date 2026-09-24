@@ -27,9 +27,12 @@ export function HistorySheet(props: {
   lang: TargetLanguage;
   scenarios: Scenario[];
   profile: LearnerProfile;
+  onlyIds?: string[] | null; // opened from a readout: show just its source sessions
   onChanged: () => void;
   onClose: () => void;
 }) {
+  const [showAll, setShowAll] = useState(false);
+  const only = props.onlyIds && !showAll ? new Set(props.onlyIds) : null;
   // "error" is its own state: rendering a load failure as「還沒有練習紀錄」
   // would read as data loss — the scariest possible lie in a local-first app.
   const [sessions, setSessions] = useState<SessionRecord[] | null | "error">(null);
@@ -79,10 +82,19 @@ export function HistorySheet(props: {
   }, []);
 
   const titleOf = (s: SessionRecord) => props.scenarios.find((sc) => sc.id === s.scenarioId);
-  const mine = Array.isArray(sessions) ? sessions : [];
+  const all = Array.isArray(sessions) ? sessions : [];
+  const mine = only ? all.filter((s) => only.has(s.id)) : all;
 
   return (
     <Sheet title={`練習紀錄（${mine.length}）`} onClose={props.onClose}>
+      {only && (
+        <p className="muted" style={{ marginTop: 0 }}>
+          只顯示這個讀數的來源（{mine.length} 場）。{" "}
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowAll(true)}>
+            顯示全部
+          </button>
+        </p>
+      )}
       {sessions === null && <p className="muted">載入中…</p>}
       {sessions === "error" && <p className="notice">⚠ 紀錄載入失敗 — 資料還在，請關閉後再試。</p>}
       {Array.isArray(sessions) && mine.length === 0 && <p className="muted">還沒有練習紀錄。</p>}

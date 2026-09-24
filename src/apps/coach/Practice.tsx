@@ -17,6 +17,7 @@ import { suggestReplies, translateLine, type ReplySuggestion } from "./ai";
 import { CanDoSelfCheck } from "./CanDoSelfCheck";
 import { LevelMeter, type LevelSubscribe } from "./LevelMeter";
 import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
+import { describeFocus, microInstruction, pickFocus, type Focus } from "./focus";
 import { normaliseStoryState } from "./arcs";
 import { weakObjectives } from "./objectives";
 import { band } from "./progress";
@@ -99,6 +100,11 @@ export function Practice(props: {
   const startingRef = useRef(false); // guards the async start() window against re-entry
   const cancelledRef = useRef(false); // 取消 tapped while start() was still reading IndexedDB
   const turnsRef = useRef<TranscriptTurn[]>([]);
+  // Help used this session. A can-do met with zero aids is「無提示」— the unit
+  // the Home readout counts — so this is recorded on the session record.
+  const aidsRef = useRef({ suggestions: 0, translations: 0 });
+  // The 90-second follow-up: set when the learner taps「再練 90 秒」on the recap.
+  const microRef = useRef<Focus | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const draftTimerRef = useRef<number | null>(null);
   const draftFailsRef = useRef(0); // consecutive backup failures
@@ -239,7 +245,7 @@ export function Practice(props: {
     scheduleDraftSave();
   }
 
-  async function start() {
+  async function start(micro: Focus | null = null) {
     if (!apiKey) {
       setNotice("尚未設定金鑰 — 請先在首頁設定。");
       return;
@@ -260,6 +266,9 @@ export function Practice(props: {
     setTx({});
     startedAtRef.current = new Date().toISOString();
     sessionIdRef.current = crypto.randomUUID();
+    aidsRef.current = { suggestions: 0, translations: 0 };
+    microRef.current = micro;
+    setSummary(null);
 
     try {
       // W7 — read due items NOW (not at render): the app can sit open for hours
@@ -297,7 +306,9 @@ export function Practice(props: {
       const spec = {
         apiKey,
         model: liveModel(), // ⚙️ override wins — repairable from the phone if renamed
-        systemInstruction: composeSystemInstruction(scenario, profile, dueItems, weak, arcContext),
+        systemInstruction:
+          composeSystemInstruction(scenario, profile, dueItems, weak, arcContext) +
+          (micro ? microInstruction(micro) : ""),
         voiceName: pickVoice(scenario.targetLanguage),
       };
       // Outcome arrives through the phase stream (live / start-failed / cancelled).
@@ -331,6 +342,7 @@ export function Practice(props: {
     setHelping(true);
     try {
       setSuggestions(await suggestReplies(apiKey, { scenario, transcript: turnsRef.current }));
+      aidsRef.current.suggestions += 1;
     } catch {
       setNotice("提示載入失敗，請再試一次。");
     }
@@ -381,6 +393,7 @@ export function Practice(props: {
     try {
       const zh = await translateLine(apiKey, text);
       setTx((m) => ({ ...m, [i]: { src: text, zh } }));
+      aidsRef.current.translations += 1;
     } catch {
       /* ignore translate failures */
     }
@@ -410,6 +423,8 @@ export function Practice(props: {
         sessionId: sessionIdRef.current,
         startedAt: startedAtRef.current,
         transcript: turnsRef.current,
+        aids: aidsRef.current,
+        ...(microRef.current ? { kind: "micro" as const, focus: describeFocus(microRef.current) } : {}),
       });
       setSummary(outcome);
     } catch (err) {
@@ -514,13 +529,13 @@ export function Practice(props: {
                   ■ 儲存這段
                 </button>
               )}
-              <button className="btn btn--ghost" onClick={start}>
+              <button className="btn btn--ghost" onClick={() => void start()}>
                 🎙️ 重新開始
               </button>
             </div>
           ) : (
             <>
-              <button className="mic-btn" onClick={start} disabled={starting}>
+              <button className="mic-btn" onClick={() => void start()} disabled={starting}>
                 <span className="mic-emoji">🎙️</span>
                 {starting ? STATUS_LABEL[status] : "開始"}
               </button>
@@ -540,6 +555,7 @@ export function Practice(props: {
       {status === "done" && summary && (
         <div className="card" style={{ marginTop: 16 }}>
           <Recap outcome={summary} scenarioId={scenario.id} />
+          <FocusCard outcome={summary} profile={profile} language={scenario.targetLanguage} onDrill={(f) => void start(f)} />
           <button className="btn btn--primary btn--block" style={{ marginTop: 12 }} onClick={props.onExit}>
             完成
           </button>
@@ -631,6 +647,31 @@ function Recap(props: { outcome: FinalizeOutcome; scenarioId: string }) {
     default:
       return assertNever(outcome);
   }
+}
+
+/** One focus and one optional next move. Skipping is the「完成」button below it;
+ *  there is no nag and no second focus. */
+function FocusCard(props: {
+  outcome: FinalizeOutcome;
+  profile: LearnerProfile;
+  language: Scenario["targetLanguage"];
+  onDrill: (f: Focus) => void;
+}) {
+  const { outcome } = props;
+  if (outcome.kind !== "done" || outcome.judge.kind !== "review") return null;
+  const focus = pickFocus(outcome.judge.review, props.profile, props.language);
+  if (!focus) return null;
+  return (
+    <div className="card" style={{ marginTop: 12, background: "var(--surface-2)", boxShadow: "none" }}>
+      <b>這次的一個焦點</b>
+      <p className="muted" style={{ margin: "6px 0 10px" }}>
+        {describeFocus(focus)}
+      </p>
+      <button className="btn btn--ghost btn--block" onClick={() => props.onDrill(focus)}>
+        🎯 再練 90 秒（只練這一點）
+      </button>
+    </div>
+  );
 }
 
 function ReviewBody(props: { review: SessionReview; scenarioId: string }) {

@@ -21,11 +21,14 @@ import {
   type LearnedItem,
   type LearnerProfile,
   type Scenario,
+  type SessionRecord,
   type TargetLanguage,
 } from "../../kernel/types";
 import { ensurePersisted, type PersistState } from "../../kernel/storage";
 import { Home } from "./Home";
 import { Practice } from "./Practice";
+
+const RECENT_SESSIONS = 40;
 
 export function CoachApp() {
   const [apiKey, setKey] = useState(getApiKey());
@@ -36,6 +39,7 @@ export function CoachApp() {
   const [sessionCount, setSessionCount] = useState(0);
   const [draft, setDraft] = useState<DraftSession | null>(null); // crash recovery
   const [lastByLang, setLastByLang] = useState<Partial<Record<TargetLanguage, Scenario>>>({});
+  const [recentSessions, setRecentSessions] = useState<SessionRecord[]>([]); // for Home's readouts
   const [practicing, setPracticing] = useState<Scenario | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [persist, setPersist] = useState<PersistState>("unsupported");
@@ -61,9 +65,13 @@ export function CoachApp() {
       // normally touches only the first record or two, never the whole store.
       const byId = new Map(s.map((sc) => [sc.id, sc]));
       const last: Partial<Record<TargetLanguage, Scenario>> = {};
+      const recent: SessionRecord[] = [];
       let walked = 0;
       await scanSessionsDesc((sess) => {
         walked += 1;
+        // The readouts look at the newest few dozen sessions across languages —
+        // bounded, and the same single index scan as「繼續上次」.
+        if (recent.length < RECENT_SESSIONS) recent.push(sess);
         const sc = byId.get(sess.scenarioId);
         // S2 — an arc episode is never「繼續上次」: the arc's single「▶ 下一集」
         // button owns that slot, and re-entering a finished episode would replay
@@ -71,9 +79,10 @@ export function CoachApp() {
         if (sc && !sc.arc && !last[sc.targetLanguage]) last[sc.targetLanguage] = sc;
         // Stop once both languages are filled — or after 100 records, so a
         // never-practiced language can't turn this into a full-store walk.
-        return walked < 100 && !(last.en && last.ja);
+        return walked < 100 && !(last.en && last.ja && recent.length >= RECENT_SESSIONS);
       });
       setLastByLang(last);
+      setRecentSessions(recent);
       setLoadFailed(false);
     } catch (e) {
       // IndexedDB unavailable (e.g. storage blocked) — keep defaults, don't
@@ -127,6 +136,7 @@ export function CoachApp() {
       items={items}
       sessionCount={sessionCount}
       draft={draft}
+      recentSessions={recentSessions}
       lastPracticed={lastByLang[profile.language] ?? null}
       loadFailed={loadFailed}
       persist={persist}

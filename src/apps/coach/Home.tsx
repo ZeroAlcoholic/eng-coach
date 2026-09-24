@@ -16,11 +16,19 @@ import {
   type LearnedItem,
   type LearnerProfile,
   type Scenario,
+  type SessionRecord,
   type TargetLanguage,
 } from "../../kernel/types";
 import { clearDraft, deleteScenario, putScenario, putSession } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
-import { DEFAULT_LIVE_MODEL, getLiveModelOverride, setLiveModelOverride } from "../../kernel/overrides";
+import {
+  DEFAULT_LIVE_MODEL,
+  DEFAULT_TEXT_MODEL,
+  getLiveModelOverride,
+  getTextModelOverride,
+  setLiveModelOverride,
+  setTextModelOverride,
+} from "../../kernel/overrides";
 import {
   backupPack,
   buildScenarioPack,
@@ -50,6 +58,7 @@ import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
 import { HistorySheet } from "./HistorySheet";
 import { levelSummary } from "./progress";
+import { computeReadouts, type Readout } from "./readouts";
 import { ReviewSheet } from "./ReviewSheet";
 import { countDue } from "./srs";
 import { VocabSheet } from "./VocabSheet";
@@ -63,6 +72,7 @@ export function Home(props: {
   arcs: Arc[]; // S1/S2 — story lines; at most ONE is ever the primary action
   items: LearnedItem[];
   sessionCount: number;
+  recentSessions: SessionRecord[]; // newest few dozen, for the readouts
   draft: DraftSession | null; // unsaved session left by a killed tab
   lastPracticed: Scenario | null; // most recent scenario for the active language
   loadFailed: boolean; // IndexedDB load failed — empty states below would lie
@@ -77,6 +87,7 @@ export function Home(props: {
   const [keyInput, setKeyInput] = useState("");
   const [savingKey, setSavingKey] = useState(false); // validating the pasted key
   const [modelInput, setModelInput] = useState(getLiveModelOverride); // ⚙️ 進階
+  const [textModelInput, setTextModelInput] = useState(getTextModelOverride);
   const [brief, setBrief] = useState("");
   const [busy, setBusy] = useState("");
   const [building, setBuilding] = useState(false); // dedicated flag — not a magic busy string
@@ -96,9 +107,12 @@ export function Home(props: {
   const [advancing, setAdvancing] = useState<string | null>(null); // arc id being advanced
   const [showOtherArcs, setShowOtherArcs] = useState(false); // progressive disclosure, not a list
   const [sheet, setSheet] = useState<"history" | "vocab" | "review" | null>(null);
+  // A readout tapped on the progress strip opens History filtered to its sources.
+  const [historyFocus, setHistoryFocus] = useState<string[] | null>(null);
   const levelId = useId();
   const briefId = useId();
   const modelId = useId();
+  const textModelId = useId();
 
   // Arc episodes are NOT standalone scenarios — they belong to the arc card, and
   // listing all six would bury Home under one story's episodes.
@@ -114,6 +128,7 @@ export function Home(props: {
   const demoArcs = DEFAULT_ARCS[lang].filter((d) => !arcs.some((a) => a.id === d.id));
   const lvl = levelSummary(profile, lang); // W6
   const due = countDue(items, lang, new Date()); // W7
+  const readouts = computeReadouts({ sessions: props.recentSessions, items, scenarios, language: lang });
   const TREND = { up: "↗", flat: "→", down: "↘" } as const;
 
   async function withBusy(label: string, fn: () => Promise<void>) {
@@ -387,6 +402,16 @@ export function Home(props: {
           )}
         </div>
       )}
+
+      {/* Progress readouts — three ratios with a trend mark, each tappable to the
+          sessions it came from. Zero API; null when there is nothing to count. */}
+      <ReadoutStrip
+        readouts={readouts}
+        onOpen={(ids) => {
+          setHistoryFocus(ids);
+          setSheet("history");
+        }}
+      />
 
       {/* Crash recovery — a session that never reached「停止並儲存」 */}
       {draft && (
@@ -663,6 +688,32 @@ export function Home(props: {
                 套用
               </button>
             </div>
+            <label className="label" htmlFor={textModelId} style={{ marginTop: 12 }}>
+              文字模型（進階 — 評量與情境生成；留空用預設）
+            </label>
+            <div className="row">
+              <input
+                id={textModelId}
+                className="input grow"
+                value={textModelInput}
+                onChange={(e) => setTextModelInput(e.target.value)}
+                placeholder={DEFAULT_TEXT_MODEL}
+              />
+              <button
+                className="btn btn--ghost"
+                onClick={() => {
+                  setTextModelOverride(textModelInput);
+                  setTextModelInput(getTextModelOverride());
+                  setBusy(
+                    getTextModelOverride()
+                      ? `✓ 文字模型改用 ${getTextModelOverride()}。`
+                      : `✓ 文字模型恢復預設（${DEFAULT_TEXT_MODEL}）。`,
+                  );
+                }}
+              >
+                套用
+              </button>
+            </div>
           </div>
         </>
       )}
@@ -675,8 +726,12 @@ export function Home(props: {
           lang={lang}
           scenarios={scenarios}
           profile={profile}
+          onlyIds={historyFocus}
           onChanged={props.onChanged}
-          onClose={() => setSheet(null)}
+          onClose={() => {
+            setSheet(null);
+            setHistoryFocus(null);
+          }}
         />
       )}
       {sheet === "vocab" && (
@@ -696,6 +751,34 @@ export function Home(props: {
 }
 
 // --- building blocks ---
+
+const TREND_MARK: Record<NonNullable<Readout["trend"]>, string> = { up: "↗", flat: "→", down: "↘" };
+
+function ReadoutLine(props: { label: string; readout: Readout; onOpen: (ids: string[]) => void }) {
+  const { readout } = props;
+  if (readout.value === null) return null;
+  const pct = Math.round(readout.value * 100);
+  const mark = readout.trend ? TREND_MARK[readout.trend] : "";
+  return (
+    <button type="button" className="statbtn" onClick={() => props.onOpen(readout.sourceSessionIds)}>
+      {props.label} <b>{pct}%</b> {mark}
+      <span className="muted">（{readout.n}）</span>
+    </button>
+  );
+}
+
+/** Nothing renders until at least one readout has a denominator. */
+function ReadoutStrip(props: { readouts: ReturnType<typeof computeReadouts>; onOpen: (ids: string[]) => void }) {
+  const r = props.readouts;
+  if (r.unaidedCanDo.value === null && r.chunkUse.value === null && r.errorRecurrence.value === null) return null;
+  return (
+    <div className="statbar" style={{ marginTop: 8 }}>
+      <ReadoutLine label="無提示做到" readout={r.unaidedCanDo} onOpen={props.onOpen} />
+      <ReadoutLine label="教過的用出來" readout={r.chunkUse} onOpen={props.onOpen} />
+      <ReadoutLine label="錯誤復發" readout={r.errorRecurrence} onOpen={props.onOpen} />
+    </div>
+  );
+}
 
 /**
  * S2 — a story line as ONE tap. Progress is shown as episode count, never a
