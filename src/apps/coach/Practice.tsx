@@ -12,11 +12,11 @@ import { getArc, listItems, putDraft, putProfile } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
 import { liveModel } from "../../kernel/overrides";
 import { ERROR_TYPE_LABEL } from "../../kernel/types";
-import type { LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
-import { suggestReplies, translateLine, type ReplySuggestion, type SessionReview } from "./ai";
+import type { LearnerProfile, Scenario, SessionReview, TranscriptTurn } from "../../kernel/types";
+import { suggestReplies, translateLine, type ReplySuggestion } from "./ai";
 import { CanDoSelfCheck } from "./CanDoSelfCheck";
 import { LevelMeter, type LevelSubscribe } from "./LevelMeter";
-import { emptyReview, finalizeSession, PersistError, ResultsPersistError } from "./finalize";
+import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
 import { normaliseStoryState } from "./arcs";
 import { weakObjectives } from "./objectives";
 import { band } from "./progress";
@@ -79,7 +79,7 @@ export function Practice(props: {
   const [status, setStatus] = useState<Status>("ready");
   const [transcript, setTranscript] = useState<TranscriptTurn[]>([]);
   const [notice, setNotice] = useState("");
-  const [summary, setSummary] = useState<{ items: number; review: SessionReview } | null>(null);
+  const [summary, setSummary] = useState<FinalizeOutcome | null>(null);
   const [turn, setTurn] = useState<Turn>("coach"); // whose turn (voice UX), drain-gated
   const [paused, setPaused] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -427,7 +427,7 @@ export function Practice(props: {
             ? `儲存失敗 — 逐字稿暫存為草稿，回首頁可再「分析並儲存」：${msg}`
             : `已儲存，但分析失敗：${msg}`,
         );
-        setSummary({ items: 0, review: emptyReview(scenario) });
+        setSummary({ kind: "done", items: 0, judge: { kind: "unavailable", reason: msg } });
       }
     }
     setStatus("done");
@@ -535,49 +535,11 @@ export function Practice(props: {
         </div>
       )}
 
-      {/* Done summary */}
+      {/* Done summary — says exactly what was stored. A review that could not be
+          produced is shown as that, never as numbers. */}
       {status === "done" && summary && (
         <div className="card" style={{ marginTop: 16 }}>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <b>已儲存本次練習</b>
-            <span className="pill pill--neutral">CEFR {summary.review.cefr}</span>
-          </div>
-          {summary.review.subscores && (
-            <p className="muted" style={{ marginTop: 8 }}>
-              文法 {band(summary.review.subscores.grammar)}・詞彙 {band(summary.review.subscores.vocab)}・
-              流暢 {band(summary.review.subscores.fluency)}・互動 {band(summary.review.subscores.interaction)}
-            </p>
-          )}
-          {summary.review.reviewZh && <p className="muted">{summary.review.reviewZh}</p>}
-          {summary.review.reviewEn && <p className="muted">{summary.review.reviewEn}</p>}
-          {summary.review.objectivesMet && summary.review.objectivesMet.length > 0 && (
-            <CanDoSelfCheck scenarioId={scenario.id} objectives={summary.review.objectivesMet} />
-          )}
-          {summary.review.wins?.map((w, i) => (
-            <div key={`w${i}`} className="muted">
-              👍 {w}
-            </div>
-          ))}
-          {summary.review.fixes?.map((f, i) => (
-            <div key={`f${i}`} className="muted">
-              🔧 {f}
-            </div>
-          ))}
-          {/* E1 — one line naming the error TYPES confirmed this session (each
-              survived a majority vote across the judge samples). One line, not a
-              dashboard: the value is that these accumulate and steer the coach. */}
-          {summary.review.errors && summary.review.errors.length > 0 && (
-            <p className="muted" style={{ marginTop: 8 }}>
-              📌 這次的錯誤型態：
-              {summary.review.errors.map((e) => ERROR_TYPE_LABEL[e.type]).join("・")}
-            </p>
-          )}
-          <p className="muted" style={{ marginTop: 8 }}>
-            已新增 {summary.items} 個單字／語句到你的詞庫。
-          </p>
-          {summary.review.progressNote && (
-            <p className="muted">↪ 下次重點：{summary.review.progressNote}</p>
-          )}
+          <Recap outcome={summary} scenarioId={scenario.id} />
           <button className="btn btn--primary btn--block" style={{ marginTop: 12 }} onClick={props.onExit}>
             完成
           </button>
@@ -627,6 +589,84 @@ export function Practice(props: {
         </>
       )}
     </main>
+  );
+}
+
+function Recap(props: { outcome: FinalizeOutcome; scenarioId: string }) {
+  const { outcome } = props;
+  switch (outcome.kind) {
+    case "micro":
+      return <b>已儲存這段加練</b>;
+    case "already":
+      return (
+        <>
+          <b>這場已經分析並儲存過了</b>
+          {outcome.review && <ReviewBody review={outcome.review} scenarioId={props.scenarioId} />}
+        </>
+      );
+    case "done":
+      return (
+        <>
+          {outcome.judge.kind === "review" ? (
+            <>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <b>已儲存本次練習</b>
+                <span className="pill pill--neutral">CEFR {outcome.judge.review.cefr}</span>
+              </div>
+              <ReviewBody review={outcome.judge.review} scenarioId={props.scenarioId} />
+            </>
+          ) : (
+            <>
+              <b>已儲存逐字稿</b>
+              <p className="muted" style={{ marginTop: 8 }}>
+                評量未完成：{outcome.judge.reason}。等級與下次重點沒有更新；可在首頁「練習紀錄」重試評量。
+              </p>
+            </>
+          )}
+          <p className="muted" style={{ marginTop: 8 }}>
+            已新增 {outcome.items} 個單字／語句到你的詞庫。
+          </p>
+        </>
+      );
+    default:
+      return assertNever(outcome);
+  }
+}
+
+function ReviewBody(props: { review: SessionReview; scenarioId: string }) {
+  const { review } = props;
+  return (
+    <>
+      {review.subscores && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          文法 {band(review.subscores.grammar)}・詞彙 {band(review.subscores.vocab)}・流暢{" "}
+          {band(review.subscores.fluency)}・互動 {band(review.subscores.interaction)}
+        </p>
+      )}
+      {review.reviewZh && <p className="muted">{review.reviewZh}</p>}
+      {review.reviewEn && <p className="muted">{review.reviewEn}</p>}
+      {review.objectivesMet && review.objectivesMet.length > 0 && (
+        <CanDoSelfCheck scenarioId={props.scenarioId} objectives={review.objectivesMet} />
+      )}
+      {review.wins?.map((w, i) => (
+        <div key={`w${i}`} className="muted">
+          👍 {w}
+        </div>
+      ))}
+      {review.fixes?.map((f, i) => (
+        <div key={`f${i}`} className="muted">
+          🔧 {f}
+        </div>
+      ))}
+      {/* E1 — one line naming the error TYPES confirmed this session. One line,
+          not a dashboard: the value is that these accumulate and steer the coach. */}
+      {review.errors && review.errors.length > 0 && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          📌 這次的錯誤型態：{review.errors.map((e) => ERROR_TYPE_LABEL[e.type]).join("・")}
+        </p>
+      )}
+      {review.progressNote && <p className="muted">↪ 下次重點：{review.progressNote}</p>}
+    </>
   );
 }
 

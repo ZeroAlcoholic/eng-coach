@@ -5,7 +5,9 @@
 import { useEffect, useState } from "react";
 
 import { scanSessionsDesc } from "../../kernel/db";
-import type { Scenario, SessionRecord, TargetLanguage } from "../../kernel/types";
+import { describeError } from "../../kernel/errors";
+import type { LearnerProfile, Scenario, SessionRecord, TargetLanguage } from "../../kernel/types";
+import { retryReview } from "./finalize";
 import { band } from "./progress";
 import { Sheet } from "./Sheet";
 
@@ -21,8 +23,11 @@ function when(iso: string): string {
 }
 
 export function HistorySheet(props: {
+  apiKey: string;
   lang: TargetLanguage;
   scenarios: Scenario[];
+  profile: LearnerProfile;
+  onChanged: () => void;
   onClose: () => void;
 }) {
   // "error" is its own state: rendering a load failure as「還沒有練習紀錄」
@@ -30,6 +35,30 @@ export function HistorySheet(props: {
   const [sessions, setSessions] = useState<SessionRecord[] | null | "error">(null);
   const [open, setOpen] = useState<string | null>(null); // expanded session id
   const [showTx, setShowTx] = useState<string | null>(null); // transcript shown for id
+  const [retrying, setRetrying] = useState<string | null>(null); // session id being re-judged
+  const [retryNote, setRetryNote] = useState<Record<string, string>>({});
+
+  // A session the learner spoke in but that has no review can be judged again.
+  // The stored record is updated in place so the row flips to a recap.
+  async function retry(s: SessionRecord, sc: Scenario) {
+    if (retrying) return;
+    setRetrying(s.id);
+    try {
+      const judge = await retryReview(props.apiKey, { session: s, scenario: sc, profile: props.profile });
+      if (judge.kind === "review") {
+        setSessions((prev) =>
+          Array.isArray(prev) ? prev.map((x) => (x.id === s.id ? { ...x, review: judge.review, judgeUnavailable: undefined } : x)) : prev,
+        );
+        props.onChanged();
+      } else {
+        setRetryNote((m) => ({ ...m, [s.id]: `仍無法評量：${judge.reason}` }));
+      }
+    } catch (e) {
+      setRetryNote((m) => ({ ...m, [s.id]: `重試失敗：${describeError(e)}` }));
+    } finally {
+      setRetrying(null);
+    }
+  }
 
   useEffect(() => {
     // Newest-first index scan, stopping at PAGE matches — never loads the whole
@@ -101,7 +130,26 @@ export function HistorySheet(props: {
                     🔧 {f}
                   </div>
                 ))}
-                {!r && <p className="muted">（這場沒有分析結果，只有逐字稿）</p>}
+                {!r && (
+                  <p className="muted">
+                    {s.kind === "micro"
+                      ? "（加練片段，只有逐字稿）"
+                      : s.judgeUnavailable
+                        ? `評量未完成：${s.judgeUnavailable}`
+                        : "（這場沒有分析結果，只有逐字稿）"}
+                  </p>
+                )}
+                {!r && s.kind !== "micro" && sc && props.apiKey && s.transcript.some((t) => t.who === "user") && (
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    style={{ marginRight: 8 }}
+                    disabled={retrying !== null}
+                    onClick={() => void retry(s, sc)}
+                  >
+                    {retrying === s.id ? "評量中…" : "重試評量"}
+                  </button>
+                )}
+                {retryNote[s.id] && <p className="notice">{retryNote[s.id]}</p>}
                 <button
                   className="btn btn--ghost btn--sm"
                   style={{ marginTop: 8 }}

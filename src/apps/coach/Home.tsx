@@ -47,7 +47,7 @@ import {
   type DemoArc,
 } from "./arcs";
 import { DEFAULT_SCENARIOS } from "./defaults";
-import { finalizeSession, PersistError, ResultsPersistError } from "./finalize";
+import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
 import { HistorySheet } from "./HistorySheet";
 import { levelSummary } from "./progress";
 import { ReviewSheet } from "./ReviewSheet";
@@ -277,7 +277,7 @@ export function Home(props: {
           startedAt: draft.startedAt,
           transcript: draft.transcript,
         });
-        setBusy(`已救回上次練習：CEFR ${out.review.cefr}，新增 ${out.items} 個詞彙。`);
+        setBusy(describeOutcome(out, "已救回上次練習"));
       } else {
         await putSession({
           id: draft.id,
@@ -297,7 +297,7 @@ export function Home(props: {
         err instanceof PersistError
           ? `儲存失敗，草稿仍保留，可再試一次：${msg}`
           : err instanceof ResultsPersistError
-            ? `已救回並分析（CEFR ${err.outcome.review.cefr}），但部分結果未能寫入：${msg}`
+            ? `${describeOutcome(err.outcome, "已救回並分析")}但部分結果未能寫入：${msg}`
             : `逐字稿已儲存（見「練習」紀錄），但分析失敗：${msg}`,
       );
     }
@@ -652,7 +652,14 @@ export function Home(props: {
       {busy && <p className="notice">{busy}</p>}
 
       {sheet === "history" && (
-        <HistorySheet lang={lang} scenarios={scenarios} onClose={() => setSheet(null)} />
+        <HistorySheet
+          apiKey={apiKey}
+          lang={lang}
+          scenarios={scenarios}
+          profile={profile}
+          onChanged={props.onChanged}
+          onClose={() => setSheet(null)}
+        />
       )}
       {sheet === "vocab" && (
         <VocabSheet lang={lang} items={items} onChanged={props.onChanged} onClose={() => setSheet(null)} />
@@ -874,6 +881,26 @@ function ScenarioEditor(props: {
       </div>
     </div>
   );
+}
+
+/** One sentence for a finalize outcome — numbers only when a review exists. */
+function describeOutcome(out: FinalizeOutcome, lead: string): string {
+  switch (out.kind) {
+    case "micro":
+      return `${lead}：已儲存加練逐字稿。`;
+    case "already":
+      return "這場先前已經分析並儲存過了。";
+    case "done":
+      return out.judge.kind === "review"
+        ? `${lead}：CEFR ${out.judge.review.cefr}，新增 ${out.items} 個詞彙。`
+        : `${lead}：逐字稿已存、新增 ${out.items} 個詞彙；評量未完成（${out.judge.reason}），可在練習紀錄重試。`;
+    default:
+      return assertNever(out);
+  }
+}
+
+function assertNever(x: never): never {
+  throw new Error(`unhandled outcome: ${JSON.stringify(x)}`);
 }
 
 function slug(s: string): string {

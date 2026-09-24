@@ -219,12 +219,42 @@ export interface SessionReview {
   errors?: { type: ErrorType; example: string; correction: string }[];
 }
 
+/**
+ * Which end-of-session steps have been APPLIED for a session. Finalize is
+ * re-runnable (draft recovery, a second tab, a retry after a failed judge), and
+ * each step must land exactly once: items, the review fold into profile /
+ * ledger / scenario note, and the story-arc advance. `claimedAt` is the
+ * in-progress marker a second runner respects for a short window.
+ */
+export interface FinalizeLedger {
+  claimedAt?: string; // ISO — a finalize is (or was) running from this moment
+  itemsSaved: boolean;
+  reviewApplied: boolean;
+  arcAdvanced: boolean;
+}
+
+/** Help the learner used during the session. A can-do met in a session with
+ *  no aids is「無提示」— the honest unit for the Home readout. */
+export interface SessionAids {
+  suggestions: number; // taps on「卡住?」
+  translations: number; // lines tapped for a 繁中 gloss
+}
+
 export interface SessionRecord {
   id: string;
   scenarioId: string;
   startedAt: string; // ISO timestamp
   transcript: TranscriptTurn[];
   review?: SessionReview; // filled in once the end-of-session analysis succeeds
+  // Why there is no review although the learner spoke: the judge produced no
+  // valid sample. Shown as「評量未完成」with a retry, never as numbers.
+  judgeUnavailable?: string;
+  finalize?: FinalizeLedger; // absent on records written before this ledger existed
+  aids?: SessionAids;
+  // "micro" = the 90-second focused follow-up after a recap. Saved for the
+  // transcript and chunk-use tracking only: no judge, no level estimate.
+  kind?: "micro";
+  focus?: string; // what the micro session drilled
 }
 
 /**
@@ -265,6 +295,10 @@ export interface LearnedItem {
   //                  deliberately NOT cards and NOT multiple-choice options
   cloze?: string;
   collocations?: string[];
+  // Sessions in which the learner PRODUCED this item unprompted after it was
+  // taught (the item text appears in a learner turn of a later session). The
+  // Home readout「教過的用出來了」counts items with at least one use.
+  uses?: { sessionId: string; at: string }[];
   // SRS scheduling (W7). due/intervalDays/reps are the stable interop surface;
   // `fsrs` carries the full serialized ts-fsrs card (dates as ISO strings) so
   // the scheduler can resume exactly. An item with no srs is a NEW card.
