@@ -515,7 +515,7 @@ export const DEFAULT_SCENARIOS: Record<TargetLanguage, Scenario[]> = {
       level: "A2",
       baseContext: FRAME_PRESETS.ja,
       contentContext:
-        "你和一位旅伴走進大阪的居酒屋。店員會先問人數、帶位、問飲料（先來杯生啤是慣例）、再送上開胃小菜（お通し）並解釋是附餐費。你要點飲料、請店員推薦下酒菜、問有沒有不辣的、加點、最後要求分開結帳。",
+        "你和一位旅伴走進新宿的居酒屋。店員會先問人數、帶位、問飲料（先來杯生啤是慣例）、再送上開胃小菜（お通し）並解釋是附餐費。你要點飲料、請店員推薦下酒菜、問有沒有不辣的、加點、最後要求分開結帳。",
       coachRole: "居酒屋的店員，活潑、講話快但被要求會放慢，喜歡推薦今天的特餐",
       userRole: "第一次進日本居酒屋的台灣旅客（A2 程度）",
       objectives: [

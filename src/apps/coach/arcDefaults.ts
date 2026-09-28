@@ -2,7 +2,8 @@
 // authoring anything. English: four business lines set in the 2026 workplace
 // (adopting, governing, presenting and co-building AI systems — the situations a
 // Taiwanese finance professional actually walks into). Japanese: two travel
-// lines (Tokyo, then Kansai). Each ≤6 episodes.
+// lines, both in Tokyo (a first trip, then the everyday troubles of a trip).
+// Each ≤6 episodes.
 //
 // Only EPISODE 1 is authored. Episodes 2–6 are generated on the normal
 // end-of-episode path, kept on the designed shape by `outline` and drawing on the
@@ -331,63 +332,63 @@ export const DEFAULT_ARCS: Record<TargetLanguage, DemoArc[]> = {
       },
     },
     {
-      id: "def-arc-ja-kansai-trip",
-      title: "關西自由行：京都・奈良・大阪六天",
+      id: "def-arc-ja-tokyo-trouble",
+      title: "東京旅途中的六個麻煩：狀況劇",
       targetLanguage: "ja",
       level: "A2",
       premise:
-        "你第二次到日本，這次從關西機場進，六天走京都、奈良、大阪。住的是京都的町家旅館，女將 佐藤さん 會在每一集出現：幫你安排晚餐、教你怎麼搭車、聽你講今天遇到的事。從機場搭電車到京都、旅館入住、神社參拜、奈良餵鹿、大阪居酒屋，到最後買電器退稅、把行李寄回機場。",
+        "你在東京自由行一週，住在淺草的一間小民宿，老闆 高橋さん 每天早上都會問你今天要去哪。這條線不是觀光，而是旅途中一定會遇到的麻煩：手機沒網路、電車坐錯方向、餐廳客滿、東西掉在電車上、颱風讓班機延誤，最後還得退稅寄行李。每一集解決一個麻煩，講日文的膽子就大一點。",
       plannedEpisodes: 6,
       canDos: [
-        "能在機場與車站問清楚要搭哪一班電車、在哪裡換車",
-        "能在旅館辦入住、確認晚餐時間並提出簡單需求",
-        "能在神社或寺院問參拜方式並買御守",
-        "能向路人或站務員問公車與班次，並確認聽懂",
-        "能在居酒屋點飲料與下酒菜，並請店員推薦",
-        "能在商店詢問退稅條件並完成結帳",
-        "能說明今天發生的事，並為受到的幫助道謝",
+        "能在電器行說明需求並買到 SIM 卡或租到 Wi-Fi",
+        "能在坐錯車或餘額不足時向站務員說明並問怎麼辦",
+        "能在餐廳被告知客滿時詢問候位或改時間",
+        "能說明遺失物的特徵並留下聯絡方式",
+        "能因為天氣狀況與飯店、航空公司協商延住或改票",
+        "能在店裡詢問退稅條件並完成手續",
+        "能向幫過忙的人清楚道謝並說明後續",
       ],
       outline: [
-        "關西機場：問去京都要搭哪一班、在哪裡換車，買票上車",
-        "町家旅館：辦入住、確認晚餐與洗澡時間，問附近好走的路",
-        "伏見稻荷：問參拜方式、買御守、和攤販買點心",
-        "奈良：問公車班次、到公園餵鹿，向路人問去東大寺的路",
-        "大阪居酒屋：點飲料與下酒菜、請店員推薦、和鄰座簡單聊天",
-        "最後一天：買電器辦退稅，請旅館幫忙寄行李到機場，向佐藤さん道別",
+        "電器行：手機沒網路，說明需求、比較 SIM 卡與 Wi-Fi 機、完成購買",
+        "電車：坐錯方向又發現 Suica 餘額不足，向站務員求助",
+        "餐廳：想吃的店客滿，問候位時間、改時間或請店員推薦附近",
+        "遺失物：包包忘在電車上，到站務室說明特徵並留聯絡方式",
+        "颱風：班機延誤一天，和民宿高橋さん談延住、打電話給航空公司改票",
+        "最後一天：買伴手禮辦退稅，請民宿幫忙寄行李到機場，向高橋さん道別",
       ],
       storyState: {
         characters: [
-          { name: "佐藤さん", note: "京都町家旅館的女將，說話溫和、會主動放慢，喜歡問你今天去了哪裡" },
+          { name: "高橋さん", note: "淺草民宿的老闆，隨和、愛聊天，會把你講不完整的日文幫你補完再問一次" },
         ],
         events: [],
         openThreads: [
-          "從關西機場到京都有好幾種搭法，你還不知道要在哪裡換車",
-          "旅館的晚餐要事先約時間，你還沒決定幾點吃",
+          "你的手機在機場就沒了網路，還沒解決",
+          "颱風正在接近，週末的班機不一定飛得了",
         ],
       },
       episode1: {
-        title: "關西機場：搭電車到京都",
+        title: "電器行：手機沒網路，買 SIM 還是租 Wi-Fi？",
         contentContext:
-          "你剛出關西機場的入境大廳，要搭電車到京都。站務員會告訴你可以搭 JR はるか 直達，或搭南海電車再換車比較便宜。你要問清楚哪一班比較快、多少錢、要不要換車、在哪個月台，買票後在月台再向站務員確認一次。教練扮演售票處與月台的站務員。",
-        coachRole: "關西機場站的站務員：親切、講話清楚，會用手勢和簡單的字幫你確認",
-        userRole: "第二次到日本、第一次走關西的台灣旅客",
+          "你在淺草附近的電器行。手機從機場開始就沒網路，你要向店員說明：待七天、要能用地圖和通訊軟體、預算多少。店員會介紹預付 SIM 卡和 Wi-Fi 分享器，你要問差別、價格、怎麼設定、用不完會怎樣，選一個並完成購買。教練扮演電器行的店員。",
+        coachRole: "電器行通訊櫃台的店員：有耐心、會拿實物比給你看，說明時會放慢速度",
+        userRole: "手機沒網路、有點著急的台灣旅客（A2 程度）",
         objectives: [
-          "說出要去京都，並問哪一班電車比較快",
-          "問清楚票價、要不要換車、在哪裡換",
-          "確認月台號碼與發車時間",
-          "聽不懂時請對方再說一次",
+          "說明狀況：手機沒有網路，要待七天",
+          "問 SIM 卡和 Wi-Fi 分享器的差別與價格",
+          "問怎麼設定、用完流量會怎樣",
+          "做出選擇並完成結帳",
         ],
         targetPhrases: [
-          "京都まで行きたいです。（Kyōto made ikitai desu.）",
-          "どれが一番速いですか。（Dore ga ichiban hayai desu ka.）",
-          "乗り換えは必要ですか。（Norikae wa hitsuyō desu ka.）",
-          "どこで乗り換えますか。（Doko de norikaemasu ka.）",
+          "すみません、スマホがネットにつながりません。（Sumaho ga netto ni tsunagarimasen.）",
+          "七日間、日本にいます。（Nanoka-kan, Nihon ni imasu.）",
+          "SIMカードとWi-Fi、どちらがいいですか。（SIM kādo to Wi-Fi, dochira ga ii desu ka.）",
           "いくらですか。（Ikura desu ka.）",
-          "何番線ですか。（Nan-ban-sen desu ka.）",
-          "次の電車は何時ですか。（Tsugi no densha wa nan-ji desu ka.）",
-          "すみません、もう一度お願いします。（Sumimasen, mō ichido onegai shimasu.）",
+          "設定は難しいですか。（Settei wa muzukashii desu ka.）",
+          "データがなくなったらどうなりますか。（Dēta ga nakunattara dō narimasu ka.）",
+          "これにします。（Kore ni shimasu.）",
+          "助かりました。ありがとうございます。（Tasukarimashita. Arigatō gozaimasu.）",
         ],
-        recap: "這次你從關西機場進日本，六天要走京都、奈良、大阪。第一件事：搞清楚怎麼搭電車到京都的旅館。",
+        recap: "你在東京待一週，住在淺草的民宿。麻煩從第一天就來了：手機沒網路，先去電器行把這件事解決。",
         canDoIndexes: [1],
       },
     },
