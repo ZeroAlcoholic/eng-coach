@@ -83,13 +83,13 @@ function harness(handlerOverrides: Partial<GeminiDirectHandlers> = {}) {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("GeminiLiveDirect — setup config", () => {
-  it("asks for context-window compression, proactive audio and affective dialog by default", async () => {
+  it("asks for context-window compression and proactive audio by default; affective dialog is NOT sent (the model refuses audio with it on)", async () => {
     const h = harness();
     await h.client.connect();
     const cfg = h.sockets[0].req.config;
     expect(cfg.contextWindowCompression).toEqual({ slidingWindow: {} });
     expect(cfg.proactivity).toEqual({ proactiveAudio: true });
-    expect(cfg.enableAffectiveDialog).toBe(true);
+    expect("enableAffectiveDialog" in cfg).toBe(false);
     expect(cfg.sessionResumption).toEqual({});
   });
 

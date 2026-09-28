@@ -48,14 +48,17 @@ export interface GeminiDirectHandlers {
   onError?: (message: string) => void;
 }
 
-/** Model-side conversation features. Both are supported by `gemini-3.8-live`
- *  and independent of the prompt; a model that lacks one rejects setup. */
+/** Model-side conversation features, independent of the prompt. Both live on
+ *  the v1alpha surface (see LIVE_API_VERSION). On `gemini-3.8-live` the
+ *  setup with affective dialog is ACCEPTED but the first realtime audio frame
+ *  is then refused ("Request contains an invalid argument") and the socket
+ *  closes — so it is off by default; the synthetic learner is what showed it. */
 export interface LiveFeatures {
   proactiveAudio: boolean; // model may stay silent on non-addressed speech
   affectiveDialog: boolean; // model adapts tone to the learner's
 }
 
-export const DEFAULT_LIVE_FEATURES: LiveFeatures = { proactiveAudio: true, affectiveDialog: true };
+export const DEFAULT_LIVE_FEATURES: LiveFeatures = { proactiveAudio: true, affectiveDialog: false };
 
 /** The slice of the SDK's `Session` this transport needs. Kept minimal so a
  *  test can stand in at exactly this boundary and nothing else. */
@@ -161,7 +164,7 @@ export class GeminiLiveDirect {
         // an empty window object means "server defaults".
         contextWindowCompression: { slidingWindow: {} },
         proactivity: { proactiveAudio: features.proactiveAudio },
-        enableAffectiveDialog: features.affectiveDialog,
+        ...(features.affectiveDialog ? { enableAffectiveDialog: true } : {}),
         systemInstruction: this.opts.systemInstruction,
         // Native-audio model => no languageCode (accent is voice + prompt driven).
         ...(this.opts.voiceName
