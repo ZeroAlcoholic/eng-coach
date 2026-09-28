@@ -58,7 +58,8 @@ import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
 import { HistorySheet } from "./HistorySheet";
 import { levelSummary } from "./progress";
-import { computeReadouts, type Readout } from "./readouts";
+import { computeReadouts } from "./readouts";
+import { ReadoutStrip } from "./ReadoutStrip";
 import { ReviewSheet } from "./ReviewSheet";
 import { countDue } from "./srs";
 import { VocabSheet } from "./VocabSheet";
@@ -311,8 +312,9 @@ export function Home(props: {
           startedAt: draft.startedAt,
           transcript: draft.transcript,
           aids: draft.aids,
-          kind: draft.kind,
-          focus: draft.focus,
+          aidedTurnIdx: draft.aidedTurnIdx,
+          recycled: draft.recycled,
+          ...(draft.kind === "micro" && draft.drilledFocus ? { micro: draft.drilledFocus } : {}),
         });
         setBusy(describeOutcome(out, "已救回上次練習"));
       } else {
@@ -328,7 +330,8 @@ export function Home(props: {
               startedAt: draft.startedAt,
               transcript: draft.transcript,
               ...(draft.aids ? { aids: draft.aids } : {}),
-              ...(draft.kind ? { kind: draft.kind, focus: draft.focus } : {}),
+              ...(draft.recycled ? { recycled: draft.recycled } : {}),
+              ...(draft.kind ? { kind: draft.kind, drilledFocus: draft.drilledFocus } : {}),
             }
           );
         });
@@ -773,38 +776,6 @@ export function Home(props: {
 }
 
 // --- building blocks ---
-
-const TREND_MARK: Record<NonNullable<Readout["trend"]>, string> = { up: "↗", flat: "→", down: "↘" };
-
-function ReadoutLine(props: { label: string; readout: Readout; onOpen: (ids: string[]) => void }) {
-  const { readout } = props;
-  if (readout.value === null) return null;
-  const pct = Math.round(readout.value * 100);
-  const mark = readout.trend ? TREND_MARK[readout.trend] : "";
-  // An arrow is good or bad depending on the readout: 錯誤復發 falling is progress.
-  const improving = readout.trend === (readout.betterWhen === "high" ? "up" : "down");
-  const worsening = readout.trend === (readout.betterWhen === "high" ? "down" : "up");
-  return (
-    <button type="button" className="statbtn" onClick={() => props.onOpen(readout.sourceSessionIds)}>
-      {props.label} <b>{pct}%</b>{" "}
-      <span style={{ color: improving ? "var(--primary)" : worsening ? "var(--warn)" : undefined }}>{mark}</span>
-      <span className="muted">（{readout.n}）</span>
-    </button>
-  );
-}
-
-/** Nothing renders until at least one readout has a denominator. */
-function ReadoutStrip(props: { readouts: ReturnType<typeof computeReadouts>; onOpen: (ids: string[]) => void }) {
-  const r = props.readouts;
-  if (r.unaidedCanDo.value === null && r.chunkUse.value === null && r.errorRecurrence.value === null) return null;
-  return (
-    <div className="statbar" style={{ marginTop: 8 }}>
-      <ReadoutLine label="無提示做到" readout={r.unaidedCanDo} onOpen={props.onOpen} />
-      <ReadoutLine label="教過的用出來" readout={r.chunkUse} onOpen={props.onOpen} />
-      <ReadoutLine label="錯誤復發" readout={r.errorRecurrence} onOpen={props.onOpen} />
-    </div>
-  );
-}
 
 /**
  * S2 — a story line as ONE tap. Progress is shown as episode count, never a

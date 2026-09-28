@@ -7,16 +7,30 @@
 //      and each step is ticked off on the session's FinalizeLedger, so a re-run
 //      after a partial failure applies only what is missing;
 //   4. a judge that produced no valid sample leaves the session WITHOUT a review
-//      (and with the reason) — never with numbers standing in for a measurement.
+//      (and with the reason) — never with numbers standing in for a measurement;
+//   5. the transcript is stored ANNOTATED (annotate.ts: echo / aided / l1), the
+//      judge reads the annotated turns, and the recap's one focus is picked here
+//      from the folded profile and stored in structured form, so a later session
+//      can measure whether it was resolved.
 //
 // Used from Practice (normal「停止並儲存」), Home (recovering a draft) and
 // HistorySheet (retrying an unavailable review). Everything it touches is
 // injected through FinalizeDeps so the pipeline is testable without IndexedDB.
 
 import * as db from "../../kernel/db";
-import type { LearnedItem, LearnerProfile, Scenario, SessionRecord, SessionReview, TranscriptTurn } from "../../kernel/types";
+import type {
+  LearnedItem,
+  LearnerProfile,
+  Scenario,
+  SessionFocus,
+  SessionRecord,
+  SessionReview,
+  TranscriptTurn,
+} from "../../kernel/types";
 import { extractLearnedItems, summariseSession, type JudgeOutcome } from "./ai";
+import { annotateTurns, markL1FromFallbacks } from "./annotate";
 import { advanceArc, episodeCanDos, markEpisodePlayed, nextEpisodeGenerator } from "./arcs";
+import { pickFocus, structuredFocus } from "./focus";
 import { canonicalizeVerdicts, recordJudgeOutcomes } from "./objectives";
 import { applyErrorsToProfile, applySessionToProfile } from "./progress";
 import { recordItemUses } from "./uses";
@@ -24,7 +38,8 @@ import { recordItemUses } from "./uses";
 export type FinalizeOutcome =
   // This run did the analysis. `judge` says whether a review exists;
   // `itemsFailed` means extraction threw (a later retryReview re-runs it).
-  | { kind: "done"; items: number; itemsFailed: boolean; judge: JudgeOutcome; story?: StoryOutcome }
+  // `focus` is the one thing the recap shows, as stored on the record.
+  | { kind: "done"; items: number; itemsFailed: boolean; judge: JudgeOutcome; focus: SessionFocus | null; story?: StoryOutcome }
   // The LOCAL transcript write failed. Only Practice constructs this (from
   // PersistError) so the recap can say so instead of「已儲存」.
   | { kind: "not-saved"; reason: string }
@@ -74,8 +89,9 @@ export interface FinalizeInput {
   startedAt: string;
   transcript: TranscriptTurn[];
   aids?: SessionRecord["aids"];
-  kind?: "micro";
-  focus?: string;
+  aidedTurnIdx?: readonly number[]; // transcript lengths at each help-button tap
+  recycled?: string[]; // ids of the due items the coach was asked to elicit
+  micro?: { sourceSessionId: string }; // a follow-up drill of that session's focus
 }
 
 /** Everything the pipeline touches, so tests can run it against memory. */
@@ -127,7 +143,8 @@ export function defaultDeps(apiKey: string): FinalizeDeps {
 }
 
 // A claim older than this is presumed dead (a tab killed mid-analysis) and may
-// be taken over. Long enough for three judge samples on a slow network.
+// be taken over. Long enough for the judge sample and item extraction on a slow
+// network, with room for the ⚙️ override that asks for several samples.
 const CLAIM_TTL_MS = 10 * 60 * 1000;
 
 const EMPTY_LEDGER = { itemsSaved: false, reviewApplied: false, arcAdvanced: false };
@@ -137,8 +154,9 @@ export async function finalizeSession(
   input: FinalizeInput,
   deps: FinalizeDeps = defaultDeps(apiKey),
 ): Promise<FinalizeOutcome> {
-  const { scenario, transcript, sessionId } = input;
+  const { scenario, sessionId } = input;
   const now = deps.now();
+  const transcript = annotateTurns(input.transcript, scenario.targetLanguage, input.aidedTurnIdx);
 
   // 1. Transcript first. An existing record (a previous run got this far) is
   //    kept as-is — its ledger says what still needs doing.
@@ -150,8 +168,8 @@ export async function finalizeSession(
         startedAt: input.startedAt,
         transcript,
         ...(input.aids ? { aids: input.aids } : {}),
-        ...(input.kind ? { kind: input.kind } : {}),
-        ...(input.focus ? { focus: input.focus } : {}),
+        ...(input.recycled ? { recycled: input.recycled } : {}),
+        ...(input.micro ? { kind: "micro" as const, drilledFocus: input.micro } : {}),
         finalize: { ...EMPTY_LEDGER },
       },
     );
@@ -162,14 +180,14 @@ export async function finalizeSession(
   // re-runs this pipeline, which the claim below makes a no-op.
   await deps.clearDraft().catch(() => {});
 
-  if (input.kind === "micro") {
+  if (input.micro) {
     // A micro session is where taught chunks get produced: it counts for uses.
     await recordItemUses(deps, sessionId, transcript, scenario.targetLanguage, now).catch(() => {});
     return { kind: "micro" };
   }
   if (!transcript.length) {
     await tick(deps, sessionId, { reviewApplied: true, itemsSaved: true });
-    return { kind: "done", items: 0, itemsFailed: false, judge: { kind: "unavailable", reason: "沒有對話內容。" } };
+    return { kind: "done", items: 0, itemsFailed: false, judge: { kind: "unavailable", reason: "沒有對話內容。" }, focus: null };
   }
 
   // 2. Claim. Exactly one runner proceeds past this line per session.
@@ -203,7 +221,13 @@ export async function finalizeSession(
     judgeResult.status === "fulfilled"
       ? judgeResult.value
       : { kind: "unavailable", reason: describe(judgeResult.reason) };
-  const outcome: FinalizeOutcome = { kind: "done", items: items.length, itemsFailed: itemsResult.status === "rejected", judge };
+  const outcome: FinalizeOutcome = {
+    kind: "done",
+    items: items.length,
+    itemsFailed: itemsResult.status === "rejected",
+    judge,
+    focus: structuredFocus(claimed.focus),
+  };
 
   // 4. Apply, ticking the ledger after each step so a re-run skips what landed.
   try {
@@ -216,15 +240,23 @@ export async function finalizeSession(
         // The record is the truth: store the review FIRST, then fold it into
         // profile / scenario / ledger. A fold failure leaves the review visible
         // and the step open, so a re-run folds once — never twice.
-        await tick(deps, sessionId, {}, (rec) => ({ ...rec, review: judge.review, judgeUnavailable: undefined }));
-        await applyReview(deps, input, judge.review, now);
-        await tick(deps, sessionId, { reviewApplied: true });
+        await tick(deps, sessionId, {}, (rec) => ({
+          ...rec,
+          review: judge.review,
+          judgeUnavailable: undefined,
+          transcript: markL1FromFallbacks(rec.transcript, judge.review.l1Fallbacks),
+        }));
+        const focus = await applyReview(deps, input, judge.review, now);
+        outcome.focus = focus;
+        await tick(deps, sessionId, { reviewApplied: true }, (rec) => ({ ...rec, ...(focus ? { focus } : {}) }));
       } else {
         await tick(deps, sessionId, {}, (rec) => ({ ...rec, judgeUnavailable: judge.reason }));
       }
     }
-    // Chunk-use tracking is derived data: best-effort, after the load-bearing writes.
-    await recordItemUses(deps, sessionId, transcript, scenario.targetLanguage, now).catch((e) =>
+    // Chunk-use tracking is derived data: best-effort, after the load-bearing
+    // writes. It reads the stored turns, which now carry the judge's l1 marks.
+    const stored = (await deps.getSession(sessionId))?.transcript ?? transcript;
+    await recordItemUses(deps, sessionId, stored, scenario.targetLanguage, now).catch((e) =>
       console.warn("item-use tracking failed", sessionId, e),
     );
   } catch (err) {
@@ -274,9 +306,14 @@ export async function retryReview(
   });
   if (judge.kind === "review") {
     const now = deps.now();
-    await tick(deps, session.id, {}, (rec) => ({ ...rec, review: judge.review, judgeUnavailable: undefined }));
-    await applyReview(deps, { scenario, profile: input.profile }, judge.review, now);
-    await tick(deps, session.id, { reviewApplied: true });
+    await tick(deps, session.id, {}, (rec) => ({
+      ...rec,
+      review: judge.review,
+      judgeUnavailable: undefined,
+      transcript: markL1FromFallbacks(rec.transcript, judge.review.l1Fallbacks),
+    }));
+    const focus = await applyReview(deps, { scenario, profile: input.profile }, judge.review, now);
+    await tick(deps, session.id, { reviewApplied: true }, (rec) => ({ ...rec, ...(focus ? { focus } : {}) }));
     // The first run advanced the story without a review; the can-do ledger is
     // the one piece it could not record then.
     if (scenario.arc) {
@@ -327,12 +364,15 @@ async function saveItemsOnce(deps: FinalizeDeps, sessionId: string, items: Learn
   await deps.putItems(items);
 }
 
+/** Fold the review into scenario / profile / ledger and return the focus the
+ *  recap will show — picked from the FOLDED profile, so a slip that has now
+ *  been seen twice reads as recurring on the card that names it. */
 async function applyReview(
   deps: FinalizeDeps,
   input: Pick<FinalizeInput, "scenario" | "profile">,
   review: SessionReview,
   now: string,
-): Promise<void> {
+): Promise<SessionFocus | null> {
   const { scenario } = input;
   await deps.putScenario({ ...scenario, progressNote: review.progressNote || scenario.progressNote });
   // Read the profile FRESH: the one passed in is Practice's snapshot from
@@ -345,13 +385,19 @@ async function applyReview(
   const folded = applySessionToProfile({ ...base, language: scenario.targetLanguage }, review, now);
   // E1 — tally confirmed error types against the practised language, same write.
   const withErrors = applyErrorsToProfile(folded, scenario.targetLanguage, review.errors, now);
-  await deps.putProfile({ ...withErrors, language: fresh.language });
+  // E2 — the sounds the coach named this time replace last time's note.
+  const withAccent: LearnerProfile = review.pronunciationNotes?.length
+    ? { ...withErrors, accentNotes: { ...withErrors.accentNotes, [scenario.targetLanguage]: review.pronunciationNotes } }
+    : withErrors;
+  await deps.putProfile({ ...withAccent, language: fresh.language });
   // C1 — per-objective verdicts. Derived data: a failure here must NOT escalate
   // to ResultsPersistError (the recap and items are already stored).
   await deps
     .recordJudgeOutcomes(scenario.id, review.objectivesMet, now, scenario.objectives)
     .catch((e) => console.warn("objective ledger update failed", e));
+  return pickFocus(review, withAccent, scenario.targetLanguage);
 }
+
 
 async function advanceStory(deps: FinalizeDeps, scenario: Scenario, review: SessionReview | undefined): Promise<StoryOutcome> {
   const { arcId, episode } = scenario.arc!;

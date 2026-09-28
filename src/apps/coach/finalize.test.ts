@@ -340,14 +340,139 @@ describe("finalizeSession — an unavailable judge writes no numbers", () => {
 });
 
 describe("finalizeSession — micro sessions", () => {
-  it("saves the transcript with kind micro; no judge, no items, no level — but chunk uses are recorded", async () => {
+  it("saves the transcript with kind micro and the drilled session; no judge, no items, no level — but chunk uses are recorded", async () => {
     const m = memory({ items: [{ ...item("taught", "s0"), text: "office" }] });
-    const out = await finalizeSession("k", { ...input, sessionId: "m1", kind: "micro", focus: "past tense" }, m.deps);
+    const out = await finalizeSession("k", { ...input, sessionId: "m1", micro: { sourceSessionId: "s1" } }, m.deps);
     expect(out).toEqual({ kind: "micro" });
-    expect(m.sessions.get("m1")).toMatchObject({ kind: "micro", focus: "past tense" });
+    expect(m.sessions.get("m1")).toMatchObject({ kind: "micro", drilledFocus: { sourceSessionId: "s1" } });
+    expect(m.sessions.get("m1")!.focus).toBeUndefined();
     expect(m.deps.judge).not.toHaveBeenCalled();
     expect(m.deps.extractItems).not.toHaveBeenCalled();
     expect(m.profile.levels).toBeUndefined();
     expect(m.items[0].uses).toEqual([{ sessionId: "m1", at: "2026-09-25T00:00:00.000Z" }]);
+  });
+});
+
+describe("finalizeSession — measurement honesty (Phase D)", () => {
+  it("stores the transcript annotated: a help tap marks the following learner turn aided; Chinese in an English turn is l1", async () => {
+    const m = memory();
+    const transcript = [
+      { who: "coach" as const, text: "What would you like?" },
+      { who: "user" as const, text: "I want to 預約 a table" },
+      { who: "coach" as const, text: "預約 is book. Try again." },
+      { who: "user" as const, text: "I want to book a table" },
+    ];
+    await finalizeSession("k", { ...input, transcript, aidedTurnIdx: [3] }, m.deps);
+    const stored = m.sessions.get("s1")!.transcript;
+    expect(stored[1]).toMatchObject({ l1: true });
+    expect(stored[1].aided).toBeUndefined();
+    expect(stored[3]).toMatchObject({ aided: true });
+    expect(stored[3].l1).toBeUndefined();
+    // the judge saw the annotated turns
+    const seen = (m.deps.judge as ReturnType<typeof vi.fn>).mock.calls[0][0].transcript;
+    expect(seen[1].l1).toBe(true);
+  });
+
+  it("the judge's l1Fallbacks mark the turns they were said in (how Japanese gets its l1), before uses are counted", async () => {
+    const m = memory({ items: [{ ...item("taught", "s0"), text: "office", language: "ja" as const }] });
+    const ja = { ...scenario, targetLanguage: "ja" as const };
+    const withFallback = review();
+    if (withFallback.kind === "review") withFallback.review = { ...withFallback.review, l1Fallbacks: [{ said: "辦公室", target: "オフィス" }] };
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce(withFallback);
+    const transcript = [
+      { who: "user" as const, text: "office に 辦公室 行きます" },
+      { who: "user" as const, text: "はい、office です" },
+    ];
+    await finalizeSession("k", { ...input, scenario: ja, transcript }, m.deps);
+    const stored = m.sessions.get("s1")!.transcript;
+    expect(stored[0].l1).toBe(true);
+    expect(stored[1].l1).toBeUndefined();
+    // the l1 turn did not count as producing "office"; the clean one did
+    expect(m.items[0].uses).toEqual([{ sessionId: "s1", at: "2026-09-25T00:00:00.000Z" }]);
+  });
+
+  it("stores the recycled item ids the coach was asked to elicit", async () => {
+    const m = memory();
+    await finalizeSession("k", { ...input, recycled: ["a", "b"] }, m.deps);
+    expect(m.sessions.get("s1")!.recycled).toEqual(["a", "b"]);
+  });
+
+  it("picks ONE structured focus from the folded profile, stores it once, and returns the same one", async () => {
+    const m = memory();
+    const out = await finalizeSession("k", input, m.deps);
+    const stored = m.sessions.get("s1")!.focus;
+    expect(stored).toEqual({ kind: "meaning", type: "tense", example: "I goed", correction: "I went" });
+    expect(out).toMatchObject({ kind: "done", focus: stored });
+    // a second run changes nothing and reports the stored focus
+    const again = await finalizeSession("k", input, m.deps);
+    expect(again.kind).toBe("already");
+    expect(m.sessions.get("s1")!.focus).toEqual(stored);
+  });
+
+  it("a recurring focus counts THIS session: one prior session plus this one reads as seen in 2", async () => {
+    const m = memory({ profile: { ...DEFAULT_PROFILE, errorLog: { en: { article: { count: 1, lastAt: "t" } } } } });
+    const r = review();
+    if (r.kind === "review") r.review = { ...r.review, errors: [{ type: "article", example: "I goed", correction: "x" }] };
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce(r);
+    const out = await finalizeSession("k", input, m.deps);
+    expect(out).toMatchObject({ kind: "done", focus: { kind: "recurring", type: "article", sessions: 2 } });
+  });
+
+  it("no review → no focus stored, focus null in the outcome", async () => {
+    const m = memory();
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "unavailable", reason: "x" });
+    const out = await finalizeSession("k", input, m.deps);
+    expect(out).toMatchObject({ kind: "done", focus: null });
+    expect(m.sessions.get("s1")!.focus).toBeUndefined();
+  });
+
+  it("the coach's pronunciation notes replace last time's note for the practised language only", async () => {
+    const m = memory({ profile: { ...DEFAULT_PROFILE, accentNotes: { en: ["old"], ja: ["keep"] } } });
+    const r = review();
+    if (r.kind === "review") r.review = { ...r.review, pronunciationNotes: ["watch the th in think"] };
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce(r);
+    await finalizeSession("k", input, m.deps);
+    expect(m.profile.accentNotes).toEqual({ en: ["watch the th in think"], ja: ["keep"] });
+  });
+
+  it("a review without pronunciation notes leaves the previous note in place", async () => {
+    const m = memory({ profile: { ...DEFAULT_PROFILE, accentNotes: { en: ["old"] } } });
+    await finalizeSession("k", input, m.deps);
+    expect(m.profile.accentNotes).toEqual({ en: ["old"] });
+  });
+
+  it("an all-echo transcript is stored, judged unavailable with a readable reason, and no level is written", async () => {
+    const m = memory();
+    // the real judge's pre-check runs inside summariseSession; the memory deps'
+    // judge is a stand-in, so the pre-check is exercised in review.test.ts and
+    // the pipeline here only has to store what it is told.
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "unavailable", reason: "學習者只有跟著教練複誦，沒有自己的產出可評量。" });
+    const transcript = [
+      { who: "coach" as const, text: "Say: I would like a coffee please" },
+      { who: "user" as const, text: "I would like a coffee please" },
+    ];
+    await finalizeSession("k", { ...input, transcript }, m.deps);
+    const rec = m.sessions.get("s1")!;
+    expect(rec.transcript[1].echo).toBe(true);
+    expect(rec.judgeUnavailable).toContain("複誦");
+    expect(m.profile.levels).toBeUndefined();
+  });
+});
+
+describe("finalizeSession — records from before this build", () => {
+  it("a stored record with a string focus, no recycled and unflagged turns is read back unchanged and reported as already done", async () => {
+    const old: SessionRecord = {
+      id: "s1",
+      scenarioId: "sc1",
+      startedAt: input.startedAt,
+      transcript: input.transcript,
+      review: review().kind === "review" ? (review() as { review: import("../../kernel/types").SessionReview }).review : undefined,
+      kind: undefined,
+      focus: "時態：你說「I goed」→「I went」",
+    };
+    const m = memory({ sessions: [old] });
+    const out = await finalizeSession("k", input, m.deps);
+    expect(out.kind).toBe("already");
+    expect(m.sessions.get("s1")).toEqual(old);
   });
 });

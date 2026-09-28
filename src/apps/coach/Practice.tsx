@@ -12,16 +12,17 @@ import { getArc, listItems, putDraft, putProfile } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
 import { liveModel } from "../../kernel/overrides";
 import { ERROR_TYPE_LABEL } from "../../kernel/types";
-import type { LearnerProfile, Scenario, SessionReview, TranscriptTurn } from "../../kernel/types";
+import type { DraftSession, LearnerProfile, Scenario, SessionReview, TranscriptTurn } from "../../kernel/types";
 import { suggestReplies, translateLine, type ReplySuggestion } from "./ai";
 import { CanDoSelfCheck } from "./CanDoSelfCheck";
 import { LevelMeter, type LevelSubscribe } from "./LevelMeter";
 import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
-import { describeFocus, microInstruction, pickFocus, type Focus } from "./focus";
+import { describeFocus, microInstruction, type Focus } from "./focus";
 import { normaliseStoryState } from "./arcs";
+import { armMicroCutoff } from "./microCutoff";
 import { weakObjectives } from "./objectives";
 import { band } from "./progress";
-import { composeSystemInstruction, type ArcContext } from "./prompt";
+import { sessionInstruction, type ArcContext } from "./prompt";
 import {
   defaultSessionDeps,
   PracticeSession,
@@ -103,8 +104,16 @@ export function Practice(props: {
   // Help used this session. A can-do met with zero aids is「無提示」— the unit
   // the Home readout counts — so this is recorded on the session record.
   const aidsRef = useRef({ suggestions: 0, translations: 0 });
-  // The 90-second follow-up: set when the learner taps「再練 90 秒」on the recap.
-  const microRef = useRef<Focus | null>(null);
+  // Where in the transcript each help tap landed: the learner turn that follows
+  // is marked aided at finalize (annotate.ts), so a line spoken from a hint is
+  // not counted as their own production.
+  const aidedTurnIdxRef = useRef<number[]>([]);
+  // The due items the coach was asked to elicit — the chunk-use denominator.
+  const recycledRef = useRef<string[]>([]);
+  // The 90-second follow-up: set when the learner taps「再練 90 秒」on the recap,
+  // with the session whose focus it drills.
+  const microRef = useRef<{ focus: Focus; sourceSessionId: string } | null>(null);
+  const disarmCutoffRef = useRef<() => void>(() => {});
   const endRef = useRef<HTMLDivElement>(null);
   const draftTimerRef = useRef<number | null>(null);
   const draftFailsRef = useRef(0); // consecutive backup failures
@@ -115,6 +124,15 @@ export function Practice(props: {
   function session(): PracticeSession {
     if (!sessionRef.current) sessionRef.current = new PracticeSession(defaultSessionDeps, listener);
     return sessionRef.current;
+  }
+
+  // D8 — armed the first time a micro session goes live; a no-op for a full
+  // session. Re-entering live after a pause or a hand-over must not re-arm.
+  const cutoffArmedRef = useRef(false);
+  function armCutoffOnce() {
+    if (cutoffArmedRef.current) return;
+    cutoffArmedRef.current = true;
+    disarmCutoffRef.current = armMicroCutoff(microRef.current !== null, session(), () => void stopAndFinalize());
   }
 
   const listener: SessionListener = {
@@ -133,6 +151,7 @@ export function Practice(props: {
           setStatus("live");
           setPaused(p.paused);
           setReconnecting(p.reconnecting);
+          if (!p.paused && !p.reconnecting) armCutoffOnce();
           return;
         case "ended":
           if (finalizingRef.current) return; // stopAndFinalize / unmount drive their own status
@@ -214,14 +233,16 @@ export function Practice(props: {
     }, 1200);
   }
 
-  function currentDraft() {
+  function currentDraft(): DraftSession {
     return {
       id: sessionIdRef.current,
       scenarioId: scenario.id,
       startedAt: startedAtRef.current,
       transcript: turnsRef.current,
       aids: { ...aidsRef.current },
-      ...(microRef.current ? { kind: "micro" as const, focus: describeFocus(microRef.current) } : {}),
+      aidedTurnIdx: [...aidedTurnIdxRef.current],
+      recycled: [...recycledRef.current],
+      ...(microRef.current ? { kind: "micro" as const, drilledFocus: { sourceSessionId: microRef.current.sourceSessionId } } : {}),
     };
   }
 
@@ -266,10 +287,16 @@ export function Practice(props: {
     setSuggestions(null);
     setCoachClip(null); // D1 — a new session starts with no shadowing model
     setTx({});
+    // The focus being drilled belongs to the session that just ended — its id
+    // is captured BEFORE this session gets a fresh one.
+    microRef.current = micro ? { focus: micro, sourceSessionId: sessionIdRef.current } : null;
     startedAtRef.current = new Date().toISOString();
     sessionIdRef.current = crypto.randomUUID();
     aidsRef.current = { suggestions: 0, translations: 0 };
-    microRef.current = micro;
+    aidedTurnIdxRef.current = [];
+    recycledRef.current = [];
+    cutoffArmedRef.current = false;
+    disarmCutoffRef.current();
     setSummary(null);
 
     try {
@@ -302,15 +329,23 @@ export function Practice(props: {
         setStatus("ready"); // 取消 was tapped before the session even existed
         return;
       }
-      // composeSystemInstruction/pickVoice run inside the try, so a synchronous
+      // sessionInstruction/pickVoice run inside the try, so a synchronous
       // throw (e.g. a malformed imported scenario) is caught and the finally
       // still resets startingRef — otherwise Start would wedge.
+      // D3 — a micro session drills one thing: no due items, no weak
+      // objectives, no story continuity (sessionInstruction drops them).
+      recycledRef.current = micro ? [] : dueItems.map((i) => i.id);
       const spec = {
         apiKey,
         model: liveModel(), // ⚙️ override wins — repairable from the phone if renamed
-        systemInstruction:
-          composeSystemInstruction(scenario, profile, dueItems, weak, arcContext) +
-          (micro ? microInstruction(micro) : ""),
+        systemInstruction: sessionInstruction({
+          scenario,
+          profile,
+          dueItems,
+          weakObjectives: weak,
+          arc: arcContext,
+          ...(micro ? { micro: microInstruction(micro) } : {}),
+        }),
         voiceName: pickVoice(scenario.targetLanguage),
       };
       // Outcome arrives through the phase stream (live / start-failed / cancelled).
@@ -345,6 +380,7 @@ export function Practice(props: {
     try {
       setSuggestions(await suggestReplies(apiKey, { scenario, transcript: turnsRef.current }));
       aidsRef.current.suggestions += 1;
+      aidedTurnIdxRef.current.push(turnsRef.current.length);
     } catch {
       setNotice("提示載入失敗，請再試一次。");
     }
@@ -396,6 +432,7 @@ export function Practice(props: {
       const zh = await translateLine(apiKey, text);
       setTx((m) => ({ ...m, [i]: { src: text, zh } }));
       aidsRef.current.translations += 1;
+      aidedTurnIdxRef.current.push(turnsRef.current.length);
     } catch {
       /* ignore translate failures */
     }
@@ -404,6 +441,7 @@ export function Practice(props: {
   async function stopAndFinalize() {
     if (finalizingRef.current) return; // ignore double taps
     finalizingRef.current = true;
+    disarmCutoffRef.current();
     if (draftTimerRef.current != null) {
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
@@ -429,7 +467,9 @@ export function Practice(props: {
         startedAt: startedAtRef.current,
         transcript: turnsRef.current,
         aids: aidsRef.current,
-        ...(microRef.current ? { kind: "micro" as const, focus: describeFocus(microRef.current) } : {}),
+        aidedTurnIdx: aidedTurnIdxRef.current,
+        recycled: recycledRef.current,
+        ...(microRef.current ? { micro: { sourceSessionId: microRef.current.sourceSessionId } } : {}),
       });
       setSummary(outcome);
     } catch (err) {
@@ -449,7 +489,11 @@ export function Practice(props: {
               : `儲存失敗，草稿也存不進去 — 請先複製下方逐字稿再離開：${msg}`
             : `已儲存，但分析失敗：${msg}`,
         );
-        setSummary(err instanceof PersistError ? { kind: "not-saved", reason: msg } : { kind: "done", items: 0, itemsFailed: true, judge: { kind: "unavailable", reason: msg } });
+        setSummary(
+          err instanceof PersistError
+            ? { kind: "not-saved", reason: msg }
+            : { kind: "done", items: 0, itemsFailed: true, judge: { kind: "unavailable", reason: msg }, focus: null },
+        );
       }
     }
     setStatus("done");
@@ -562,7 +606,7 @@ export function Practice(props: {
       {status === "done" && summary && (
         <div className="card" style={{ marginTop: 16 }}>
           <Recap outcome={summary} scenarioId={scenario.id} />
-          <FocusCard outcome={summary} profile={profile} language={scenario.targetLanguage} onDrill={(f) => void start(f)} />
+          <FocusCard outcome={summary} onDrill={(f) => void start(f)} />
           <button className="btn btn--primary btn--block" style={{ marginTop: 12 }} onClick={props.onExit}>
             完成
           </button>
@@ -684,17 +728,12 @@ function Recap(props: { outcome: FinalizeOutcome; scenarioId: string }) {
 }
 
 /** One focus and one optional next move. Skipping is the「完成」button below it;
- *  there is no nag and no second focus. */
-function FocusCard(props: {
-  outcome: FinalizeOutcome;
-  profile: LearnerProfile;
-  language: Scenario["targetLanguage"];
-  onDrill: (f: Focus) => void;
-}) {
+ *  there is no nag and no second focus. The focus is the one finalize stored,
+ *  so the card and the record can never disagree. */
+function FocusCard(props: { outcome: FinalizeOutcome; onDrill: (f: Focus) => void }) {
   const { outcome } = props;
-  if (outcome.kind !== "done" || outcome.judge.kind !== "review") return null;
-  const focus = pickFocus(outcome.judge.review, props.profile, props.language);
-  if (!focus) return null;
+  if (outcome.kind !== "done" || !outcome.focus) return null;
+  const focus = outcome.focus;
   return (
     <div className="card" style={{ marginTop: 12, background: "var(--surface-2)", boxShadow: "none" }}>
       <b>這次的一個焦點</b>

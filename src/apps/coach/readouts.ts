@@ -1,38 +1,55 @@
 // Three progress readouts for Home, computed from stored records with zero API
 // calls, each traceable to the sessions it was computed from.
 //
-//   unaidedCanDo   — of the can-do verdicts the judge gave in sessions where the
-//                    learner used no help (no「卡住?」, no tap-to-translate), the
-//                    share graded "met". Sessions without an `aids` record (older
-//                    builds) are excluded rather than assumed unaided.
-//   chunkUse       — of the items taught in an earlier session, the share the
-//                    learner has since PRODUCED in their own turns (see uses.ts).
-//   errorRecurrence— of the error types the judge confirmed in the window, the
-//                    share that recurred in two or more sessions. Lower is better.
+//   unaidedCanDo    — of the can-do verdicts the judge gave in sessions where
+//                     the learner used no help (no「卡住?」, no tap-to-translate,
+//                     no spoken help request), the share graded "met". Sessions
+//                     without an `aids` record (older builds) are excluded rather
+//                     than assumed unaided.
+//   chunkUse        — of the due items the coach was asked to recycle in the
+//                     window's sessions, the share the learner then PRODUCED in
+//                     that session (uses.ts, own production only). Sessions
+//                     without a `recycled` record are excluded, not assumed.
+//   focusResolution — of the error-type focuses shown at the end of the
+//                     window's sessions, the share that did not appear again in
+//                     the two full sessions that followed. Split by whether the
+//                     learner drilled it in a micro session. Counted by session
+//                     order only — never by days, gaps or how often they practise.
 //
 // A readout is null when its denominator is empty: no number is better than a
 // number made of nothing. Trend compares the recent half of the window with
 // the earlier half and only speaks when both halves have data.
 
 import type { LearnedItem, Scenario, SessionRecord, TargetLanguage } from "../../kernel/types";
+import { structuredFocus } from "./focus";
 
 export type Trend = "up" | "flat" | "down";
 
-export interface Readout {
+export interface ReadoutPart {
   value: number | null; // 0..1
   n: number; // denominator
+  sourceSessionIds: string[]; // what to open when the learner taps the line
+}
+
+export interface Readout extends ReadoutPart {
   trend: Trend | null;
   betterWhen: "high" | "low";
-  sourceSessionIds: string[]; // what to open when the learner taps the line
+}
+
+export interface FocusReadout extends Readout {
+  drilled: ReadoutPart; // focuses followed by a micro session
+  undrilled: ReadoutPart; // focuses the learner skipped
 }
 
 export interface Readouts {
   unaidedCanDo: Readout;
   chunkUse: Readout;
-  errorRecurrence: Readout;
+  focusResolution: FocusReadout;
 }
 
 export const READOUT_WINDOW = 10; // judged sessions considered
+// A focus is judged resolved or not by this many full sessions after it.
+export const FOCUS_FOLLOW_UP = 2;
 
 const TREND_DELTA = 0.1;
 
@@ -47,7 +64,12 @@ const ratio = (num: number, den: number): number | null => (den > 0 ? num / den 
 
 function aidsUsed(s: SessionRecord): boolean | null {
   if (!s.aids) return null; // unknown — the session predates aid tracking
-  return s.aids.suggestions + s.aids.translations > 0;
+  return s.aids.suggestions + s.aids.translations > 0 || s.transcript.some((t) => t.aided === true);
+}
+
+function languageOf(scenarios: Scenario[]): (s: SessionRecord) => TargetLanguage | undefined {
+  const langOf = new Map(scenarios.map((sc) => [sc.id, sc.targetLanguage]));
+  return (s) => langOf.get(s.scenarioId);
 }
 
 /** Judged, non-micro sessions of one language, oldest → newest, last `window`. */
@@ -57,14 +79,17 @@ export function judgedSessions(
   language: TargetLanguage,
   window = READOUT_WINDOW,
 ): SessionRecord[] {
-  const langOf = new Map(scenarios.map((sc) => [sc.id, sc.targetLanguage]));
-  return sessions
-    .filter((s) => s.kind !== "micro" && !!s.review && langOf.get(s.scenarioId) === language)
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
-    .slice(-window);
+  return allJudged(sessions, scenarios, language).slice(-window);
 }
 
-function canDoRate(sessions: SessionRecord[]): { value: number | null; n: number; ids: string[] } {
+function allJudged(sessions: SessionRecord[], scenarios: Scenario[], language: TargetLanguage): SessionRecord[] {
+  const lang = languageOf(scenarios);
+  return sessions
+    .filter((s) => s.kind !== "micro" && !!s.review && lang(s) === language)
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+}
+
+function canDoRate(sessions: SessionRecord[]): ReadoutPart {
   let met = 0;
   let total = 0;
   const ids: string[] = [];
@@ -76,22 +101,53 @@ function canDoRate(sessions: SessionRecord[]): { value: number | null; n: number
     total += verdicts.length;
     met += verdicts.filter((v) => v.met).length;
   }
-  return { value: ratio(met, total), n: total, ids };
+  return { value: ratio(met, total), n: total, sourceSessionIds: ids };
 }
 
-function recurrenceRate(sessions: SessionRecord[]): { value: number | null; n: number; ids: string[] } {
-  const seenIn = new Map<string, Set<string>>(); // error type → session ids
+function chunkUseRate(sessions: SessionRecord[], items: LearnedItem[]): ReadoutPart {
+  const byId = new Map(items.map((it) => [it.id, it]));
+  let produced = 0;
+  let offered = 0;
+  const ids: string[] = [];
   for (const s of sessions) {
-    for (const e of s.review?.errors ?? []) {
-      if (!seenIn.has(e.type)) seenIn.set(e.type, new Set());
-      seenIn.get(e.type)!.add(s.id);
-    }
+    if (!s.recycled?.length) continue; // unknown (older record) or nothing due
+    offered += s.recycled.length;
+    const used = s.recycled.filter((id) => byId.get(id)?.uses?.some((u) => u.sessionId === s.id)).length;
+    produced += used;
+    if (used > 0) ids.push(s.id);
   }
-  const types = [...seenIn.values()];
-  const recurring = types.filter((ids) => ids.size >= 2);
-  const ids = new Set<string>();
-  for (const set of recurring) for (const id of set) ids.add(id);
-  return { value: ratio(recurring.length, types.length), n: types.length, ids: [...ids] };
+  return { value: ratio(produced, offered), n: offered, sourceSessionIds: ids };
+}
+
+interface FocusOutcome {
+  sessionId: string;
+  resolved: boolean;
+  drilled: boolean;
+}
+
+/** For each session with an error-type focus and enough follow-up, whether the
+ *  type stayed away. `later` is every full judged session after `s`, in order. */
+function focusOutcomes(sessions: SessionRecord[], all: SessionRecord[], micros: SessionRecord[]): FocusOutcome[] {
+  const drilledFrom = new Set(micros.map((m) => m.drilledFocus?.sourceSessionId).filter((id): id is string => !!id));
+  const out: FocusOutcome[] = [];
+  for (const s of sessions) {
+    const focus = structuredFocus(s.focus);
+    if (!focus || (focus.kind !== "meaning" && focus.kind !== "recurring")) continue;
+    const at = all.findIndex((x) => x.id === s.id);
+    const later = all.slice(at + 1, at + 1 + FOCUS_FOLLOW_UP);
+    if (later.length < FOCUS_FOLLOW_UP) continue; // not enough follow-up yet: unknown
+    const recurred = later.some((x) => x.review?.errors?.some((e) => e.type === focus.type));
+    out.push({ sessionId: s.id, resolved: !recurred, drilled: drilledFrom.has(s.id) });
+  }
+  return out;
+}
+
+function part(outcomes: FocusOutcome[]): ReadoutPart {
+  return {
+    value: ratio(outcomes.filter((o) => o.resolved).length, outcomes.length),
+    n: outcomes.length,
+    sourceSessionIds: outcomes.map((o) => o.sessionId),
+  };
 }
 
 function halves<T>(xs: T[]): [T[], T[]] {
@@ -106,44 +162,37 @@ export function computeReadouts(input: {
   language: TargetLanguage;
   window?: number;
 }): Readouts {
-  const judged = judgedSessions(input.sessions, input.scenarios, input.language, input.window);
+  const all = allJudged(input.sessions, input.scenarios, input.language);
+  const judged = all.slice(-(input.window ?? READOUT_WINDOW));
   const [earlier, recent] = halves(judged);
+  const enoughForTrend = earlier.length >= 2 && recent.length >= 2;
+  const lang = languageOf(input.scenarios);
+  const micros = input.sessions.filter((s) => s.kind === "micro" && lang(s) === input.language);
 
   const canDo = canDoRate(judged);
-  const recur = recurrenceRate(judged);
-
-  // Chunk use: an item has had a chance to be used only if at least one session
-  // of its language started after it was taught.
-  const langSessions = input.sessions
-    .filter((s) => new Map(input.scenarios.map((sc) => [sc.id, sc.targetLanguage])).get(s.scenarioId) === input.language)
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-  const latestStart = langSessions.at(-1)?.startedAt ?? "";
-  const taught = input.items.filter((it) => it.language === input.language && it.firstSeenAt < latestStart);
-  const used = taught.filter((it) => (it.uses?.length ?? 0) > 0);
-  const useIds = new Set<string>();
-  for (const it of used) for (const u of it.uses ?? []) useIds.add(u.sessionId);
+  const chunk = chunkUseRate(judged, input.items);
+  const outcomes = focusOutcomes(judged, all, micros);
+  const focus = part(outcomes);
 
   return {
     unaidedCanDo: {
-      value: canDo.value,
-      n: canDo.n,
-      trend: earlier.length >= 2 && recent.length >= 2 ? trendOf(canDoRate(earlier).value, canDoRate(recent).value) : null,
+      ...canDo,
+      trend: enoughForTrend ? trendOf(canDoRate(earlier).value, canDoRate(recent).value) : null,
       betterWhen: "high",
-      sourceSessionIds: canDo.ids,
     },
     chunkUse: {
-      value: ratio(used.length, taught.length),
-      n: taught.length,
-      trend: null, // items taught earlier have had more chances; halves would not be comparable
+      ...chunk,
+      trend: enoughForTrend ? trendOf(chunkUseRate(earlier, input.items).value, chunkUseRate(recent, input.items).value) : null,
       betterWhen: "high",
-      sourceSessionIds: [...useIds],
     },
-    errorRecurrence: {
-      value: recur.value,
-      n: recur.n,
-      trend: earlier.length >= 2 && recent.length >= 2 ? trendOf(recurrenceRate(earlier).value, recurrenceRate(recent).value) : null,
-      betterWhen: "low",
-      sourceSessionIds: recur.ids,
+    focusResolution: {
+      ...focus,
+      trend: enoughForTrend
+        ? trendOf(part(focusOutcomes(earlier, all, micros)).value, part(focusOutcomes(recent, all, micros)).value)
+        : null,
+      betterWhen: "high",
+      drilled: part(outcomes.filter((o) => o.drilled)),
+      undrilled: part(outcomes.filter((o) => !o.drilled)),
     },
   };
 }
