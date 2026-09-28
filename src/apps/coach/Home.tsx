@@ -411,6 +411,7 @@ export function Home(props: {
           aria-haspopup="dialog"
           onClick={() => {
             void persistedState().then(setRefreshedPersist); // refresh on open
+            setBusy(""); // a notice from the page behind must not read as the sheet's
             setSheet("settings");
           }}
         >
