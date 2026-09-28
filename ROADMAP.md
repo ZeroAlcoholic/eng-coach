@@ -242,6 +242,15 @@ pass criterion，完工時逐條判定，追加進 `docs/DEVICE_E2E.md`；例：
 - **仍 blocked（真人／真機）**：手機 UX、麥克風授權、proactive audio 對人的感受、教學法對人有效；
   解鎖條件不變＝一支 USB 麥克風或真機。
 
+### Batch R3 — ✅ 2026-09-28／29 UX 校準與內容
+- **教練先開口**：新對話 `setupComplete` 時 transport 送一次 `OPENING_CUE`（續接／重連不送）；
+  判不了分的 session 只在重試可能改變結果時才提供「重試評量」；微 session 120 秒截止前先說明。
+- **內容**：四條 2026 AI 職場英文故事線；日文兩條東京自由行線（取代關西線）；USJ 情境退役，
+  新增五個自由行情境。已安裝的 arc 照常可用。
+- **Home／簡報**：⚙️ 改為 Sheet；「複製提示詞」一鍵產生簡報格式；簡報在任何付費呼叫前先檢查
+  （空白、貼回提示詞本身、過長），`.md` 匯入拒收二進位／空白／>1 MB 並在覆蓋前確認；狀態改為
+  置頂 toast。
+
 ## Deferred — needs a missing precondition
 - **Cross-scenario objective scheduler (interleaving across scenarios)** — needs a stable objective-identity / tagging scheme; objective free-text doesn't match across regenerated scenarios. Build C1's ledger first.
 - **Pitch-contour overlay & Gemini "spoken impression"** — phone-mic F0 is noisy (compare *shape* only, needs voiced-gating + smoothing); the LLM note is an *impression, not a score*. Experimental add-ons on top of D1, not core.
@@ -268,12 +277,20 @@ effect billed the API in an unbounded loop; an episode pack restored an arc that
 could never continue; the ≤3-sentence recap guard never fired on English prose).
 The findings and fixes are itemised in `docs/DEVICE_E2E.md`.
 
-**Two verification debts, both waiting on hardware, neither blocking:**
-1. **A microphone on the dev machine** unblocks three already-registered checks —
-   `V3b` (kill-tab → recovery sentence count), `S2b-ii` (recap IS the first coach
-   turn), `D1a-ii` (the shadowed clip comes from a real coach turn). This desktop
-   has no capture device at all (only a silent Stereo Mix loopback), so a live
-   session never accumulates turns. Any USB mic/headset clears all three.
-2. **V-phone** (9 checks) needs the user's own phone for 15 minutes. Until it is
-   done, **nothing may claim「手機端已驗證」— only「桌機已驗證」**, and even on
-   desktop the three checks above are still open.
+**Update 2026-09-29.** Since then Batches R (A/B/C), R2 (D/E/F/H) and R3 have
+shipped; the worklist is still fully built, and nothing in "Deferred" has gained
+its missing precondition. Quality gate on `63a8061`: typecheck, lint, 404 tests,
+build all green.
+
+**Verification debts (none blocking):**
+1. `S2b-ii` is now **合成已驗證** (F3-f, synthetic learner against the real Live
+   model); a human-voice pass is still open.
+2. `D1a-ii` no longer needs a microphone — the coach speaks first, so the opening
+   turn is a real live coach turn. It needs a Gemini key in the test browser,
+   entered by the user (the dev side does not copy the env key into a browser).
+3. `V3b` still needs a microphone: with only the opening turn, a sentence count
+   before/after the kill means nothing.
+4. `F3-g` (GoAway → resume) never triggered in 12 minutes; the resume path has
+   only vitest-double evidence.
+5. **V-phone** (9 checks) needs the user's own phone for 15 minutes. Until it is
+   done, **nothing may claim「手機端已驗證」— only「桌機已驗證」**.
