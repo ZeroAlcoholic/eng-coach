@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { LearnedItem } from "../../kernel/types";
-import { itemsUsedIn, withUse } from "./uses";
+import { frameAnchors, itemsUsedIn, matchesFrame, withUse } from "./uses";
 
 const it_ = (id: string, text: string, sourceSessionId = "s0"): LearnedItem => ({
   id,
@@ -32,6 +32,14 @@ describe("chunk-use tracking — an item counts as used only when the learner sa
     expect(itemsUsedIn(items, [{ who: "user", text: "a を" }], "en")).toEqual([]);
   });
 
+  it("a turn that echoes the coach, follows help, or contains Chinese is not the learner's own production", () => {
+    const items = [it_("a", "circle back")];
+    expect(itemsUsedIn(items, [{ who: "user", text: "let's circle back", echo: true }], "en")).toEqual([]);
+    expect(itemsUsedIn(items, [{ who: "user", text: "let's circle back", aided: true }], "en")).toEqual([]);
+    expect(itemsUsedIn(items, [{ who: "user", text: "我們 circle back", l1: true }], "en")).toEqual([]);
+    expect(itemsUsedIn(items, [{ who: "user", text: "let's circle back" }], "en")).toHaveLength(1);
+  });
+
   it("being taught is not using: the item's own source session never counts", () => {
     expect(withUse(it_("a", "x", "s1"), "s1", "t")).toBeNull();
   });
@@ -40,5 +48,48 @@ describe("chunk-use tracking — an item counts as used only when the learner sa
     const once = withUse(it_("a", "x"), "s2", "t")!;
     expect(once.uses).toHaveLength(1);
     expect(withUse(once, "s2", "t")).toBeNull();
+  });
+});
+
+describe("chunk-use tracking — grammar frames match by anchors in order", () => {
+  const frame = (id: string, frameText: string): LearnedItem => ({ ...it_(id, "would rather"), kind: "grammar", frame: frameText });
+
+  it("「I'd rather stay than go」 fills「I'd rather ___ than ___」", () => {
+    const used = itemsUsedIn([frame("f", "I'd rather ___ than ___")], [{ who: "user", text: "I'd rather stay than go." }], "en");
+    expect(used.map((i) => i.id)).toEqual(["f"]);
+  });
+
+  it("anchors in the wrong order do not match", () => {
+    const used = itemsUsedIn([frame("f", "I'd rather ___ than ___")], [{ who: "user", text: "Rather than go, I'd stay." }], "en");
+    expect(used).toEqual([]);
+  });
+
+  it("anchors must sit inside ONE learner turn, not across two", () => {
+    const used = itemsUsedIn(
+      [frame("f", "I'd rather ___ than ___")],
+      [
+        { who: "user", text: "I'd rather stay." },
+        { who: "user", text: "Better than going." },
+      ],
+      "en",
+    );
+    expect(used).toEqual([]);
+  });
+
+  it("a frame whose characters would mean something in a regex is still a plain string", () => {
+    const anchors = frameAnchors("as ___ as .* (___)");
+    expect(anchors).toEqual(["as", "as .* (", ")"].filter((a) => a.length >= 2));
+    expect(matchesFrame("as big as .* (that)", anchors)).toBe(true);
+    expect(matchesFrame("as big as anything (that)", anchors)).toBe(false);
+  });
+
+  it("a frame with no usable anchor never matches", () => {
+    expect(frameAnchors("___ ___")).toEqual([]);
+    expect(matchesFrame("anything at all", [])).toBe(false);
+  });
+
+  it("an item without a frame keeps the whole-text rule (behaviour unchanged)", () => {
+    const used = itemsUsedIn([it_("p", "would rather")], [{ who: "user", text: "I would rather stay." }], "en");
+    expect(used.map((i) => i.id)).toEqual(["p"]);
   });
 });
