@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { Invalid } from "../../../kernel/validate";
-import { reviewParser } from "./review";
+import type { generateJson } from "./client";
+import { ANNOTATION_FIXTURES } from "./fixtures/transcripts";
+import { judgePrompt, judgeTranscriptText, reviewParser, summariseSession, unjudgeable } from "./review";
 
 const learner = ["I goed to the office yesterday.", "We discuss the budget."];
-const parse = reviewParser(learner);
+const coach = ["Good morning. Watch the th in think — think, not sink.", "How was your day?"];
+const parse = reviewParser(learner, coach);
 
 const good = {
   cefr: "B1",
@@ -73,5 +76,104 @@ describe("judge validator — the recap claims only what the transcript can show
 
   it("rejects a non-object response", () => {
     expect(() => parse("B1", "$")).toThrow(Invalid);
+  });
+
+  it("keeps an l1 fallback whose `said` the learner said; drops one they never said, and one with an empty target", () => {
+    const r = parse(
+      {
+        ...good,
+        l1Fallbacks: [
+          { said: "the budget", target: "the budget" },
+          { said: "預約", target: "book" },
+          { said: "office", target: "" },
+        ],
+      },
+      "$",
+    );
+    expect(r.l1Fallbacks).toEqual([{ said: "the budget", target: "the budget" }]);
+  });
+
+  it("caps l1 fallbacks at five and omits the field when none survive", () => {
+    const many = Array.from({ length: 7 }, () => ({ said: "office", target: "x" }));
+    expect(parse({ ...good, l1Fallbacks: many }, "$").l1Fallbacks).toHaveLength(5);
+    expect(parse({ ...good, l1Fallbacks: [{ said: "nope", target: "x" }] }, "$").l1Fallbacks).toBeUndefined();
+  });
+
+  it("keeps a pronunciation note the COACH said; drops an invented one and one from a learner turn", () => {
+    const r = parse(
+      { ...good, pronunciationNotes: ["watch the th in think", "mind your r sound", "I goed to the office"] },
+      "$",
+    );
+    expect(r.pronunciationNotes).toEqual(["watch the th in think"]);
+  });
+
+  it("caps pronunciation notes at three", () => {
+    const r = parse({ ...good, pronunciationNotes: ["think", "sink", "how was", "your day", "not sink"] }, "$");
+    expect(r.pronunciationNotes).toHaveLength(3);
+  });
+});
+
+describe("judge prompt — what the model is told", () => {
+  it("labels echo and Chinese turns in the transcript it sends, and only learner turns", () => {
+    const text = judgeTranscriptText([
+      { who: "coach", text: "Say hello", echo: true },
+      { who: "user", text: "Say hello", echo: true },
+      { who: "user", text: "I want 預約", l1: true },
+      { who: "user", text: "plain" },
+    ]);
+    expect(text).toBe("coach: Say hello\nuser: [repeated after coach] Say hello\nuser: [contains Chinese] I want 預約\nuser: plain");
+  });
+
+  it("states the met rule, the labels' meaning, the fallback field and the near-homophone caution", () => {
+    const p = judgePrompt({ transcript: [{ who: "user", text: "hi" }], level: "B1", objectives: ["o"] });
+    expect(p).toContain("entirely in the target language");
+    expect(p).toContain("[repeated after coach]");
+    expect(p).toContain("[contains Chinese]");
+    expect(p).toContain("l1Fallbacks");
+    expect(p).toContain("pronunciationNotes");
+    expect(p).toContain("merely sounds like");
+  });
+});
+
+describe("summariseSession — transcripts that cannot be judged never reach the model", () => {
+  const generate = vi.fn(async () => {
+    throw new Error("must not be called");
+  });
+
+  it("all-echo: unavailable with a reason naming 複誦", async () => {
+    const f = ANNOTATION_FIXTURES.find((x) => x.id === "en-echo")!;
+    const annotated = f.transcript.map((t) => (t.who === "user" ? { ...t, echo: true as const } : t));
+    const out = await summariseSession("k", { transcript: annotated, level: f.level }, { generate });
+    expect(out).toMatchObject({ kind: "unavailable" });
+    if (out.kind === "unavailable") expect(out.reason).toContain("複誦");
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("all-Chinese: unavailable with a reason naming 中文", async () => {
+    const out = await summariseSession(
+      "k",
+      { transcript: [{ who: "coach", text: "Hi" }, { who: "user", text: "我不知道", l1: true }], level: "A1" },
+      { generate },
+    );
+    expect(out).toMatchObject({ kind: "unavailable" });
+    if (out.kind === "unavailable") expect(out.reason).toContain("中文");
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("unjudgeable: one plain learner turn among flagged ones is enough to judge", () => {
+    expect(unjudgeable([{ who: "user", text: "a", echo: true }, { who: "user", text: "b" }])).toBeNull();
+    expect(unjudgeable([{ who: "user", text: "a", echo: true }, { who: "user", text: "b", l1: true }])).toContain("複誦");
+    expect(unjudgeable([{ who: "coach", text: "a" }])).toContain("沒有開口");
+  });
+
+  it("a judgeable transcript goes to the injected generator, which is what production replaces with the real call", async () => {
+    const calls: string[] = [];
+    const gen: typeof generateJson = async (_key, prompt, _schema, parse) => {
+      calls.push(prompt);
+      return parse({ ...good, cefr: "B1", errors: [] }, "$");
+    };
+    const out = await summariseSession("k", { transcript: [{ who: "user", text: "I goed to the office" }], level: "B1" }, { generate: gen, samples: 1 });
+    expect(calls).toHaveLength(1);
+    expect(out.kind).toBe("review");
   });
 });

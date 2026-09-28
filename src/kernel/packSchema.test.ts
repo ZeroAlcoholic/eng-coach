@@ -152,6 +152,57 @@ describe("parsePack — older packs without newer fields still read", () => {
     expect(p.sessions[0].finalize).toBeUndefined();
     expect(p.sessions[0].kind).toBeUndefined();
   });
+
+  it("a session without turn flags / structured focus / drilledFocus / recycled reads back without them (unknown, not zero)", () => {
+    const p = parsePack({ ...valid, arcs: [] });
+    const s = p.sessions[0];
+    expect(s.transcript.every((t) => !("echo" in t) && !("aided" in t) && !("l1" in t))).toBe(true);
+    expect(s.focus).toBeUndefined();
+    expect(s.drilledFocus).toBeUndefined();
+    expect(s.recycled).toBeUndefined();
+    expect(s.review?.l1Fallbacks).toBeUndefined();
+    expect(s.review?.pronunciationNotes).toBeUndefined();
+  });
+
+  it("an item without a frame and a profile without accent notes read back without them", () => {
+    const p = parsePack({ ...valid, arcs: [], profile: { language: "en", level: "B1", focus: [] } });
+    expect(p.items[0].frame).toBeUndefined();
+    expect(p.profile?.accentNotes).toBeUndefined();
+  });
+});
+
+describe("parsePack — Phase D/E fields round-trip and are narrowed", () => {
+  it("turn flags survive only as true; a structured focus of each kind, drilledFocus, recycled, review extras, item frame and accent notes round-trip", () => {
+    const flagged = { ...session, id: "f", transcript: [{ who: "user", text: "x", echo: true, aided: "yes", l1: false }] };
+    const focused = {
+      ...session,
+      id: "g",
+      focus: { kind: "gap", gaps: [{ said: "預約", target: "book" }] },
+      recycled: ["i1", "i2"],
+      review: { ...session.review, l1Fallbacks: [{ said: "預約", target: "book" }], pronunciationNotes: ["th in think"] },
+    };
+    const micro = { ...session, id: "m", review: undefined, kind: "micro", drilledFocus: { sourceSessionId: "g" } };
+    const recurring = { ...session, id: "r", focus: { kind: "recurring", type: "tense", example: "a", correction: "b", sessions: 2 } };
+    const p = parsePack({
+      ...valid,
+      arcs: [],
+      profile: { language: "en", level: "B1", focus: [], accentNotes: { en: ["th in think"] } },
+      sessions: [flagged, focused, micro, recurring],
+      items: [{ ...item, kind: "grammar", frame: "I'd rather ___ than ___" }],
+    });
+    expect(p.sessions[0].transcript[0]).toEqual({ who: "user", text: "x", echo: true });
+    expect(p.sessions[1]).toMatchObject({ focus: { kind: "gap", gaps: [{ said: "預約", target: "book" }] }, recycled: ["i1", "i2"] });
+    expect(p.sessions[1].review).toMatchObject({ l1Fallbacks: [{ said: "預約", target: "book" }], pronunciationNotes: ["th in think"] });
+    expect(p.sessions[2]).toMatchObject({ kind: "micro", drilledFocus: { sourceSessionId: "g" } });
+    expect(p.sessions[3].focus).toEqual({ kind: "recurring", type: "tense", example: "a", correction: "b", sessions: 2 });
+    expect(p.items[0].frame).toBe("I'd rather ___ than ___");
+    expect(p.profile?.accentNotes).toEqual({ en: ["th in think"] });
+  });
+
+  it("refuses a focus with an unknown kind or an error type outside the closed set", () => {
+    expect(() => parsePack({ ...valid, arcs: [], sessions: [{ ...session, focus: { kind: "vibes" } }] })).toThrow(/focus\.kind/);
+    expect(() => parsePack({ ...valid, arcs: [], sessions: [{ ...session, focus: { kind: "meaning", type: "spelling", example: "", correction: "" } }] })).toThrow(/focus\.type/);
+  });
 });
 
 describe("summariseImport — tells the user adds vs overwrites before writing", () => {

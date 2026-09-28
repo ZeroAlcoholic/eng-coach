@@ -7,7 +7,8 @@ import {
   type Scenario,
 } from "../../kernel/types";
 import { band } from "./progress";
-import { composeSystemInstruction } from "./prompt";
+import { microInstruction } from "./focus";
+import { composeSystemInstruction, HELP_TRIGGERS, sessionInstruction } from "./prompt";
 
 const scenario: Scenario = {
   id: "s1",
@@ -208,6 +209,82 @@ describe("composeSystemInstruction — E1 measured recurring mistakes", () => {
     expect(out).not.toMatch(/score (them|the learner)|give .*(a score|a grade)/i);
     expect(out).not.toMatch(/out of (ten|10|five|5|100)/i);
     expect(out).not.toMatch(/打分|給.{0,4}分數|評分/);
+  });
+});
+
+describe("composeSystemInstruction — Phase E: accent, code-mixing, continuity", () => {
+  const ja: Scenario = { ...scenario, targetLanguage: "ja" };
+
+  it("E1 — names the closed list of sounds and drops the old open-ended accent feedback", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(out).toContain("/θ/ and /ð/");
+    expect(out).toContain("/iː/ vs /ɪ/");
+    expect(out).toContain("word stress");
+    expect(out).toContain("at most once every three or four exchanges");
+    expect(out).not.toContain("brief, specific accent feedback");
+    expect(out).toContain("Never rate their accent");
+    expect(composeSystemInstruction(ja, DEFAULT_PROFILE)).toContain("small っ");
+  });
+
+  it("E4 — the code-mixing section exists for both languages and the help section is unchanged", () => {
+    const en = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(en).toContain("VOCABULARY GAP");
+    expect(en).toContain("say the WHOLE sentence again in English");
+    expect(en).toContain("without switching your own turn into Chinese");
+    const jp = composeSystemInstruction(ja, DEFAULT_PROFILE);
+    expect(jp).toContain("VOCABULARY GAP");
+    expect(jp).toContain("say the WHOLE sentence again in Japanese only");
+    for (const out of [en, jp]) {
+      expect(out).toContain("── Hands-free help — the learner can ask for help out loud (B1) ──");
+      expect(out).toContain("「我不知道怎麼回 / 卡住了 / 提示一下」 → offer TWO short example answers");
+      expect(out).toContain("first sound as a cue");
+    }
+  });
+
+  it("the help triggers the prompt lists are the ones annotate.ts matches (single source)", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    for (const t of HELP_TRIGGERS) expect(out).toContain(`「${t}」`);
+  });
+
+  it("E2 — lists the sounds the coach named last time, for the practised language only", () => {
+    const profile: LearnerProfile = { ...DEFAULT_PROFILE, accentNotes: { en: ["the th in think"], ja: ["おばあさん"] } };
+    const out = composeSystemInstruction(scenario, profile);
+    expect(out).toContain("Sounds you pointed out last time");
+    expect(out).toContain("the th in think");
+    expect(out).not.toContain("おばあさん");
+    expect(composeSystemInstruction(scenario, DEFAULT_PROFILE)).not.toContain("Sounds you pointed out");
+  });
+});
+
+describe("sessionInstruction — D3: a micro session carries no due items, weak objectives or story", () => {
+  const due = [item("circle back")];
+  const weak = ["order a coffee"];
+  const arc = {
+    title: "London Calling",
+    episode: 2,
+    planned: 6,
+    recap: "你昨天抵達倫敦。",
+    storyState: { characters: [], events: [], openThreads: [] },
+    isFinal: false,
+  };
+  const micro = microInstruction({ kind: "cando", objective: "ask for a discount" });
+
+  it("micro: none of the three blocks; the drill block is present", () => {
+    const out = sessionInstruction({ scenario, profile: DEFAULT_PROFILE, dueItems: due, weakObjectives: weak, arc, micro });
+    expect(out).not.toContain("Spaced review");
+    expect(out).not.toContain("still aren't solid");
+    expect(out).not.toContain("連續劇");
+    expect(out).toContain("90-SECOND FOCUSED FOLLOW-UP");
+    expect(out).toContain("ask for a discount");
+  });
+
+  it("full session: all three blocks, no drill block", () => {
+    const out = sessionInstruction({ scenario, profile: DEFAULT_PROFILE, dueItems: due, weakObjectives: weak, arc });
+    expect(out).toContain("Spaced review");
+    expect(out).toContain("still aren't solid");
+    expect(out).toContain("連續劇");
+    expect(out).not.toContain("90-SECOND FOCUSED FOLLOW-UP");
+    expect(out).toBe(composeSystemInstruction(scenario, DEFAULT_PROFILE, due, weak, arc));
   });
 });
 

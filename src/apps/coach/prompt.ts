@@ -38,9 +38,36 @@ export interface ArcContext {
 }
 
 const LANGUAGE_NAME: Record<TargetLanguage, string> = { en: "English", ja: "Japanese" };
+
+/**
+ * The spoken help requests the coach is told to honour. ONE list, used both to
+ * write the prompt's hands-free-help section and (annotate.ts) to mark the
+ * learner turn that follows a request as aided — so the prompt and the
+ * measurement can never disagree about what counts as asking for help.
+ */
+export const HELP_TRIGGERS: readonly string[] = [
+  "怎麼說",
+  "怎麼講",
+  "慢一點",
+  "再說一次",
+  "再講一次",
+  "什麼意思",
+  "翻譯一下",
+  "不知道怎麼回",
+  "卡住了",
+  "提示一下",
+];
 // Traditional-Chinese name of the target language, for learner-facing example
 // phrases inside the prompt (e.g. the hands-free help triggers).
 const LANGUAGE_NAME_ZH: Record<TargetLanguage, string> = { en: "英文", ja: "日文" };
+
+// The closed set of sounds the coach may name. Closed so the note the judge
+// extracts (pronunciationNotes) and the next session's reminder talk about the
+// same handful of things, instead of a new impressionistic label every time.
+const ACCENT_TARGETS: Record<TargetLanguage, string> = {
+  en: "/θ/ and /ð/ (th), word-final /t/ /d/ /k/, /iː/ vs /ɪ/ (sheep/ship), word stress, sentence-final intonation",
+  ja: "long vs short vowels (おばさん/おばあさん), the small っ (double consonants), pitch accent on the word just taught, sentence-final intonation",
+};
 
 // CEFR is the single scale; for Japanese we also surface the rough JLPT mapping.
 const JLPT: Record<CEFRLevel, string> = {
@@ -123,7 +150,10 @@ export function composeSystemInstruction(
     "- If they go silent or answer in a few words, give a HINT (two short example answers to pick from, or an easier follow-up), then let them try.",
     "- When they speak, first echo the gist back in correct, natural form (an implicit model), then react in character to keep things moving.",
     "- On a meaningful error, PROMPT for self-repair FIRST (a hint, or 'try that part again', 'how would you say that in the past?'). Only if they can't fix it after one try, give the correct version explicitly (with a short 繁中 gloss for grammar). Prompts beat silent recasts — make the correction noticeable. Fix what blocks meaning first, ONE thing at a time, with brief praise; never stack criticisms or drill the same item more than twice.",
-    "- Read the learner's real level and accent live and ADAPT: pitch about one notch above them (i+1), raise or lower difficulty to fit, and give brief, specific accent feedback (name the sound, model it once).",
+    "- Read the learner's real level live and ADAPT: pitch about one notch above them (i+1), raise or lower difficulty to fit.",
+    "- PRONUNCIATION: comment only when a sound blocked understanding or the same sound has slipped repeatedly — at most once every three or four exchanges. Name the sound from this list only: " +
+      ACCENT_TARGETS[s.targetLanguage] +
+      ". Model it once in a short phrase, have them say it once, then move on. Never rate their accent.",
     "- Teach at most ONE useful phrase per turn, in context, then immediately make them USE it; recycle earlier phrases later in fresh situations.",
     "- Run it as a TASK: give a moment to plan at the start; through the main exchange prioritise FLUENCY (note slips silently, keep them talking); near the end revisit 1–2 key errors. Drive toward the objectives below, and once they're accomplished, bring the role-play to a natural close rather than dragging on.",
     "",
@@ -133,7 +163,21 @@ export function composeSystemInstruction(
     "- 「慢一點 / 再說一次 / 再講一次」 → slow down and repeat your last line more clearly.",
     "- 「（這句／那個字）什麼意思?」/「翻譯一下」 → give a short Traditional Chinese gloss of what you just said.",
     "- 「我不知道怎麼回 / 卡住了 / 提示一下」 → offer TWO short example answers they could pick from, then let them try.",
+    `Any line containing one of these is a help request: ${HELP_TRIGGERS.map((t) => `「${t}」`).join("")}.`,
     "Don't wait for a perfect trigger phrase — if they clearly switch to Chinese to ask you something, help. After helping, resume exactly where you were.",
+    "",
+    "── When the learner mixes Chinese INTO a target-language sentence ──",
+    "A Chinese word inside their sentence (e.g. 「I want to 預約 a table」) is a VOCABULARY GAP, not a help request and not part of the role-play:",
+    ...(s.targetLanguage === "ja"
+      ? [
+          "- Give the Japanese word at once (kana + romaji + a short 繁中 gloss — you may explain in Chinese within your usual ratio).",
+          "- Then ask them to say the WHOLE sentence again in Japanese only, and continue only after they have.",
+        ]
+      : [
+          "- Give the English word at once with a one-phrase 繁中 gloss, without switching your own turn into Chinese.",
+          "- Then ask them to say the WHOLE sentence again in English, and continue only after they have.",
+        ]),
+    "- If the same word comes up in Chinese again later, give only its first sound as a cue and let them retrieve it.",
   ];
 
   // W3 — when we have measured ability for this language, tune the communication
@@ -227,6 +271,16 @@ export function composeSystemInstruction(
   if (s.progressNote) {
     lines.push("", `Where the learner left off last time (build on it): ${s.progressNote}`);
   }
+  // E2 — the sounds the coach itself named last time. Continuity only: listen
+  // for them and acknowledge improvement; not a list to work through.
+  const accent = (profile.accentNotes?.[s.targetLanguage] ?? []).map((n) => n.replace(/\s+/g, " ").trim().slice(0, 120)).filter(Boolean);
+  if (accent.length) {
+    lines.push(
+      "",
+      "── Sounds you pointed out last time (listen for them; praise if improved, cue once if not) ──",
+      ...accent.map((n) => `- ${n}`),
+    );
+  }
   if (profile.focus.length) {
     lines.push("", `Pay special attention to their recurring weak spots: ${profile.focus.join(", ")}.`);
   }
@@ -294,4 +348,25 @@ export function composeSystemInstruction(
   }
 
   return lines.join("\n");
+}
+
+/**
+ * D3 — everything a Practice screen hands the transport, in one place. A micro
+ * session drills ONE focus inside the same scene: it must not also carry due
+ * items, weak objectives or the story continuity, or the ninety seconds turn
+ * into a second full session. `micro` therefore replaces those inputs rather
+ * than adding to them.
+ */
+export function sessionInstruction(input: {
+  scenario: Scenario;
+  profile: LearnerProfile;
+  dueItems: LearnedItem[];
+  weakObjectives: string[];
+  arc?: ArcContext;
+  micro?: string; // the drill block from focus.ts microInstruction, when this is a micro session
+}): string {
+  if (input.micro !== undefined) {
+    return composeSystemInstruction(input.scenario, input.profile, [], [], undefined) + input.micro;
+  }
+  return composeSystemInstruction(input.scenario, input.profile, input.dueItems, input.weakObjectives, input.arc);
 }

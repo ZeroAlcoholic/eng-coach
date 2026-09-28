@@ -1,12 +1,16 @@
-// Six synthetic practice transcripts for screening the judge. Written by hand
-// for this purpose — no real learner, no names, no key. They span both target
-// languages, three CEFR bands, a barely-there learner, and a coach-only session,
-// so a model that inflates, hallucinates examples or fails the validator shows it.
+// Synthetic practice transcripts for screening the judge and for the
+// annotation rules. Written by hand for this purpose — no real learner, no
+// names, no key. The first six span both target languages, three CEFR bands, a
+// barely-there learner, and a coach-only session, so a model that inflates,
+// hallucinates examples or fails the validator shows it. The last four each
+// contain exactly one thing annotate.ts must catch: parroting, a spoken help
+// request, Chinese inside an English sentence, Chinese inside Japanese.
 
-import type { CEFRLevel, TranscriptTurn } from "../../../../kernel/types";
+import type { CEFRLevel, TargetLanguage, TranscriptTurn } from "../../../../kernel/types";
 
 export interface JudgeFixture {
   id: string;
+  language: TargetLanguage;
   level: CEFRLevel;
   objectives: string[];
   transcript: TranscriptTurn[];
@@ -14,11 +18,19 @@ export interface JudgeFixture {
   // loosely (band ±1), never treats them as ground truth for a score.
   expectBand: CEFRLevel | null; // null = should be unavailable
   expectErrorTypes: string[]; // patterns a reader can actually point at
+  // Learner-turn indices (counting learner turns only, from 0) a reader would
+  // flag; absent on the six screening fixtures, which contain none.
+  expectFlags?: { echo?: number[]; aided?: number[]; l1?: number[] };
+  // For the code-mixing fixtures: which objective was completed only with a
+  // Chinese word, and the Chinese the learner said (H2 checks the judge's
+  // compliance with the not-met rule and the fallback substring rule).
+  expectMixed?: { objectiveNotMet: string; said: string[] };
 }
 
 export const FIXTURES: JudgeFixture[] = [
   {
     id: "en-a2-hotel",
+    language: "en",
     level: "A2",
     objectives: ["ask for a late checkout", "report a problem with the room"],
     expectBand: "A2",
@@ -37,6 +49,7 @@ export const FIXTURES: JudgeFixture[] = [
   },
   {
     id: "en-b1-budget",
+    language: "en",
     level: "B1",
     objectives: ["defend a 10% increase", "propose a compromise"],
     expectBand: "B1",
@@ -54,6 +67,7 @@ export const FIXTURES: JudgeFixture[] = [
   },
   {
     id: "en-b2-negotiation",
+    language: "en",
     level: "B2",
     objectives: ["push back on a deadline", "agree next steps"],
     expectBand: "B2",
@@ -70,6 +84,7 @@ export const FIXTURES: JudgeFixture[] = [
   },
   {
     id: "ja-a1-ramen",
+    language: "ja",
     level: "A1",
     objectives: ["注文する", "辛さを調整してもらう"],
     expectBand: "A1",
@@ -86,6 +101,7 @@ export const FIXTURES: JudgeFixture[] = [
   },
   {
     id: "en-a1-minimal",
+    language: "en",
     level: "A1",
     objectives: ["introduce yourself"],
     expectBand: "A1",
@@ -101,6 +117,7 @@ export const FIXTURES: JudgeFixture[] = [
   },
   {
     id: "coach-only",
+    language: "en",
     level: "B1",
     objectives: ["say anything"],
     expectBand: null,
@@ -109,6 +126,85 @@ export const FIXTURES: JudgeFixture[] = [
       { who: "coach", text: "Hello? Are you there? Let's start whenever you're ready." },
       { who: "coach", text: "I'll set the scene: you're at the airport check-in desk…" },
       { who: "coach", text: "Take your time." },
+    ],
+  },
+];
+
+/** The four annotation fixtures. Kept apart from the screening six so the
+ *  screening table's baseline rows keep meaning what they meant. */
+export const ANNOTATION_FIXTURES: JudgeFixture[] = [
+  {
+    id: "en-echo",
+    language: "en",
+    level: "A2",
+    objectives: ["ask for directions"],
+    expectBand: null, // every learner line is the coach's line said back
+    expectErrorTypes: [],
+    expectFlags: { echo: [0, 1, 2] },
+    transcript: [
+      { who: "coach", text: "Try this: Excuse me, how do I get to the station?" },
+      { who: "user", text: "Excuse me, how do I get to the station?" },
+      { who: "coach", text: "Go straight and turn left at the bank." },
+      { who: "user", text: "Go straight and turn left at the bank." },
+      { who: "coach", text: "Now say: Is it far from here?" },
+      { who: "user", text: "Is it far from here?" },
+    ],
+  },
+  {
+    id: "en-spoken-help",
+    language: "en",
+    level: "B1",
+    objectives: ["ask for a refund"],
+    expectBand: "B1",
+    expectErrorTypes: [],
+    expectFlags: { aided: [2], l1: [1] },
+    transcript: [
+      { who: "coach", text: "Hi, this is customer service. How can I help?" },
+      { who: "user", text: "Hello, I bought a jacket last week but the zipper is broken." },
+      { who: "coach", text: "I'm sorry to hear that. What would you like us to do?" },
+      { who: "user", text: "退款怎麼說?" },
+      { who: "coach", text: "退款 is a refund. Try: I'd like a refund, please." },
+      { who: "user", text: "I would like a full refund, please, and I can send the jacket back." },
+      { who: "coach", text: "Of course. We'll email you a return label." },
+      { who: "user", text: "Thank you, that works for me." },
+    ],
+  },
+  {
+    id: "en-mixed",
+    language: "en",
+    level: "A2",
+    objectives: ["book a table", "ask about opening hours"],
+    expectBand: "A2",
+    expectErrorTypes: [],
+    expectFlags: { l1: [0, 2] },
+    expectMixed: { objectiveNotMet: "book a table", said: ["預約", "幾點"] },
+    transcript: [
+      { who: "coach", text: "Good evening, Luigi's restaurant. How can I help you?" },
+      { who: "user", text: "Hello, I want to 預約 a table for two on Friday." },
+      { who: "coach", text: "預約 is book — I'd like to book a table. Friday at what time?" },
+      { who: "user", text: "Seven o'clock, please." },
+      { who: "coach", text: "Seven o'clock, table for two. Anything else?" },
+      { who: "user", text: "You open until 幾點 on Friday?" },
+      { who: "coach", text: "We're open until eleven. See you Friday!" },
+    ],
+  },
+  {
+    id: "ja-mixed",
+    language: "ja",
+    level: "A1",
+    objectives: ["予約する", "時間を聞く"],
+    expectBand: "A1",
+    expectErrorTypes: [],
+    expectFlags: {}, // kanji is Japanese too: text alone cannot flag these
+    expectMixed: { objectiveNotMet: "予約する", said: ["我想要", "幾點"] },
+    transcript: [
+      { who: "coach", text: "はい、レストラン花です。ご用件は？" },
+      { who: "user", text: "すみません、我想要 予約 ふたり、きんようび。" },
+      { who: "coach", text: "予約ですね。「予約をお願いします」と言ってみましょう。何時ですか？" },
+      { who: "user", text: "しちじ、おねがいします。" },
+      { who: "coach", text: "七時、二名様ですね。他に何かありますか？" },
+      { who: "user", text: "きんようび、幾點 まで？" },
+      { who: "coach", text: "十一時までです。お待ちしております。" },
     ],
   },
 ];

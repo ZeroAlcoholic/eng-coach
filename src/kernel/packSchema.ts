@@ -17,6 +17,7 @@ import type {
   LearningPack,
   ObjectiveMastery,
   Scenario,
+  SessionFocus,
   SessionRecord,
   SessionReview,
   SkillLevels,
@@ -135,6 +136,7 @@ const parseProfile: Parser<LearnerProfile> = (v, path) => {
         })
       : undefined,
     errorLog: field(r, "errorLog", optional(byLanguage(errorLogForLanguage)), path),
+    accentNotes: field(r, "accentNotes", optional(byLanguage(strings)), path),
   });
 };
 
@@ -182,6 +184,7 @@ const parseItem: Parser<LearnedItem> = (v, path) => {
     reading: field(r, "reading", optStr, path),
     meaning: field(r, "meaning", string, path),
     example: field(r, "example", optStr, path),
+    frame: field(r, "frame", optStr, path),
     sourceScenarioId: field(r, "sourceScenarioId", optStr, path),
     sourceSessionId: field(r, "sourceSessionId", optStr, path),
     firstSeenAt: field(r, "firstSeenAt", isoDate, path),
@@ -204,10 +207,60 @@ const parseItem: Parser<LearnedItem> = (v, path) => {
 
 // --- session ------------------------------------------------------------------
 
+// A flag is stored only as `true`; anything else (false, a string) is treated
+// as absent rather than refused, because an absent flag is the ordinary case.
+const flag: Parser<true | undefined> = (v) => (v === true ? true : undefined);
+
 const parseTurn: Parser<TranscriptTurn> = (v, path) => {
   const r = record(v, path);
-  return { who: field(r, "who", enumOf(["user", "coach"] as const), path), text: field(r, "text", string, path) };
+  return compact({
+    who: field(r, "who", enumOf(["user", "coach"] as const), path),
+    text: field(r, "text", string, path),
+    echo: field(r, "echo", flag, path),
+    aided: field(r, "aided", flag, path),
+    l1: field(r, "l1", flag, path),
+  });
 };
+
+const parseFallback: Parser<{ said: string; target: string }> = (v, path) => {
+  const r = record(v, path);
+  return { said: field(r, "said", nonEmptyString, path), target: field(r, "target", nonEmptyString, path) };
+};
+
+/** A stored focus: the structured form, or the description string an older
+ *  record kept for its micro session (read back as-is, meaning unknown). */
+const parseFocus: Parser<SessionFocus | string> = (v, path) => {
+  if (typeof v === "string") return v;
+  const r = record(v, path);
+  const kind = field(r, "kind", enumOf(["meaning", "gap", "recurring", "cando"] as const), path);
+  switch (kind) {
+    case "meaning":
+      return {
+        kind,
+        type: field(r, "type", enumOf(ERROR_TYPES), path),
+        example: field(r, "example", string, path),
+        correction: field(r, "correction", string, path),
+      };
+    case "recurring":
+      return {
+        kind,
+        type: field(r, "type", enumOf(ERROR_TYPES), path),
+        example: field(r, "example", string, path),
+        correction: field(r, "correction", string, path),
+        sessions: field(r, "sessions", number, path),
+      };
+    case "gap":
+      return { kind, gaps: field(r, "gaps", arrayOf(parseFallback), path) };
+    case "cando":
+      return { kind, objective: field(r, "objective", string, path) };
+    default:
+      return assertNever(kind);
+  }
+};
+
+function assertNever(x: never): never {
+  throw new Error(`unhandled focus kind: ${JSON.stringify(x)}`);
+}
 
 const parseStoredReview: Parser<SessionReview> = (v, path) => {
   const r = record(v, path);
@@ -241,6 +294,8 @@ const parseStoredReview: Parser<SessionReview> = (v, path) => {
     fixes: field(r, "fixes", optStrings, path),
     objectivesMet: field(r, "objectivesMet", optional(arrayOf(verdict)), path),
     errors: field(r, "errors", optional(arrayOf(error)), path),
+    l1Fallbacks: field(r, "l1Fallbacks", optional(arrayOf(parseFallback)), path),
+    pronunciationNotes: field(r, "pronunciationNotes", optStrings, path),
   });
 };
 
@@ -248,6 +303,7 @@ const parseSession: Parser<SessionRecord> = (v, path) => {
   const r = record(v, path);
   const ledger = field(r, "finalize", optional(record), path);
   const aids = field(r, "aids", optional(record), path);
+  const drilled = field(r, "drilledFocus", optional(record), path);
   const review = field(r, "review", optional(parseStoredReview), path);
   const count = integerIn(0, Number.MAX_SAFE_INTEGER); // a negative aid count would fake「無提示」
   return compact({
@@ -259,7 +315,9 @@ const parseSession: Parser<SessionRecord> = (v, path) => {
     // Mutually exclusive on every write path; keep the stored record that way.
     judgeUnavailable: review ? undefined : field(r, "judgeUnavailable", optStr, path),
     kind: field(r, "kind", optional(enumOf(["micro"] as const)), path),
-    focus: field(r, "focus", optStr, path),
+    focus: field(r, "focus", optional(parseFocus), path),
+    drilledFocus: drilled ? { sourceSessionId: field(drilled, "sourceSessionId", nonEmptyString, `${path}.drilledFocus`) } : undefined,
+    recycled: field(r, "recycled", optStrings, path),
     aids: aids
       ? {
           suggestions: field(aids, "suggestions", count, `${path}.aids`),

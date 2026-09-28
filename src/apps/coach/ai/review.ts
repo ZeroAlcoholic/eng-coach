@@ -9,6 +9,12 @@
 //     subscores, not taken from the model's headline guess.
 //   - If no sample survives validation, the outcome is `unavailable` — never a
 //     recap with the target level standing in for a measurement.
+//   - A turn annotated as an echo of the coach or as containing Chinese is
+//     shown to the model with that label and is not evidence of a can-do; a
+//     transcript with nothing else in it is `unavailable` before any call.
+//   - `l1Fallbacks[].said` must be a substring of a learner turn and
+//     `pronunciationNotes[]` a substring of a coach turn: what the model quotes
+//     must exist, on the side it claims.
 
 import { Type } from "@google/genai";
 
@@ -29,7 +35,7 @@ import {
   type Parser,
 } from "../../../kernel/validate";
 import { medianReview, numToCefr } from "../progress";
-import { generateJson, transcriptText, type GenerateOptions } from "./client";
+import { generateJson, type GenerateOptions } from "./client";
 
 export const REVIEW_SCHEMA = {
   type: Type.OBJECT,
@@ -70,9 +76,21 @@ export const REVIEW_SCHEMA = {
         required: ["type", "example", "correction"],
       },
     },
+    l1Fallbacks: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: { said: { type: Type.STRING }, target: { type: Type.STRING } },
+        required: ["said", "target"],
+      },
+    },
+    pronunciationNotes: { type: Type.ARRAY, items: { type: Type.STRING } },
   },
   required: ["cefr", "subscores", "reviewEn", "reviewZh", "progressNote"],
 };
+
+const MAX_L1_FALLBACKS = 5;
+const MAX_PRONUNCIATION_NOTES = 3;
 
 /** Error types a text transcript can evidence. Pronunciation stays in the
  *  stored enum (older recaps carry it) but the judge may not report it. */
@@ -85,12 +103,29 @@ export type JudgeOutcome =
 const normalise = (s: string) => s.toLocaleLowerCase().replace(/\s+/g, " ").trim();
 
 /** Build the validator for ONE session: it needs the learner's own words to
- *  check that every reported error example was actually said. */
-export function reviewParser(learnerTurns: string[]): Parser<SessionReview> {
+ *  check that every reported error example was actually said, and the coach's
+ *  to check that every pronunciation note quotes the coach. */
+export function reviewParser(learnerTurns: string[], coachTurns: string[] = []): Parser<SessionReview> {
   const learnerText = normalise(learnerTurns.join("\n"));
+  const coachText = normalise(coachTurns.join("\n"));
   const saidByLearner = (example: string) => {
     const e = normalise(example);
     return e.length >= 2 && learnerText.includes(e);
+  };
+  const saidByCoach = (note: string) => {
+    const n = normalise(note);
+    return n.length >= 2 && coachText.includes(n);
+  };
+  const parseFallback: Parser<{ said: string; target: string }> = (v, path) => {
+    const r = record(v, path);
+    const said = field(r, "said", nonEmptyString, path);
+    if (!saidByLearner(said)) throw new Invalid(`${path}.said`, "not found in the learner's turns");
+    return { said, target: field(r, "target", nonEmptyString, path) };
+  };
+  const parseNote: Parser<string> = (v, path) => {
+    const note = nonEmptyString(v, path);
+    if (!saidByCoach(note)) throw new Invalid(path, "not found in the coach's turns");
+    return note;
   };
   const parseError: Parser<NonNullable<SessionReview["errors"]>[number]> = (v, path) => {
     const r = record(v, path);
@@ -119,6 +154,11 @@ export function reviewParser(learnerTurns: string[]): Parser<SessionReview> {
     const cefr = numToCefr((subscores.grammar + subscores.vocab + subscores.interaction) / 3);
     const list = (key: string) => field(r, key, optional(arrayKeeping(nonEmptyString)), path);
     const errors = field(r, "errors", optional(arrayKeeping(parseError)), path);
+    const l1Fallbacks = field(r, "l1Fallbacks", optional(arrayKeeping(parseFallback)), path)?.slice(0, MAX_L1_FALLBACKS);
+    const pronunciationNotes = field(r, "pronunciationNotes", optional(arrayKeeping(parseNote)), path)?.slice(
+      0,
+      MAX_PRONUNCIATION_NOTES,
+    );
     return {
       cefr,
       subscores,
@@ -129,8 +169,22 @@ export function reviewParser(learnerTurns: string[]): Parser<SessionReview> {
       fixes: list("fixes"),
       objectivesMet: field(r, "objectivesMet", optional(arrayKeeping(parseVerdict)), path),
       errors: errors ?? [],
+      ...(l1Fallbacks?.length ? { l1Fallbacks } : {}),
+      ...(pronunciationNotes?.length ? { pronunciationNotes } : {}),
     };
   };
+}
+
+/** The transcript as the judge reads it: annotated learner turns carry the
+ *  label the prompt's rules refer to, so the model discounts them without
+ *  having to guess which lines were parroted or Chinese. */
+export function judgeTranscriptText(turns: TranscriptTurn[]): string {
+  return turns
+    .map((t) => {
+      const tags = t.who === "user" ? `${t.echo ? "[repeated after coach] " : ""}${t.l1 ? "[contains Chinese] " : ""}` : "";
+      return `${t.who}: ${tags}${t.text}`;
+    })
+    .join("\n");
 }
 
 export function judgePrompt(opts: {
@@ -158,13 +212,34 @@ export function judgePrompt(opts: {
     `the learner's speech, each as: type, chosen ONLY from this closed list [${TEXT_EVIDENCED_ERROR_TYPES.join(", ")}]; ` +
     `example, the learner's own words copied VERBATIM from a learner turn; correction, the natural ` +
     `version. Report a pattern only if you can quote a real slip — return an empty list rather than ` +
-    `inventing one).` +
-    `\n\nTRANSCRIPT:\n${transcriptText(opts.transcript)}`
+    `inventing one); l1Fallbacks (up to ${MAX_L1_FALLBACKS} places where the learner put a CHINESE word or phrase ` +
+    `inside a target-language sentence because they lacked the word: said, the Chinese part copied VERBATIM ` +
+    `from the learner turn; target, the natural target-language word or phrase for it. Empty list if none); ` +
+    `pronunciationNotes (up to ${MAX_PRONUNCIATION_NOTES} sounds the COACH explicitly pointed out, each copied VERBATIM from a ` +
+    `coach turn — a text transcript cannot show pronunciation, so only the coach's own words count; empty list if none).` +
+    `\nRULES: a learner turn labelled [repeated after coach] is the coach's line said back, and one labelled ` +
+    `[contains Chinese] is not target-language production — neither counts as evidence that an objective was met ` +
+    `or as a sign of level. An objective is met ONLY when the learner completed it entirely in the target ` +
+    `language; completing it with a Chinese word or with the coach's own line is NOT met. The transcript comes ` +
+    `from speech recognition: do not report wordChoice for a word that merely sounds like the intended one ` +
+    `unless the context proves the learner meant something else.` +
+    `\n\nTRANSCRIPT:\n${judgeTranscriptText(opts.transcript)}`
   );
 }
 
 export interface JudgeOptions extends GenerateOptions {
   samples?: number; // screening overrides the configured count per call
+  generate?: typeof generateJson; // tests stand in here; production is the real call
+}
+
+/** Why a transcript cannot be judged without calling anyone, or null. */
+export function unjudgeable(transcript: TranscriptTurn[]): string | null {
+  const learner = transcript.filter((t) => t.who === "user" && t.text.trim());
+  if (!learner.length) return "學習者沒有開口，沒有可評量的內容。";
+  if (learner.every((t) => t.echo)) return "學習者只有跟著教練複誦，沒有自己的產出可評量。";
+  if (learner.every((t) => t.l1)) return "學習者只說了中文，沒有目標語產出可評量。";
+  if (learner.every((t) => t.echo || t.l1)) return "學習者只有複誦與中文，沒有目標語產出可評量。";
+  return null;
 }
 
 export async function summariseSession(
@@ -172,16 +247,18 @@ export async function summariseSession(
   opts: { transcript: TranscriptTurn[]; level: CEFRLevel; previous?: string; objectives?: string[] },
   judge: JudgeOptions = {},
 ): Promise<JudgeOutcome> {
+  const reason = unjudgeable(opts.transcript);
+  if (reason) return { kind: "unavailable", reason };
   const learnerTurns = opts.transcript.filter((t) => t.who === "user").map((t) => t.text);
-  if (!learnerTurns.some((t) => t.trim()))
-    return { kind: "unavailable", reason: "學習者沒有開口，沒有可評量的內容。" };
+  const coachTurns = opts.transcript.filter((t) => t.who === "coach").map((t) => t.text);
   const prompt = judgePrompt(opts);
-  const parse = reviewParser(learnerTurns);
+  const parse = reviewParser(learnerTurns, coachTurns);
   const n = judge.samples ?? judgeSamples();
+  const generate = judge.generate ?? generateJson;
   // Self-consistency: sample n times and median the numbers. A sample that
   // fails validation is discarded, never patched with defaults.
   const settled = await Promise.allSettled(
-    Array.from({ length: n }, () => generateJson(apiKey, prompt, REVIEW_SCHEMA, parse, judge)),
+    Array.from({ length: n }, () => generate(apiKey, prompt, REVIEW_SCHEMA, parse, judge)),
   );
   const valid = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
   if (!valid.length) {

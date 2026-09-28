@@ -188,11 +188,26 @@ export interface LearnerProfile {
   prefs?: { slowSpeech?: boolean; showLevelMeter?: boolean };
   // E1 — recurring error types per language, keyed by the closed ERROR_TYPES set.
   errorLog?: Partial<Record<TargetLanguage, Partial<Record<ErrorType, ErrorTally>>>>;
+  // The sounds the coach named in the MOST RECENT session of each language, so
+  // the next session's prompt can pick them up. Replaced each session, never
+  // accumulated: a note for continuity, not a record of weakness.
+  accentNotes?: Partial<Record<TargetLanguage, string[]>>;
 }
 
 export interface TranscriptTurn {
   who: "user" | "coach";
   text: string;
+  // Annotations written at finalize by a pure function over the transcript
+  // (apps/coach/annotate.ts). Each is present only when true, so a turn from a
+  // build without annotations is indistinguishable from an unflagged one — and
+  // an unflagged turn is the ordinary case, not evidence of anything.
+  //   echo  — the learner repeated the coach's previous line (parroting)
+  //   aided — the turn follows a spoken help request or a「卡住?」tap
+  //   l1    — the turn contains the learner's first language (Chinese) where
+  //           target-language production was expected
+  echo?: true;
+  aided?: true;
+  l1?: true;
 }
 
 /** Per-skill CEFR band as an integer 1–6 (A1=1 … C2=6) — numeric so it can feed
@@ -217,7 +232,27 @@ export interface SessionReview {
   // E1 — typed error patterns, restricted to ERROR_TYPES. Absent when the judge
   // found none worth naming (or on an older stored recap).
   errors?: { type: ErrorType; example: string; correction: string }[];
+  // Words the learner replaced with Chinese mid-sentence: `said` is the learner's
+  // own words (a substring of a learner turn), `target` the target-language form.
+  // A vocabulary GAP, not an error type — it feeds the recap's focus and the item
+  // extractor, never the tally or the level.
+  l1Fallbacks?: { said: string; target: string }[];
+  // Sounds the COACH named during the session (each a substring of a coach turn),
+  // so the next session can pick them up. A note, never a score: no readout, no
+  // EWMA, no error type reads this.
+  pronunciationNotes?: string[];
 }
+
+/**
+ * The ONE thing the recap asks the learner to take from a session, stored in
+ * structured form so a later session can check whether it was resolved.
+ * Priority (apps/coach/focus.ts): meaning > gap > recurring > cando.
+ */
+export type SessionFocus =
+  | { kind: "meaning"; type: ErrorType; example: string; correction: string }
+  | { kind: "gap"; gaps: { said: string; target: string }[] }
+  | { kind: "recurring"; type: ErrorType; example: string; correction: string; sessions: number }
+  | { kind: "cando"; objective: string };
 
 /**
  * Which end-of-session steps have been APPLIED for a session. Finalize is
@@ -254,7 +289,16 @@ export interface SessionRecord {
   // "micro" = the 90-second focused follow-up after a recap. Saved for the
   // transcript and chunk-use tracking only: no judge, no level estimate.
   kind?: "micro";
-  focus?: string; // what the micro session drilled
+  // On a full session: the focus the recap showed, picked once at finalize.
+  // A string here is a record from before the focus was structured (it held the
+  // micro session's drill description) and counts as unknown everywhere.
+  focus?: SessionFocus | string;
+  // On a micro session: which full session's focus it drilled.
+  drilledFocus?: { sourceSessionId: string };
+  // Ids of the due items the coach was asked to elicit in this session. The
+  // chunk-use readout's denominator; absent on records from before it existed
+  // (unknown, not zero).
+  recycled?: string[];
 }
 
 /**
@@ -272,8 +316,12 @@ export interface DraftSession {
   // a 90-second micro session must not be judged as a full one, and its aids
   // still count.
   kind?: "micro";
-  focus?: string;
+  drilledFocus?: { sourceSessionId: string };
   aids?: SessionAids;
+  // The turn indices at which a help button was tapped (annotate.ts marks the
+  // learner turn that follows each one as aided) and the due items recycled.
+  aidedTurnIdx?: number[];
+  recycled?: string[];
 }
 
 /**
@@ -291,6 +339,10 @@ export interface LearnedItem {
   reading?: string; // kana / pinyin / IPA — for pronunciation drills
   meaning: string; // gloss in the learner's L1 (繁中)
   example?: string; // a usage example, usually the line it appeared in
+  // Grammar items only: the pattern with `___` marking each open slot, e.g.
+  // "I'd rather ___ than ___". The fixed words between slots are the anchors the
+  // chunk-use matcher looks for in order, so a filled-in use still counts.
+  frame?: string;
   sourceScenarioId?: string;
   sourceSessionId?: string;
   firstSeenAt: string; // ISO
