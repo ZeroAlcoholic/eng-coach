@@ -23,7 +23,7 @@ import { finalizeSession, type FinalizeDeps } from "../finalize";
 import { microInstruction } from "../focus";
 import { cefrToNum } from "../progress";
 import { sessionInstruction, type ArcContext } from "../prompt";
-import { defaultSessionDeps, PracticeSession, type SessionPhase, type Turn } from "../session";
+import { defaultSessionDeps, PracticeSession, type SessionPhase } from "../session";
 import { describeEstimate, diskStore, ensureLines, geminiTts, keyOf, type SynthResult } from "./synthLines";
 import { SyntheticLearnerAudio } from "./SyntheticLearnerAudio";
 
@@ -135,7 +135,6 @@ async function runScript(script: Script): Promise<Run> {
   expect(script.lines.length).toBeLessThanOrEqual(MAX_LINES);
   const run: Run = { transcript: [], cuesYouWhilePlaying: 0, cueChanges: 0, phases: [], reconnectingSeen: false, resumedWithMemory: null, elapsedMs: 0, sent: 0 };
   let audio: SyntheticLearnerAudio | null = null;
-  let cue: Turn = "coach";
   let youCount = 0;
   const notices: string[] = [];
   const session = new PracticeSession(
@@ -152,7 +151,6 @@ async function runScript(script: Script): Promise<Run> {
         }
       },
       onCue: (t) => {
-        cue = t;
         run.cueChanges++;
         if (t === "you") {
           youCount++;
