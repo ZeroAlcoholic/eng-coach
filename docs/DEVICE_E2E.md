@@ -335,3 +335,12 @@ CEFR=A2、與 fixture 期望一致；U6 screening（`docs/SCREENING_2026-09-28.m
 judge 55 次（screening 2×26＋合成 3）；items 3 次。金鑰只讀自環境變數，未出現於任何檔案。
 
 **仍 blocked（真人／真機）**：手機 UX、麥克風授權、proactive audio 對人的感受、教學法對人有效。
+
+### 補判 2026-09-28（UX 校準）：教練先開口
+
+探針（真 `gemini-3.8-live`，麥克風只送靜音 15 秒）：proactive audio 開或關，教練都**不會先開口**
+（audio chunks 0）；加一則 client text turn 當開場提示後 2.06 秒即開始問候。修：transport 於新對話
+`setupComplete` 時送一次 `OPENING_CUE`（續接／重連不送）。F3-f 重跑：**pass**，首個 coach turn 即前情提要，
+整場 35 秒（修前 88 秒，且每輪都記「教練 60 秒內沒有開口」）。其他兩處 UX：純函式判定的「評量未完成」
+不再提示重試（`retryable=false`，練習紀錄也不出現按鈕）；120 秒微 session 安全網觸發時先顯示
+「加練時間到，已自動結束並儲存這段。」
