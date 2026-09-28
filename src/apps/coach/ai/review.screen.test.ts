@@ -1,157 +1,192 @@
-// SCREENING, not a unit test: calls the real text models and costs money.
+// SCREENING, not a unit test: calls the real text model and costs money.
 // Runs only with SCREEN=1 and GEMINI_API_KEY in the environment:
 //   SCREEN=1 npx vitest run src/apps/coach/ai/review.screen.test.ts
 // Writes docs/SCREENING_<date>.md. Vocabulary is deliberately limited to
-//「晉級／淘汰」— six fixtures are a screen, not an evaluation.
+//「晉級／淘汰」— ten fixtures are a screen, not an evaluation.
+//
+// Screens the SHIPPED judge model only (kernel/overrides): the point is to
+// know how the judge the learner actually gets behaves on the rules the prompt
+// sets, and to re-run only when that model changes. Cost is bounded in code:
+// at most MAX_FIXTURES × CALLS_PER_FIXTURE calls, asserted before any call.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { CEFR_LEVELS } from "../../../kernel/types";
+import { DEFAULT_TEXT_MODEL } from "../../../kernel/overrides";
 import { record } from "../../../kernel/validate";
+import { annotateTurns } from "../annotate";
 import { cefrToNum } from "../progress";
 import { generateJson } from "./client";
-import { FIXTURES } from "./fixtures/transcripts";
+import { ANNOTATION_FIXTURES, FIXTURES, type JudgeFixture } from "./fixtures/transcripts";
 import { judgePrompt, REVIEW_SCHEMA, reviewParser, summariseSession } from "./review";
 
 const apiKey = process.env.GEMINI_API_KEY ?? "";
 const enabled = process.env.SCREEN === "1" && apiKey.length > 0;
 
-const MODELS = ["gemini-3.5-flash", "gemini-3.8-flash"] as const;
-const CALLS_PER_FIXTURE = 15; // 5 medians-of-3; the first 5 also serve as 1-sample runs
+const MODEL = DEFAULT_TEXT_MODEL;
+const CALLS_PER_FIXTURE = 5;
+const MAX_FIXTURES = 6; // the GOAL's cap: ≤ 6 fixtures × 5 calls per model
+// The six screened fixtures: three scored English bands, the Japanese one, the
+// coach-only one, and the two code-mixing ones (which replace two of the
+// original scored fixtures so the cap holds).
+const SCREENED: JudgeFixture[] = [
+  FIXTURES.find((f) => f.id === "en-a2-hotel")!,
+  FIXTURES.find((f) => f.id === "en-b2-negotiation")!,
+  FIXTURES.find((f) => f.id === "ja-a1-ramen")!,
+  FIXTURES.find((f) => f.id === "coach-only")!,
+  ANNOTATION_FIXTURES.find((f) => f.id === "en-mixed")!,
+  ANNOTATION_FIXTURES.find((f) => f.id === "ja-mixed")!,
+];
 
+// Rules fixed BEFORE the run. 晉級 iff every line holds.
+const RULES = {
+  validatorFailure: 0.05, // ≤ 5% of calls fail the validator
+  exampleHitRate: 0.9, // ≥ 90% of reported error examples are real substrings
+  typeRecall: 0.5, // ≥ half of the reader's expected error types are reported (over scored fixtures)
+  mixedNotMet: 0.8, // ≥ 4/5 of calls grade the Chinese-completed objective NOT met
+  fallbackHit: 0.8, // ≥ 4/5 of reported l1Fallbacks.said are substrings
+};
 
-interface ModelStats {
+interface Stats {
   calls: number;
   invalid: number;
+  latenciesMs: number[];
   errorsReported: number;
   errorsKept: number;
-  latenciesMs: number[];
-  std1: number[]; // per fixture: std of cefr over 5 single samples
-  std3: number[]; // per fixture: std of cefr over 5 medians-of-3
-  bandHits: number; // fixtures whose median band is within ±1 of the reader's
+  typeExpected: number;
+  typeHit: number;
+  bandHits: number;
   bandTotal: number;
-  unavailableCorrect: boolean | null; // the coach-only fixture must be unavailable
+  unavailableCorrect: boolean | null;
+  mixedCalls: number;
+  mixedNotMet: number;
+  fallbacksReported: number;
+  fallbacksKept: number;
 }
 
-const std = (xs: number[]) => {
-  if (xs.length < 2) return 0;
-  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
-  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1));
-};
 const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  return s.length ? (s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2) : NaN;
 };
 
-describe.skipIf(!enabled)("judge screening — model and sample count (paid, opt-in)", () => {
+describe.skipIf(!enabled)("judge screening — shipped model, prompt-rule compliance (paid, opt-in)", () => {
   it(
     "writes the screening table",
     async () => {
-      const stats: Record<string, ModelStats> = {};
-      for (const model of MODELS) {
-        const st: ModelStats = { calls: 0, invalid: 0, errorsReported: 0, errorsKept: 0, latenciesMs: [], std1: [], std3: [], bandHits: 0, bandTotal: 0, unavailableCorrect: null };
-        stats[model] = st;
-        for (const f of FIXTURES) {
-          const learner = f.transcript.filter((t) => t.who === "user").map((t) => t.text);
-          if (f.expectBand === null) {
-            const out = await summariseSession(apiKey, { transcript: f.transcript, level: f.level, objectives: f.objectives }, { model, samples: 1 });
-            st.unavailableCorrect = out.kind === "unavailable";
+      expect(SCREENED.length).toBeLessThanOrEqual(MAX_FIXTURES);
+      const calls = SCREENED.length * CALLS_PER_FIXTURE;
+      console.log(`估價：judge ${MODEL} ≤ ${calls} 次呼叫（${SCREENED.length} fixture × ${CALLS_PER_FIXTURE}），每次 ≈ 1.5k tokens in / 0.4k out`);
+      const st: Stats = { calls: 0, invalid: 0, latenciesMs: [], errorsReported: 0, errorsKept: 0, typeExpected: 0, typeHit: 0, bandHits: 0, bandTotal: 0, unavailableCorrect: null, mixedCalls: 0, mixedNotMet: 0, fallbacksReported: 0, fallbacksKept: 0 };
+      const perFixture: string[] = [];
+
+      for (const f of SCREENED) {
+        const transcript = annotateTurns(f.transcript, f.language);
+        const learner = transcript.filter((t) => t.who === "user").map((t) => t.text);
+        const coach = transcript.filter((t) => t.who === "coach").map((t) => t.text);
+        if (f.expectBand === null) {
+          const out = await summariseSession(apiKey, { transcript, level: f.level, objectives: f.objectives }, { model: MODEL, samples: 1 });
+          st.calls++;
+          st.unavailableCorrect = out.kind === "unavailable";
+          perFixture.push(`| ${f.id} | — | — | — | unavailable=${out.kind === "unavailable"} |`);
+          continue;
+        }
+        const parse = reviewParser(learner, coach);
+        const prompt = judgePrompt({ transcript, level: f.level, objectives: f.objectives });
+        const cefrs: number[] = [];
+        const typesSeen = new Set<string>();
+        let notMet = 0;
+        let fbReported = 0;
+        let fbKept = 0;
+        for (let i = 0; i < CALLS_PER_FIXTURE; i++) {
+          expect(st.calls).toBeLessThan(MAX_FIXTURES * CALLS_PER_FIXTURE);
+          const t0 = performance.now();
+          let raw: Record<string, unknown> | null = null;
+          try {
+            raw = await generateJson(apiKey, prompt, REVIEW_SCHEMA, record, { model: MODEL });
+          } catch {
+            /* counted below as invalid */
+          }
+          st.latenciesMs.push(performance.now() - t0);
+          st.calls++;
+          if (!raw) {
+            st.invalid++;
             continue;
           }
-          const parse = reviewParser(learner);
-          const prompt = judgePrompt({ transcript: f.transcript, level: f.level, objectives: f.objectives });
-          const cefrs: number[] = [];
-          for (let i = 0; i < CALLS_PER_FIXTURE; i++) {
-            const t0 = performance.now();
-            let raw: Record<string, unknown> | null = null;
-            try {
-              raw = await generateJson(apiKey, prompt, REVIEW_SCHEMA, record, { model });
-            } catch {
-              /* counted below as invalid */
+          const reported = Array.isArray(raw.errors) ? raw.errors.length : 0;
+          const fbRaw = Array.isArray(raw.l1Fallbacks) ? raw.l1Fallbacks.length : 0;
+          st.errorsReported += reported;
+          try {
+            const review = parse(raw, "$");
+            st.errorsKept += review.errors?.length ?? 0;
+            for (const e of review.errors ?? []) typesSeen.add(e.type);
+            cefrs.push(cefrToNum(review.cefr));
+            if (f.expectMixed) {
+              st.mixedCalls++;
+              const v = review.objectivesMet?.find((o) => o.objective === f.expectMixed!.objectiveNotMet);
+              if (v && !v.met) {
+                st.mixedNotMet++;
+                notMet++;
+              }
+              fbReported += fbRaw;
+              fbKept += review.l1Fallbacks?.length ?? 0;
             }
-            st.latenciesMs.push(performance.now() - t0);
-            st.calls++;
-            if (!raw) {
-              st.invalid++;
-              continue;
-            }
-            const reported = Array.isArray(raw.errors) ? raw.errors.length : 0;
-            try {
-              const review = parse(raw, "$");
-              st.errorsReported += reported;
-              st.errorsKept += review.errors?.length ?? 0;
-              cefrs.push(cefrToNum(review.cefr));
-            } catch {
-              st.invalid++;
-              st.errorsReported += reported;
-            }
-          }
-          if (cefrs.length >= 5) {
-            st.std1.push(std(cefrs.slice(0, 5)));
-            const medians: number[] = [];
-            for (let i = 0; i + 3 <= cefrs.length && medians.length < 5; i += 3) medians.push(median(cefrs.slice(i, i + 3)));
-            st.std3.push(std(medians));
-            st.bandTotal++;
-            const band = Math.round(median(cefrs));
-            if (Math.abs(band - cefrToNum(f.expectBand)) <= 1) st.bandHits++;
+          } catch {
+            st.invalid++;
           }
         }
+        st.fallbacksReported += fbReported;
+        st.fallbacksKept += fbKept;
+        for (const t of f.expectErrorTypes) {
+          st.typeExpected++;
+          if (typesSeen.has(t)) st.typeHit++;
+        }
+        if (cefrs.length) {
+          st.bandTotal++;
+          if (Math.abs(Math.round(median(cefrs)) - cefrToNum(f.expectBand)) <= 1) st.bandHits++;
+        }
+        perFixture.push(
+          `| ${f.id} | ${cefrs.length ? Math.round(median(cefrs)) : "—"} (期望 ${cefrToNum(f.expectBand)}) | ${[...typesSeen].join(",") || "—"} (期望 ${f.expectErrorTypes.join(",") || "—"}) | ${f.expectMixed ? `${notMet}/${CALLS_PER_FIXTURE} not met；fallback ${fbKept}/${fbReported}` : "—"} | — |`,
+        );
       }
 
-      const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
-      const rows = MODELS.map((m) => {
-        const s = stats[m];
-        return {
-          model: m,
-          invalidRate: s.invalid / Math.max(1, s.calls),
-          hitRate: s.errorsReported ? s.errorsKept / s.errorsReported : NaN,
-          latency: median(s.latenciesMs),
-          std1: avg(s.std1),
-          std3: avg(s.std3),
-          bands: `${s.bandHits}/${s.bandTotal}`,
-          unavailable: s.unavailableCorrect,
-        };
-      });
-      const base = rows[0];
-      const cand = rows[1];
-      // Screening rules (fixed BEFORE running): the candidate model 晉級 if it is not
-      // worse on validity, not worse than 5pp on evidence hit-rate, and not >1.5×
-      // slower; 1-sample 晉級 (over 3) if 3 samples do not cut the spread by a full
-      // band or more on the baseline model.
-      const modelVerdict =
-        cand.invalidRate <= base.invalidRate + 0.02 &&
-        (Number.isNaN(cand.hitRate) || Number.isNaN(base.hitRate) || cand.hitRate >= base.hitRate - 0.05) &&
-        cand.latency <= base.latency * 1.5 &&
-        cand.unavailable === true
-          ? "晉級"
-          : "淘汰";
-      const samplesVerdict = base.std1 - base.std3 < 1 ? "晉級（1 次）" : "淘汰（維持 3 次）";
-
+      const invalidRate = st.invalid / Math.max(1, st.calls);
+      const hitRate = st.errorsReported ? st.errorsKept / st.errorsReported : 1;
+      const typeRecall = st.typeExpected ? st.typeHit / st.typeExpected : 1;
+      const mixedRate = st.mixedCalls ? st.mixedNotMet / st.mixedCalls : 0;
+      const fallbackRate = st.fallbacksReported ? st.fallbacksKept / st.fallbacksReported : 0;
+      const pass =
+        invalidRate <= RULES.validatorFailure &&
+        hitRate >= RULES.exampleHitRate &&
+        typeRecall >= RULES.typeRecall &&
+        mixedRate >= RULES.mixedNotMet &&
+        fallbackRate >= RULES.fallbackHit &&
+        st.unavailableCorrect === true;
+      const date = new Date().toISOString().slice(0, 10);
       const lines = [
-        `# Judge screening — ${new Date().toISOString().slice(0, 10)}`,
+        `# Judge screening — ${date}`,
         "",
-        `Fixtures: ${FIXTURES.length} synthetic transcripts (src/apps/coach/ai/fixtures/transcripts.ts). Calls per scored fixture per model: ${CALLS_PER_FIXTURE}.`,
+        `Model: ${MODEL} (the shipped judge). Fixtures: ${SCREENED.length} synthetic transcripts (src/apps/coach/ai/fixtures/transcripts.ts), ${CALLS_PER_FIXTURE} calls per scored fixture, ${st.calls} calls in all.`,
         "Vocabulary: screening only —「晉級／淘汰」. Not an evaluation.",
         "",
-        "| model | validator failure | error-example hit rate | median latency (ms) | std(cefr) 1 sample | std(cefr) median-of-3 | band within ±1 | coach-only → unavailable |",
+        "| validator failure | error-example hit rate | type recall | band within ±1 | coach-only → unavailable | mixed objective NOT met | l1Fallbacks.said hit rate | median latency (ms) |",
         "|---|---|---|---|---|---|---|---|",
-        ...rows.map(
-          (r) =>
-            `| ${r.model} | ${(r.invalidRate * 100).toFixed(1)}% | ${Number.isNaN(r.hitRate) ? "n/a" : (r.hitRate * 100).toFixed(0) + "%"} | ${r.latency.toFixed(0)} | ${r.std1.toFixed(2)} | ${r.std3.toFixed(2)} | ${r.bands} | ${r.unavailable} |`,
-        ),
+        `| ${(invalidRate * 100).toFixed(1)}% | ${(hitRate * 100).toFixed(0)}% | ${st.typeHit}/${st.typeExpected} | ${st.bandHits}/${st.bandTotal} | ${st.unavailableCorrect} | ${st.mixedNotMet}/${st.mixedCalls} | ${st.fallbacksKept}/${st.fallbacksReported} | ${median(st.latenciesMs).toFixed(0)} |`,
         "",
-        `**Text model ${cand.model} vs ${base.model}: ${modelVerdict}.**`,
-        `**Judge samples 1 vs 3 (on ${base.model}): ${samplesVerdict}.** (spread reduction ${(base.std1 - base.std3).toFixed(2)} bands)`,
+        "| fixture | median band | error types reported | code-mixing | note |",
+        "|---|---|---|---|---|",
+        ...perFixture,
         "",
-        "Rules were fixed before the run: candidate 晉級 iff validator failure ≤ baseline+2pp, hit rate ≥ baseline−5pp, latency ≤ 1.5×, coach-only fixture unavailable. 1 sample 晉級 iff median-of-3 reduces the CEFR spread by less than one band.",
+        `**${MODEL} on the Phase D/E prompt rules: ${pass ? "晉級" : "淘汰"}.**`,
+        "",
+        `Rules were fixed before the run: validator failure ≤ ${RULES.validatorFailure * 100}%, example hit rate ≥ ${RULES.exampleHitRate * 100}%, type recall ≥ ${RULES.typeRecall * 100}%, coach-only unavailable, Chinese-completed objective graded not met in ≥ ${RULES.mixedNotMet * 100}% of calls (U6), reported l1Fallbacks.said real substrings in ≥ ${RULES.fallbackHit * 100}%.`,
+        `If 淘汰 on the code-mixing rule: the fallback is a program-side rule (an objective whose text matches an l1Fallbacks.target is forced not met), not a new field — see docs/BLUEPRINT_2026-09-28.md U6.`,
       ];
       mkdirSync("docs", { recursive: true });
-      writeFileSync(`docs/SCREENING_${new Date().toISOString().slice(0, 10)}.md`, lines.join("\n") + "\n");
+      writeFileSync(`docs/SCREENING_${date}.md`, lines.join("\n") + "\n");
       console.log(lines.join("\n"));
-      expect(CEFR_LEVELS.length).toBe(6); // the file wrote; the verdicts are in the doc
+      expect(st.calls).toBeLessThanOrEqual(MAX_FIXTURES * CALLS_PER_FIXTURE);
     },
-    20 * 60 * 1000,
+    15 * 60 * 1000,
   );
 });
