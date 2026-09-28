@@ -711,3 +711,45 @@ h1 {
   overflow: hidden;
   clip: rect(0 0 0 0);
 }
+
+/* The page's one status line. It sits after the new-scenario card, so without
+   sticking it would land below the fold for every action higher up the page —
+   a tap that seems to do nothing. */
+.toast-slot {
+  position: sticky;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 20;
+}
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px 8px 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.toast .notice {
+  flex: 1;
+  margin: 0;
+}
+.toast .notice--ok {
+  color: var(--text);
+}
+.toast-close {
+  flex: none;
+  min-width: 36px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+.toast-close:focus-visible {
+  box-shadow: var(--ring);
+  outline: none;
+}

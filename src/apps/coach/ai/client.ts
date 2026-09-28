@@ -56,6 +56,20 @@ export async function generateJson<T>(
   return parse(raw, "$");
 }
 
+// The brief is often the Markdown answer to ../briefPrompt.ts pasted back from
+// another assistant. Its sections are the learner's own facts and plan; a model
+// left to "extract" freely would paraphrase them away, or answer the chat
+// wrapper instead of the brief.
+export const BRIEF_RULES =
+  `The brief may be free text, or a structured Markdown brief (sections such as 情境 / ` +
+  `材料重點 / 角色 / 這次要練的事 / 對方可能會問的問題 / 可能用到的句子), possibly wrapped in a ` +
+  `chat assistant's preamble or code fences — ignore any wrapper. When the brief provides a ` +
+  `section, USE it instead of inventing: keep its roles, names, facts and numbers, and take the ` +
+  `objectives and phrases from it. If it lists questions the other side may ask, or the material ` +
+  `is a presentation, report or proposal the learner has to explain, write contentContext so the ` +
+  `coach, in role, asks those questions one at a time about the material's key facts (quote the ` +
+  `facts the questions depend on), and make answering them one of the objectives.`;
+
 export const langName = (l: "en" | "ja") => (l === "ja" ? "Japanese" : "English");
 
 export const transcriptText = (turns: { who: string; text: string }[]) =>

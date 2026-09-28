@@ -18,7 +18,7 @@ import {
   string,
   type Parser,
 } from "../../../kernel/validate";
-import { generateJson, langName, transcriptText } from "./client";
+import { BRIEF_RULES, generateJson, langName, transcriptText } from "./client";
 
 const STORY_STATE_SCHEMA = {
   type: Type.OBJECT,
@@ -181,6 +181,8 @@ export async function generateArcSeed(
     EPISODE_RULES +
     `\n- canDoIndexes: the 1 or 2 canDos this episode targets, as 1-based positions in the canDos ` +
     `list you just returned.` +
+    `\n\n${BRIEF_RULES} If it gives 主要角色 / 六集大綱 / 還沒解決的事, those ARE the ` +
+    `storyState characters, the outline beats (in order) and the openThreads.` +
     `\n\nBRIEF:\n${opts.brief}`;
   return generateJson(apiKey, prompt, ARC_SEED_SCHEMA, parseArcSeed);
 }

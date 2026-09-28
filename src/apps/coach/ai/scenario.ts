@@ -5,7 +5,7 @@ import { Type } from "@google/genai";
 import type { CEFRLevel, Scenario, TargetLanguage } from "../../../kernel/types";
 import { arrayKeeping, field, nonEmptyString, record, type Parser } from "../../../kernel/validate";
 import { FRAME_PRESETS } from "../frames";
-import { generateJson } from "./client";
+import { BRIEF_RULES, generateJson } from "./client";
 
 const SCENARIO_SCHEMA = {
   type: Type.OBJECT,
@@ -47,7 +47,7 @@ export async function generateScenario(
     `based on this brief. Extract: a short title; a vivid, SPECIFIC situation ` +
     `(contentContext) the conversation happens in; who the coach should play (coachRole); ` +
     `who the learner plays (userRole); 3-5 concrete objectives; and 5-10 useful target ` +
-    `words/phrases. Keep each field concise.\n\nBRIEF:\n${opts.brief}`;
+    `words/phrases. Keep each field concise.\n\n${BRIEF_RULES}\n\nBRIEF:\n${opts.brief}`;
 
   const gen = await generateJson(apiKey, prompt, SCENARIO_SCHEMA, parseScenarioDraft);
   return {

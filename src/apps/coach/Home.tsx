@@ -56,7 +56,8 @@ import {
 } from "./arcs";
 import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
-import { briefPrompt } from "./briefPrompt";
+import { MAX_BRIEF_FILE_BYTES, briefProblem, briefPrompt, looksLikeText } from "./briefPrompt";
+import { copyText } from "./clipboard";
 import { HistorySheet } from "./HistorySheet";
 import { levelSummary } from "./progress";
 import { computeReadouts } from "./readouts";
@@ -111,6 +112,7 @@ export function Home(props: {
   // Settings is a sheet like the others: a panel appended to the bottom of a
   // long page looked like a dead button when tapped at the top.
   const [sheet, setSheet] = useState<"history" | "vocab" | "review" | "settings" | null>(null);
+  const [manualPrompt, setManualPrompt] = useState<string | null>(null); // clipboard unavailable
   // A readout tapped on the progress strip opens History filtered to its sources.
   const [historyFocus, setHistoryFocus] = useState<string[] | null>(null);
   const levelId = useId();
@@ -165,30 +167,43 @@ export function Home(props: {
   }
 
   async function build() {
+    // The brief is checked first: it needs no key, and fixing it is the next step either way.
+    const problem = briefProblem(brief);
+    if (problem) return setBusy(problem);
     if (!apiKey) return setBusy("請先連結 API 金鑰。");
-    if (!brief.trim()) return setBusy("請先貼上簡報或匯入 Markdown。");
     if (building) return; // guard double-submit
     setBuilding(true);
-    await withBusy(serial ? "編寫連續劇中…" : "建立情境中…", async () => {
+    const submitted = brief;
+    setBusy(serial ? "編寫連續劇中…（約 10–20 秒）" : "建立情境中…（約 10 秒）");
+    try {
+      let done: string;
       if (serial) {
         // S1/S2 — an arc lands with episode 1 already materialised, so the very
         // next tap is「▶ 下一集 · 第 1 集」.
-        await startArc(
-          { brief: brief.trim(), language: lang, level: profile.level },
+        const { arc } = await startArc(
+          { brief: submitted.trim(), language: lang, level: profile.level },
           seedGenerator(apiKey),
         );
+        done = `✓ 已建立連續劇「${arc.title}」，在頁面上方的故事線卡片按「▶」開始第 1 集。`;
       } else {
         const sc = await generateScenario(apiKey, {
-          brief: brief.trim(),
+          brief: submitted.trim(),
           language: lang,
           level: profile.level,
         });
         await putScenario(sc);
+        done = `✓ 已建立「${sc.title}」，在頁面上方「你的情境」可以開始練習。`;
       }
-      setBrief("");
+      // Clear only what was sent: text typed or imported while the model was
+      // writing is the learner's next brief, not this one.
+      setBrief((b) => (b === submitted ? "" : b));
       props.onChanged();
-    });
-    setBuilding(false);
+      setBusy(done);
+    } catch (err) {
+      setBusy(`錯誤：${describeError(err)}（簡報還在，不用重貼）`);
+    } finally {
+      setBuilding(false);
+    }
   }
 
   // S4 — installing a demo arc costs ZERO API calls: episode 1 is authored, so
@@ -239,8 +254,26 @@ export function Home(props: {
     }
   }
 
+  // A brief the learner already typed is never silently replaced, and a file
+  // that is not plain text is refused rather than pasted in as garbage.
   async function importBriefFile(file: File) {
-    setBrief(await readTextFile(file));
+    if (file.size > MAX_BRIEF_FILE_BYTES) {
+      setBusy(`檔案太大（${Math.round(file.size / 1024)} KB）。練習簡報只需要重點，請先用「複製提示詞」請 ChatGPT／Gemini 整理成簡報。`);
+      return;
+    }
+    try {
+      const text = await readTextFile(file);
+      if (!looksLikeText(text)) {
+        setBusy("這個檔案不是純文字（可能是 PDF／PPT／Word）。請先用「複製提示詞」請 ChatGPT／Gemini 整理成簡報，再存成 .md 匯入或直接貼上。");
+        return;
+      }
+      if (!text.trim()) return setBusy("這個檔案是空的。");
+      if (brief.trim() && brief.trim() !== text.trim() && !window.confirm("「練習簡報」欄已有內容，要用這個檔案取代嗎？")) return;
+      setBrief(text);
+      setBusy(`已匯入 ${file.name}，確認內容後按「${serial ? "建立連續劇" : "建立情境"}」。`);
+    } catch (err) {
+      setBusy(`讀取檔案失敗：${describeError(err)}`);
+    }
   }
 
   // Validate the WHOLE file first and say what would change; nothing is written
@@ -298,17 +331,16 @@ export function Home(props: {
     downloadFile(`${slug(sc.title)}.json`, JSON.stringify(pack, null, 2), "application/json");
   }
 
-  // One tap → the prompt is on the clipboard. When the clipboard is not
-  // available (an old WebView, a denied permission) the prompt goes into the
-  // brief box instead, so the learner can still select and copy it by hand.
+  // One tap → the prompt is on the clipboard. When no copy path works the
+  // prompt opens in a sheet for a manual copy — never in the brief box, which
+  // may already hold the learner's own text.
   async function copyPrompt() {
     const text = briefPrompt({ language: lang, level: profile.level, serial });
-    try {
-      await navigator.clipboard.writeText(text);
-      setBusy("✓ 已複製提示詞。貼到 ChatGPT／Gemini／Claude，附上你的材料；把回覆貼回「練習簡報」，或存成 .md 用「匯入 .md」。");
-    } catch {
-      setBrief(text);
-      setBusy("這個瀏覽器不讓我直接複製，提示詞已放進「練習簡報」欄——全選複製後再貼到 ChatGPT／Gemini。");
+    if (await copyText(text)) {
+      setBusy("✓ 已複製提示詞。貼到 ChatGPT／Gemini／Claude，附上你的簡報、報告或其他材料；把回覆貼回「練習簡報」，或存成 .md 用「匯入 .md」。");
+    } else {
+      setBusy("");
+      setManualPrompt(text);
     }
   }
 
@@ -655,7 +687,7 @@ export function Home(props: {
         {/* The hand-off to another assistant is one tap: copy a prompt that asks
             for exactly the brief shape the generator extracts best from. */}
         <div className="row" style={{ margin: "8px 0", alignItems: "center" }}>
-          <span className="muted grow">有會議通知、行程或對話紀錄？讓 ChatGPT／Gemini 先整理成簡報再貼回來。</span>
+          <span className="muted grow">有簡報、報告或會議通知？先請 ChatGPT／Gemini 整理成練習簡報再貼回來。</span>
           <button className="btn btn--ghost btn--sm" onClick={() => void copyPrompt()}>
             複製提示詞
           </button>
@@ -674,7 +706,33 @@ export function Home(props: {
         </div>
       </div>
 
-      {busy && <p className="notice">{busy}</p>}
+      {/* Always mounted so screen readers announce each new message. */}
+      <div className="toast-slot" role="status" aria-live="polite">
+        {busy && (
+          <div className="toast">
+            <p className={busy.startsWith("✓") ? "notice notice--ok" : "notice"}>{busy}</p>
+            <button className="toast-close" onClick={() => setBusy("")} aria-label="關閉訊息">
+              ✕
+            </button>
+          </div>
+        )}
+      </div>
+
+      {manualPrompt !== null && (
+        <Sheet title="複製提示詞" onClose={() => setManualPrompt(null)}>
+          <p className="muted" style={{ marginTop: 0 }}>
+            這個瀏覽器不讓我直接複製。請長按或全選下面的文字複製，貼到 ChatGPT／Gemini／Claude 並附上你的材料。
+          </p>
+          <textarea
+            className="textarea"
+            readOnly
+            value={manualPrompt}
+            rows={12}
+            onFocus={(e) => e.currentTarget.select()}
+            aria-label="提示詞"
+          />
+        </Sheet>
+      )}
 
       {/* 5. 設定與資料 — behind ⚙️, as a sheet like the other secondary screens */}
       {sheet === "settings" && (
