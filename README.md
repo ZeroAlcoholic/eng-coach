@@ -49,3 +49,10 @@ local `dist/` for that commit.
 Models are set in `src/kernel/overrides.ts` (live: `gemini-3.8-live`; text:
 `gemini-3.8-flash`; judge samples: 1, per `docs/SCREENING_2026-09-24.md`) and can be overridden from ⚙️ on the
 device without a redeploy.
+
+Paid, opt-in checks (never run in CI): `SCREEN=1 npx vitest run src/apps/coach/ai/review.screen.test.ts`
+screens the shipped judge on the prompt rules (≤30 calls, `docs/SCREENING_<date>.md`);
+`SYNTH=1 npx vitest run src/apps/coach/synthetic/synthetic.e2e.test.ts` drives the real Live
+model with a scripted, TTS-synthesised learner (≤12 lines / ≤4 min per check; `SYNTH_GOAWAY=1`
+for the 12-minute hand-over check, alone). Both read `GEMINI_API_KEY` from the environment.
+Results: `docs/DEVICE_E2E.md`「合成」段.

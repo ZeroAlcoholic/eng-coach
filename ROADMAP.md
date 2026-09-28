@@ -224,6 +224,24 @@ pass criterion，完工時逐條判定，追加進 `docs/DEVICE_E2E.md`；例：
 - **仍 blocked（本機無麥克風）**：真機 12 分鐘不中斷、proactive audio 節奏、微 session、
   恢復卡實測；解鎖條件不變＝一支 USB 麥克風。
 
+### Batch R2 — ✅ 2026-09-28 量測誠實、口音與句型、合成學習者（Phase D／E／F，`docs/BLUEPRINT_2026-09-28.md`）
+- **D · 量測誠實** ✅ `annotate.ts` 純函式標 `echo`／`aided`／`l1`（`HELP_TRIGGERS` 單一常數，
+  prompt 與量測共用）；judge 讀標記、目標語完成才 met、回 `l1Fallbacks`；全複誦／全中文＝
+  `unavailable`；焦點結構化存進紀錄（`SessionFocus`），微 session 存 `drilledFocus`；讀數 b
+  分母＝`recycled`、讀數 c＝「焦點沒再犯」（之後兩場正式 session 未再出現，分有加練／沒加練，
+  只以場次計、不計日期與頻率）；微 session prompt 不帶複習／弱項／劇情，120 秒安全網走 Stop。
+- **E · 口音與句型** ✅ 口音回饋閉集清單、三四回合至多一次、不評分；judge 抽教練點過的音
+  （`pronunciationNotes`→`profile.accentNotes`，下一場提示）；句中夾中文＝詞彙缺口（給詞、整句
+  重說、抽為 item、`gap` 焦點）；grammar item 選填 `frame`，`uses.ts` 依錨點順序比對。
+- **F · 合成學習者** ✅ `synthetic/SyntheticLearnerAudio` 於 `createAudio` 注入；台詞以
+  `gemini-3.8-flash-lite-tts` 合成一次快取（`.synthetic-cache/`，gitignored）；`SYNTH=1` 對真
+  `gemini-3.8-live` 跑 F3-a～i（每支 ≤12 句／≤4 分鐘，程式斷言），判定見 `docs/DEVICE_E2E.md`
+  「合成」段，用詞只准「合成已驗證」。
+- **H** ✅ CSP `connect-src` 收緊為 API 主機＋字型；screening 改對出貨 judge 檢查 prompt 規則
+  遵從（型別召回、夾雜 not-met 率、`l1Fallbacks` 子字串命中率，≤30 次呼叫）。
+- **仍 blocked（真人／真機）**：手機 UX、麥克風授權、proactive audio 對人的感受、教學法對人有效；
+  解鎖條件不變＝一支 USB 麥克風或真機。
+
 ## Deferred — needs a missing precondition
 - **Cross-scenario objective scheduler (interleaving across scenarios)** — needs a stable objective-identity / tagging scheme; objective free-text doesn't match across regenerated scenarios. Build C1's ledger first.
 - **Pitch-contour overlay & Gemini "spoken impression"** — phone-mic F0 is noisy (compare *shape* only, needs voiced-gating + smoothing); the LLM note is an *impression, not a score*. Experimental add-ons on top of D1, not core.
