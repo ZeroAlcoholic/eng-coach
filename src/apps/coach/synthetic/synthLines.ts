@@ -113,9 +113,54 @@ export function geminiTts(apiKey: string, voiceName = "Kore"): Synthesiser {
     const data = part?.inlineData?.data;
     const mime = part?.inlineData?.mimeType ?? "";
     if (!data) throw new Error(`TTS returned no audio (${res.candidates?.[0]?.finishReason ?? "no candidate"})`);
-    const rate = Number.parseInt(/rate=(\d+)/.exec(mime)?.[1] ?? "", 10);
-    if (!Number.isInteger(rate)) throw new Error(`TTS returned an unexpected mime type: ${mime}`);
     const bytes = Buffer.from(data, "base64");
-    return { pcm: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), sampleRate: rate };
+    return decodeAudio(mime, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   };
+}
+
+/** The model answers either as raw L16 (`audio/L16;codec=pcm;rate=24000`) or
+ *  as a WAV container (`audio/wav`); both carry PCM16 mono. */
+export function decodeAudio(mime: string, bytes: ArrayBuffer): Synthesised {
+  if (/^audio\/(wav|x-wav|wave)/i.test(mime) || isRiffWave(bytes)) return decodeWav(bytes);
+  const rate = Number.parseInt(/rate=(\d+)/.exec(mime)?.[1] ?? "", 10);
+  if (!Number.isInteger(rate)) throw new Error(`TTS returned an unexpected mime type: ${mime}`);
+  return { pcm: bytes, sampleRate: rate };
+}
+
+function isRiffWave(bytes: ArrayBuffer): boolean {
+  const v = new DataView(bytes);
+  return bytes.byteLength >= 12 && ascii(v, 0) === "RIFF" && ascii(v, 8) === "WAVE";
+}
+
+const ascii = (v: DataView, at: number) => String.fromCharCode(v.getUint8(at), v.getUint8(at + 1), v.getUint8(at + 2), v.getUint8(at + 3));
+
+/** Minimal RIFF reader: walks the chunks, takes the `fmt ` and `data` chunks,
+ *  and accepts only 16-bit PCM mono — anything else is refused rather than
+ *  misread as audio. */
+export function decodeWav(bytes: ArrayBuffer): Synthesised {
+  const v = new DataView(bytes);
+  if (!isRiffWave(bytes)) throw new Error("not a RIFF/WAVE file");
+  let at = 12;
+  let sampleRate = 0;
+  let channels = 0;
+  let bits = 0;
+  let pcm: ArrayBuffer | null = null;
+  while (at + 8 <= bytes.byteLength) {
+    const id = ascii(v, at);
+    const size = v.getUint32(at + 4, true);
+    const body = at + 8;
+    if (id === "fmt ") {
+      const format = v.getUint16(body, true);
+      channels = v.getUint16(body + 2, true);
+      sampleRate = v.getUint32(body + 4, true);
+      bits = v.getUint16(body + 14, true);
+      if (format !== 1) throw new Error(`WAV format ${format} is not PCM`);
+    } else if (id === "data") {
+      pcm = bytes.slice(body, Math.min(bytes.byteLength, body + size));
+    }
+    at = body + size + (size % 2); // chunks are word-aligned
+  }
+  if (!pcm || !sampleRate) throw new Error("WAV without fmt/data chunks");
+  if (channels !== 1 || bits !== 16) throw new Error(`WAV is ${channels} ch × ${bits} bit; expected mono 16-bit`);
+  return { pcm, sampleRate };
 }

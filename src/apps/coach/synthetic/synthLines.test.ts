@@ -64,3 +64,20 @@ describe("ensureLines — synthesise once, then never again", () => {
     expect(text).toMatch(/USD \d+\.\d{3}/);
   });
 });
+
+describe("decodeAudio — what the TTS model may answer with", () => {
+  it("reads a WAV container's rate and data chunk; raw L16 comes from the mime type", async () => {
+    const { decodeAudio } = await import("./synthLines");
+    const { encodeWav } = await import("../../../audio/pcm");
+    const samples = new Float32Array(2400).fill(0.25);
+    const wav = encodeWav(samples, 24_000);
+    const out = decodeAudio("audio/wav", wav);
+    expect(out.sampleRate).toBe(24_000);
+    expect(out.pcm.byteLength).toBe(4800);
+    // the container is recognised by its bytes even under a vague mime type
+    expect(decodeAudio("application/octet-stream", wav).sampleRate).toBe(24_000);
+    const raw = decodeAudio("audio/L16;codec=pcm;rate=24000", new ArrayBuffer(100));
+    expect(raw).toEqual({ pcm: new ArrayBuffer(100), sampleRate: 24_000 });
+    expect(() => decodeAudio("audio/mpeg", new ArrayBuffer(100))).toThrow(/unexpected mime/);
+  });
+});
