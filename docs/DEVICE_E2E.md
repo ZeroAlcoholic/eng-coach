@@ -288,3 +288,50 @@ S1 依 ROADMAP 刻意不新增畫面，因此 E2E 在真實瀏覽器裡直接驅
    在正式環境會完全播不出來。已在 `coach.html` 加 `media-src 'self' blob:`（launcher
    不播媒體，維持較緊）。修好後同一個探針立刻由 fail 轉 pass。
 2. **`describeError` 漏 `OverconstrainedError`** → 見 D1c。
+
+## 合成學習者（Phase F，2026-09-28）— 用詞只准「合成已驗證」
+
+執行方式：`SYNTH=1 npx vitest run src/apps/coach/synthetic/synthetic.e2e.test.ts`
+（F3-g 另以 `SYNTH_GOAWAY=1` 單獨執行一次）。真 `PracticeSession`＋真 Live transport＋真 judge；
+學習者＝`SyntheticLearnerAudio`（F1，注入於 `createAudio`），台詞由 `gemini-3.8-flash-lite-tts`
+合成一次快取於 `.synthetic-cache/<sha256>.pcm`（F2）。模型：Live `gemini-3.8-live`、judge／items
+`gemini-3.8-flash`、TTS `gemini-3.8-flash-lite-tts`；未呼叫任何其他模型。
+每支測試由程式斷言 ≤12 句、≤4 分鐘；F3-g ≤13 分鐘。
+
+**合成學習者抓到的兩個真缺陷（皆已修，皆非 UI）**
+1. 出貨的 Live setup 在 SDK 預設 `v1beta` 被伺服器拒絕：`Unknown name "proactivity" at 'setup'`，
+   socket 在 `setupComplete` 前關閉，教練永遠不開口。修：Live 連線改用 `v1alpha`
+   （`gemini-direct.ts` `LIVE_API_VERSION`）。本機從未量到是因為沒有麥克風、對話從未開始。
+2. `enableAffectiveDialog: true` 在 `gemini-3.8-live` 上 setup 成功、但第一個音訊幀即被拒
+   （`Request contains an invalid argument`）。以真模型二分（inputTx／outputTx／proactivity／
+   affective／resumption／compression 各自開啟送音訊）只有 affective 觸發。修：預設關閉、只在開啟時送。
+
+| check | pass criterion | 判定 | 量測值 | 日期 |
+|---|---|---|---|---|
+| F2 重跑零呼叫 | 第二次 `ensureLines` 對同一批台詞 synthesised=0；快取檔名皆 sha256、無文字 | **pass** | 17 句，第二次 0 次；`grep AIza` 於 cache／log 零命中 | 2026-09-28 |
+| F3-a 換你說時機 | 每次 cue 轉「you」時 `isPlaying()` 為 false | **pass** | cue→you 8 次，播放中 0 次 | 2026-09-28 |
+| F3-b 逐字稿連續 | 送 N 句 → user turn ≥ 0.8N | **pass** | 4 句 → 4 turn | 2026-09-28 |
+| F3-c 回聲偵測 | 照抄教練前句的 turn `echo===true`，其餘 false | **pass** | 1 標記／4 turn（U1 讀數：真實 ASR 上零誤標） | 2026-09-28 |
+| F3-d 口說求助 | 「提示一下」該 turn 與其後 learner turn `aided===true` | **pass**（第 1 次 fail→修 annotate 後重跑 1 次） | 第 1 次：ASR 把求助與後句併成一 turn、舊規則未標；修為求助 turn 本身亦 aided 後 aided=true/true | 2026-09-28 |
+| F3-e 微 session 流程 | 以 focus 啟動 → finalize 回 `{kind:"micro"}`，無 review、EWMA 不動，且有雙方 turn | **pass** | finalize=micro，review=false，levels=null，user turns=3；教練首句即繁中一句說明＋過去式練習 | 2026-09-28 |
+| F3-f 前情提要為首句 | arc 情境第一個 coach turn 含 ≥2 個 recap 關鍵詞 | **pass** | 命中 倫敦、入境、客戶、接送、延誤（5/5）；補判 S2b-ii | 2026-09-28 |
+| F3-g GoAway 續接 | 12 分鐘內 `onReconnecting`→`onResumed(true)`、transcript 不清空 | **fail（未觸發）** | 704 秒、92 turn、46 句循環，伺服器未送 GoAway；連線全程不中斷、transcript 完整。續接程式路徑仍只有 vitest 替身證據（session.test／gemini-direct.test）。整輪只跑一次，不重跑 | 2026-09-28 |
+| F3-h 判斷輸出 | judge=review、`errors.example` 全為 learner 子字串、CEFR 在 expectBand ±1 | **pass** | cefr=A2（期望 A2），errors=3 皆子字串，focus=meaning/tense；U2 讀數：unaided can-do 2/2 met | 2026-09-28 |
+| F3-i en 夾雜中文 | learner turn 含 Han 且 `l1===true`；教練下一 turn 含 book／reserve | **fail（U5 觸發）** | Live 輸入逐字稿把「I want to 預約 a table」寫成「I want to a table」、「幾點」寫成「Gidan」——中文字元未保留；教練下一 turn 含 book/reserve=**true**（E4 在音訊層生效） | 2026-09-28 |
+| F3-i ja l1Fallbacks | judge `l1Fallbacks` 非空 | **fail（U5 觸發）** | 「すみません、我想要 予約 ふたり」被轉寫成「お座敷予約、2 人」，judge 無中文可引、`l1Fallbacks=[]`、「予約する」判 met | 2026-09-28 |
+
+**U5 結論（事前登錄）**：Live 的輸入轉寫會把句中夾雜的中文詞正規化成目標語（或音譯），
+只有整句中文（如「提示一下」）保留。因此「夾中文＝詞彙缺口」的**量測**（`l1` 標記、
+`l1Fallbacks`、`gap` 焦點）在 Live 轉寫上無法由文字取得；**輔導**（E4：教練當場給詞並要求
+整句重說）在音訊層有效（F3-i en 教練下一 turn 含 book/reserve）。機制保留（整句中文與求助
+仍會標 l1；judge 規則對保留中文的逐字稿仍生效，screening 10/10、20/20），不加欄位、不換來源。
+
+**U1／U2／U6 讀數**：U1 回聲門檻 0.8 在真實 ASR 零誤標（1/4 正確）；U2 合成 hotel 逐字稿
+CEFR=A2、與 fixture 期望一致；U6 screening（`docs/SCREENING_2026-09-28.md`）夾雜 objective
+判 not met 10/10、`l1Fallbacks.said` 子字串 20/20（兩輪皆同）。
+
+**費用實績（2026-09-28）**：TTS 18 句（17 腳本＋1 動態回聲）約 640 字元；Live 約 30 分鐘
+（主輪 10.4 分＋兩次 setup 失敗輪 <1 分＋F3-c/d 重跑 1.7 分＋F3-g 11.7 分＋二分探針約 1 分）；
+judge 55 次（screening 2×26＋合成 3）；items 3 次。金鑰只讀自環境變數，未出現於任何檔案。
+
+**仍 blocked（真人／真機）**：手機 UX、麥克風授權、proactive audio 對人的感受、教學法對人有效。
