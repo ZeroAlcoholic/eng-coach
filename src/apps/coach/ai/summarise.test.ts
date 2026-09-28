@@ -39,7 +39,7 @@ describe("summariseSession — orchestration over validated samples", () => {
     mocked.mockRejectedValueOnce(new Error("$.subscores.grammar: expected an integer in 1..6"));
     mocked.mockRejectedValueOnce(new Error("503"));
     const out = await summariseSession("k", { transcript, level: "B1" }, { samples: 2 });
-    expect(out).toEqual({ kind: "unavailable", reason: "$.subscores.grammar: expected an integer in 1..6" });
+    expect(out).toEqual({ kind: "unavailable", reason: "$.subscores.grammar: expected an integer in 1..6", retryable: true });
   });
 
   it("k of n valid → median over the k survivors only, samples = k", async () => {

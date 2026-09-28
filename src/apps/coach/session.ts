@@ -46,6 +46,7 @@ export interface TransportSpec {
   model: string;
   systemInstruction: string;
   voiceName?: string;
+  openingCue?: string; // the text turn that makes the coach speak first (prompt.ts OPENING_CUE)
 }
 
 /** What the owner needs from a transport — the protocol lives behind it. */

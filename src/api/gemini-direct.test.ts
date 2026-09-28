@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { LiveSendRealtimeInputParameters, LiveServerMessage } from "@google/genai";
+import type { LiveSendClientContentParameters, LiveSendRealtimeInputParameters, LiveServerMessage } from "@google/genai";
 import {
   GeminiLiveDirect,
   type GeminiDirectHandlers,
+  type GeminiDirectOptions,
   type LiveConnectRequest,
   type LiveConnector,
   type LiveSocket,
@@ -13,10 +14,14 @@ import {
 // It records what was sent and lets a test play server messages / closes.
 class FakeSocket implements LiveSocket {
   readonly sent: LiveSendRealtimeInputParameters[] = [];
+  readonly content: LiveSendClientContentParameters[] = [];
   closed = false;
   constructor(readonly req: LiveConnectRequest) {}
   sendRealtimeInput(input: LiveSendRealtimeInputParameters): void {
     this.sent.push(input);
+  }
+  sendClientContent(params: LiveSendClientContentParameters): void {
+    this.content.push(params);
   }
   close(): void {
     this.closed = true;
@@ -30,7 +35,7 @@ class FakeSocket implements LiveSocket {
   }
 }
 
-function harness(handlerOverrides: Partial<GeminiDirectHandlers> = {}) {
+function harness(handlerOverrides: Partial<GeminiDirectHandlers> = {}, extra: Partial<GeminiDirectOptions> = {}) {
   const sockets: FakeSocket[] = [];
   const pending: Array<(s: FakeSocket) => void> = [];
   let holdNext = false;
@@ -69,6 +74,7 @@ function harness(handlerOverrides: Partial<GeminiDirectHandlers> = {}) {
     handlers,
     connector,
     handoverTimeoutMs: 30,
+    ...extra,
   });
   return {
     client,
@@ -81,6 +87,53 @@ function harness(handlerOverrides: Partial<GeminiDirectHandlers> = {}) {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+
+describe("GeminiLiveDirect — opening cue", () => {
+  const withCue = () => harness({}, { openingCue: "(begin)" });
+
+  it("sends the cue as ONE client text turn when a new conversation completes setup, after which audio flows", async () => {
+    const h = withCue();
+    await h.client.connect();
+    h.client.sendAudio(new ArrayBuffer(4)); // buffered until setupComplete
+    expect(h.sockets[0].content).toHaveLength(0);
+    h.sockets[0].serverSays({ setupComplete: {} });
+    expect(h.sockets[0].content).toEqual([{ turns: [{ role: "user", parts: [{ text: "(begin)" }] }], turnComplete: true }]);
+    expect(h.sockets[0].sent).toHaveLength(1);
+    h.sockets[0].serverSays({ setupComplete: {} });
+    expect(h.sockets[0].content).toHaveLength(1);
+  });
+
+  it("does not repeat the cue on a GoAway hand-over or a resumed reconnect — the conversation continues", async () => {
+    const h = withCue();
+    await h.client.connect();
+    h.sockets[0].serverSays({ setupComplete: {}, sessionResumptionUpdate: { resumable: true, newHandle: "h1" } });
+    h.sockets[0].serverSays({ goAway: { timeLeft: "5s" } });
+    await new Promise((r) => setTimeout(r, 0));
+    h.sockets[1].serverSays({ setupComplete: {} });
+    expect(h.sockets[1].content).toHaveLength(0);
+    h.sockets[1].serverCloses("idle");
+    await h.client.reconnect();
+    h.sockets[2].serverSays({ setupComplete: {} });
+    expect(h.sockets[2].content).toHaveLength(0);
+  });
+
+  it("a fresh connect after close() opens a new conversation and cues again", async () => {
+    const h = withCue();
+    await h.client.connect();
+    h.sockets[0].serverSays({ setupComplete: {} });
+    h.client.close();
+    await h.client.connect();
+    h.sockets[1].serverSays({ setupComplete: {} });
+    expect(h.sockets[1].content).toHaveLength(1);
+  });
+
+  it("without a cue nothing is sent", async () => {
+    const h = harness();
+    await h.client.connect();
+    h.sockets[0].serverSays({ setupComplete: {} });
+    expect(h.sockets[0].content).toHaveLength(0);
+  });
+});
 
 describe("GeminiLiveDirect — setup config", () => {
   it("asks for context-window compression and proactive audio by default; affective dialog is NOT sent (the model refuses audio with it on)", async () => {

@@ -23,7 +23,7 @@ import { normaliseStoryState } from "./arcs";
 import { armMicroCutoff } from "./microCutoff";
 import { weakObjectives } from "./objectives";
 import { band } from "./progress";
-import { sessionInstruction, type ArcContext } from "./prompt";
+import { OPENING_CUE, sessionInstruction, type ArcContext } from "./prompt";
 import {
   defaultSessionDeps,
   PracticeSession,
@@ -133,7 +133,10 @@ export function Practice(props: {
   function armCutoffOnce() {
     if (cutoffArmedRef.current) return;
     cutoffArmedRef.current = true;
-    disarmCutoffRef.current = armMicroCutoff(microRef.current !== null, () => void stopAndFinalize());
+    disarmCutoffRef.current = armMicroCutoff(microRef.current !== null, () => {
+      setNotice("加練時間到，已自動結束並儲存這段。");
+      void stopAndFinalize();
+    });
   }
 
   const listener: SessionListener = {
@@ -348,6 +351,7 @@ export function Practice(props: {
           ...(micro ? { micro: microInstruction(micro) } : {}),
         }),
         voiceName: pickVoice(scenario.targetLanguage),
+        openingCue: OPENING_CUE,
       };
       // Outcome arrives through the phase stream (live / start-failed / cancelled).
       await session().start(spec);
@@ -498,7 +502,7 @@ export function Practice(props: {
         setSummary(
           err instanceof PersistError
             ? { kind: "not-saved", reason: msg }
-            : { kind: "done", items: 0, itemsFailed: true, judge: { kind: "unavailable", reason: msg }, focus: null },
+            : { kind: "done", items: 0, itemsFailed: true, judge: { kind: "unavailable", reason: msg, retryable: true }, focus: null },
         );
       }
     }
@@ -711,7 +715,9 @@ function Recap(props: { outcome: FinalizeOutcome; scenarioId: string }) {
             <>
               <b>已儲存逐字稿</b>
               <p className="muted" style={{ marginTop: 8 }}>
-                評量未完成：{describeError(outcome.judge.reason)}。等級與下次重點沒有更新；可在首頁「練習紀錄」重試評量。
+                {outcome.judge.retryable
+                  ? `評量未完成：${describeError(outcome.judge.reason)}。等級與下次重點沒有更新；可在首頁「練習紀錄」重試評量。`
+                  : `這場沒有評量：${outcome.judge.reason} 等級與下次重點沒有更新——下次試著用自己的話多說幾句。`}
               </p>
             </>
           )}

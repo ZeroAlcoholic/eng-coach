@@ -277,7 +277,7 @@ describe("finalizeSession — every result lands exactly once", () => {
 });
 
 describe("finalizeSession — an unavailable judge writes no numbers", () => {
-  const unavailable: JudgeOutcome = { kind: "unavailable", reason: "沒有有效樣本" };
+  const unavailable: JudgeOutcome = { kind: "unavailable", reason: "沒有有效樣本", retryable: true };
 
   it("stores the transcript and the reason; scenario note, profile and ledger untouched", async () => {
     const m = memory();
@@ -420,7 +420,7 @@ describe("finalizeSession — measurement honesty (Phase D)", () => {
 
   it("no review → no focus stored, focus null in the outcome", async () => {
     const m = memory();
-    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "unavailable", reason: "x" });
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "unavailable", reason: "x", retryable: true });
     const out = await finalizeSession("k", input, m.deps);
     expect(out).toMatchObject({ kind: "done", focus: null });
     expect(m.sessions.get("s1")!.focus).toBeUndefined();
@@ -457,7 +457,7 @@ describe("finalizeSession — measurement honesty (Phase D)", () => {
       { who: "user" as const, text: "office に 辦公室 行きます" },
       { who: "user" as const, text: "はい、office です" },
     ];
-    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "unavailable", reason: "503" });
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "unavailable", reason: "503", retryable: true });
     await finalizeSession("k", { ...input, scenario: ja, transcript }, m.deps);
     const r = review();
     if (r.kind === "review") r.review = { ...r.review, l1Fallbacks: [{ said: "辦公室", target: "オフィス" }] };
@@ -493,7 +493,7 @@ describe("finalizeSession — measurement honesty (Phase D)", () => {
     // the real judge's pre-check runs inside summariseSession; the memory deps'
     // judge is a stand-in, so the pre-check is exercised in review.test.ts and
     // the pipeline here only has to store what it is told.
-    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "unavailable", reason: "學習者只有跟著教練複誦，沒有自己的產出可評量。" });
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "unavailable", reason: "學習者只有跟著教練複誦，沒有自己的產出可評量。", retryable: false });
     const transcript = [
       { who: "coach" as const, text: "Say: I would like a coffee please" },
       { who: "user" as const, text: "I would like a coffee please" },

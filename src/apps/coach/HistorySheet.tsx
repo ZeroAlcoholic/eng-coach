@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { scanSessionsDesc } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
 import type { LearnerProfile, Scenario, SessionRecord, TargetLanguage } from "../../kernel/types";
+import { unjudgeable } from "./ai/review";
 import { retryReview } from "./finalize";
 import { band } from "./progress";
 import { Sheet } from "./Sheet";
@@ -153,7 +154,7 @@ export function HistorySheet(props: {
                         : "（這場沒有分析結果，只有逐字稿）"}
                   </p>
                 )}
-                {!r && s.kind !== "micro" && sc && props.apiKey && s.transcript.some((t) => t.who === "user") && (
+                {!r && s.kind !== "micro" && sc && props.apiKey && unjudgeable(s.transcript) === null && (
                   <button
                     className="btn btn--ghost btn--sm"
                     style={{ marginRight: 8 }}

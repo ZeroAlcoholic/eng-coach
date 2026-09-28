@@ -22,7 +22,7 @@ import { annotateTurns } from "../annotate";
 import { finalizeSession, type FinalizeDeps } from "../finalize";
 import { microInstruction } from "../focus";
 import { cefrToNum } from "../progress";
-import { sessionInstruction, type ArcContext } from "../prompt";
+import { OPENING_CUE, sessionInstruction, type ArcContext } from "../prompt";
 import { defaultSessionDeps, PracticeSession, type SessionPhase } from "../session";
 import { describeEstimate, diskStore, ensureLines, geminiTts, keyOf, type SynthResult } from "./synthLines";
 import { SyntheticLearnerAudio } from "./SyntheticLearnerAudio";
@@ -180,6 +180,7 @@ async function runScript(script: Script): Promise<Run> {
       ...(script.micro !== undefined ? { micro: script.micro } : {}),
     }),
     voiceName: "Puck",
+    openingCue: OPENING_CUE,
   });
   try {
     expect(session.currentPhase().kind).toBe("live");

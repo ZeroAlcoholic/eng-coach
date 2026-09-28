@@ -193,7 +193,7 @@ export async function finalizeSession(
   }
   if (!transcript.length) {
     await tick(deps, sessionId, { reviewApplied: true, itemsSaved: true });
-    return { kind: "done", items: 0, itemsFailed: false, judge: { kind: "unavailable", reason: "沒有對話內容。" }, focus: null };
+    return { kind: "done", items: 0, itemsFailed: false, judge: { kind: "unavailable", reason: "沒有對話內容。", retryable: false }, focus: null };
   }
 
   // 2. Claim. Exactly one runner proceeds past this line per session.
@@ -226,7 +226,7 @@ export async function finalizeSession(
   const judge: JudgeOutcome =
     judgeResult.status === "fulfilled"
       ? judgeResult.value
-      : { kind: "unavailable", reason: describe(judgeResult.reason) };
+      : { kind: "unavailable", reason: describe(judgeResult.reason), retryable: true };
   const outcome: FinalizeOutcome = {
     kind: "done",
     items: items.length,

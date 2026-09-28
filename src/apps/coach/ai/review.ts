@@ -99,7 +99,10 @@ const TEXT_EVIDENCED_ERROR_TYPES = ERROR_TYPES.filter((t) => t !== "pronunciatio
 
 export type JudgeOutcome =
   | { kind: "review"; review: SessionReview; samples: number }
-  | { kind: "unavailable"; reason: string };
+  // `retryable` is false when the transcript itself cannot be judged (nothing
+  // said, only echoes, only Chinese): asking again would return the same
+  // answer, so the UI must not offer「重試評量」for it.
+  | { kind: "unavailable"; reason: string; retryable: boolean };
 
 /** Build the validator for ONE session: it needs the learner's own words to
  *  check that every reported error example was actually said, and the coach's
@@ -247,7 +250,7 @@ export async function summariseSession(
   judge: JudgeOptions = {},
 ): Promise<JudgeOutcome> {
   const reason = unjudgeable(opts.transcript);
-  if (reason) return { kind: "unavailable", reason };
+  if (reason) return { kind: "unavailable", reason, retryable: false };
   const learnerTurns = opts.transcript.filter((t) => t.who === "user").map((t) => t.text);
   const coachTurns = opts.transcript.filter((t) => t.who === "coach").map((t) => t.text);
   const prompt = judgePrompt(opts);
@@ -263,7 +266,7 @@ export async function summariseSession(
   if (!valid.length) {
     const first = settled.find((s) => s.status === "rejected");
     const reason = first?.status === "rejected" ? describe(first.reason) : "沒有有效的評量樣本";
-    return { kind: "unavailable", reason };
+    return { kind: "unavailable", reason, retryable: true };
   }
   return { kind: "review", review: medianReview(valid), samples: valid.length };
 }

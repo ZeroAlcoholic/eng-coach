@@ -351,6 +351,14 @@ export function composeSystemInstruction(
 }
 
 /**
+ * Sent as a text turn the moment a new conversation completes setup. The live
+ * model only ever replies; with a silent microphone it would wait forever and
+ * the learner would stare at「教練說話中」. Phrased as a stage direction, not as
+ * the learner's words, so the transcript rules (echo, help) never see it.
+ */
+export const OPENING_CUE = "(The learner has put on their headset and is listening. Begin now — your first words open the session.)";
+
+/**
  * D3 — everything a Practice screen hands the transport, in one place. A micro
  * session drills ONE focus inside the same scene: it must not also carry due
  * items, weak objectives or the story continuity, or the ninety seconds turn

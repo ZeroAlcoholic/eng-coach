@@ -14,6 +14,7 @@ import { GoogleGenAI, Modality } from "@google/genai";
 import type {
   LiveCallbacks,
   LiveConnectConfig,
+  LiveSendClientContentParameters,
   LiveSendRealtimeInputParameters,
   LiveServerMessage,
 } from "@google/genai";
@@ -64,6 +65,7 @@ export const DEFAULT_LIVE_FEATURES: LiveFeatures = { proactiveAudio: true, affec
  *  test can stand in at exactly this boundary and nothing else. */
 export interface LiveSocket {
   sendRealtimeInput(input: LiveSendRealtimeInputParameters): void;
+  sendClientContent(params: LiveSendClientContentParameters): void;
   close(): void;
 }
 
@@ -80,6 +82,11 @@ export interface GeminiDirectOptions {
   model: string;
   systemInstruction: string;
   voiceName?: string; // prebuilt Gemini voice; omitted = API default (Puck)
+  // The model speaks only in reply to something — with nothing but silence on
+  // the microphone it never greets, whatever the prompt says. This text turn
+  // is sent once, when a NEW conversation completes setup, so the coach opens
+  // the session; a resumed or handed-over socket continues instead.
+  openingCue?: string;
   features?: LiveFeatures;
   handlers: GeminiDirectHandlers;
   // Injection point for tests. Production uses the SDK.
@@ -112,6 +119,7 @@ export class GeminiLiveDirect {
   private resumeHandle: string | null = null; // issued by the server; survives sockets
   private reconnecting = false; // a GoAway hand-over is in flight
   private closedByUser = false; // close() was called: no hand-over may follow
+  private opened = false; // the opening cue was sent for this conversation
   private readonly connector: LiveConnector;
   private readonly opts: GeminiDirectOptions;
 
@@ -229,6 +237,10 @@ export class GeminiLiveDirect {
 
     if (m.setupComplete && !this.ready) {
       this.ready = true;
+      if (this.opts.openingCue && !this.opened && this.resumeHandle === null) {
+        this.opened = true;
+        this.socket?.sendClientContent({ turns: [{ role: "user", parts: [{ text: this.opts.openingCue }] }], turnComplete: true });
+      }
       for (const chunk of this.pendingAudio.splice(0)) this.pushAudio(chunk);
     }
 
@@ -328,6 +340,7 @@ export class GeminiLiveDirect {
 
   close(): void {
     this.closedByUser = true;
+    this.opened = false;
     // Tell the model the mic stream ended so it doesn't wait for more speech.
     try {
       this.socket?.sendRealtimeInput({ audioStreamEnd: true });
