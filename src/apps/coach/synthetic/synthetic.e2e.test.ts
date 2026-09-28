@@ -340,9 +340,12 @@ describe.skipIf(!enabled)("synthetic learner E2E — real Live model, scripted l
       const onlyOneEcho = users.filter((t) => t.echo).length === 1;
       verdict("F3-c 回聲偵測命中", echoIdx >= 0 && onlyOneEcho, `echo 標在 learner turn ${echoIdx}（共 ${users.filter((t) => t.echo).length} 個）`);
       record(`- U1 讀數：回聲門檻 0.8 於真實 ASR：${users.filter((t) => t.echo).length} 個標記／${users.length} 個 learner turn`);
-      const helpIdx = users.findIndex((t) => /提示|提示一下|tip|hint/i.test(t.text));
-      const aidedNext = helpIdx >= 0 && users.slice(helpIdx + 1).find((t) => t.text.trim()) ?.aided === true;
-      verdict("F3-d 口說求助", aidedNext, `求助 turn=${helpIdx}，其後 learner turn aided=${aidedNext}`);
+      const helpIdx = users.findIndex((t) => /提示/.test(t.text));
+      // the recogniser may run the request and the helped line into one turn;
+      // either way the line spoken with help must carry `aided`
+      const helped = helpIdx >= 0 ? users.slice(helpIdx).filter((t) => t.text.trim()).slice(0, 2) : [];
+      const aidedNext = helped.length > 0 && helped.every((t) => t.aided === true);
+      verdict("F3-d 口說求助", aidedNext, `求助 turn=${helpIdx}，該 turn 與其後 learner turn aided=${helped.map((t) => t.aided === true).join("/")}`);
       expect(echoIdx).toBeGreaterThanOrEqual(0);
       expect(aidedNext).toBe(true);
     },

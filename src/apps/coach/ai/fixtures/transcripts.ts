@@ -157,7 +157,7 @@ export const ANNOTATION_FIXTURES: JudgeFixture[] = [
     objectives: ["ask for a refund"],
     expectBand: "B1",
     expectErrorTypes: [],
-    expectFlags: { aided: [2], l1: [1] },
+    expectFlags: { aided: [1, 2], l1: [1] },
     transcript: [
       { who: "coach", text: "Hi, this is customer service. How can I help?" },
       { who: "user", text: "Hello, I bought a jacket last week but the zipper is broken." },

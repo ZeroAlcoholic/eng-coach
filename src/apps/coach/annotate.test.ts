@@ -90,7 +90,7 @@ describe("annotateTurns — echo rule", () => {
 });
 
 describe("annotateTurns — aided rule", () => {
-  it("every HELP_TRIGGERS phrase marks the NEXT learner turn, not the request itself", () => {
+  it("every HELP_TRIGGERS phrase marks the request turn AND the next learner turn as aided", () => {
     for (const trigger of HELP_TRIGGERS) {
       const out = annotateTurns(
         [
@@ -103,8 +103,13 @@ describe("annotateTurns — aided rule", () => {
         ],
         "en",
       );
-      expect(flagged(out, "aided")).toEqual([1]);
+      expect(flagged(out, "aided")).toEqual([0, 1]);
     }
+  });
+
+  it("a request and the helped line merged into one turn by the recogniser still read as aided", () => {
+    const out = annotateTurns([{ who: "coach", text: "How can I help?" }, { who: "user", text: "提示一下。I would like a table by the window, please." }], "en");
+    expect(out[1]).toMatchObject({ aided: true, l1: true });
   });
 
   it("a request written in simplified script by the recogniser still counts", () => {
@@ -115,7 +120,7 @@ describe("annotateTurns — aided rule", () => {
 
   it("the spoken request itself is Chinese, so it is l1 in BOTH languages (the one text rule Japanese practice has)", () => {
     const out = annotateTurns([{ who: "coach", text: "何にしますか？" }, { who: "user", text: "這個怎麼說" }, { who: "user", text: "コーヒーをください" }], "ja");
-    expect(out[1].l1).toBe(true);
+    expect(out[1]).toMatchObject({ l1: true, aided: true });
     expect(out[2]).toMatchObject({ aided: true });
     expect(out[2].l1).toBeUndefined();
   });
@@ -126,7 +131,7 @@ describe("annotateTurns — aided rule", () => {
     expect(aidedIndexAt([])).toBe(0);
   });
 
-  it("edge cases: repeated taps at one index mark one turn; a request as the last turn gets only l1; a negative index marks the first learner turn", () => {
+  it("edge cases: repeated taps at one index mark one turn; a request as the last turn is l1 and aided; a negative index marks the first learner turn", () => {
     const turns: TranscriptTurn[] = [
       { who: "coach", text: "Hi" },
       { who: "user", text: "Hello, I am here for the meeting" },
@@ -134,9 +139,9 @@ describe("annotateTurns — aided rule", () => {
       { who: "user", text: "怎麼說" },
     ];
     const out = annotateTurns(turns, "en", [1, 1, 1]);
-    expect(flagged(out, "aided")).toEqual([0]);
-    expect(out[3]).toEqual({ who: "user", text: "怎麼說", l1: true });
-    expect(flagged(annotateTurns(turns, "en", [-5]), "aided")).toEqual([0]);
+    expect(flagged(out, "aided")).toEqual([0, 1]); // 0 from the taps, 1 because it is the request
+    expect(out[3]).toEqual({ who: "user", text: "怎麼說", aided: true, l1: true });
+    expect(flagged(annotateTurns(turns, "en", [-5]), "aided")).toEqual([0, 1]);
   });
 
   it("aidedTurnIdx: a button tap at transcript length k marks the first learner turn at index ≥ k", () => {

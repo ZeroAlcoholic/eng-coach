@@ -96,7 +96,10 @@ export function annotateTurns(
     const flags: Pick<TranscriptTurn, "echo" | "aided" | "l1"> = {};
     const help = isHelpRequest(turn.text);
     if (lastCoach !== null && isEcho(turn.text, lastCoach, language)) flags.echo = true;
-    if (helpPending || aidedAt.has(i)) flags.aided = true;
+    // The request turn itself is aided too: speech recognition may run the
+    // request and the line spoken after the coach's help together into one
+    // turn, and that line was spoken with help either way.
+    if (help || helpPending || aidedAt.has(i)) flags.aided = true;
     // A spoken request is Chinese whatever the target language — for Japanese
     // practice this is the one case text alone can settle.
     if (help || containsL1(turn.text, language)) flags.l1 = true;
