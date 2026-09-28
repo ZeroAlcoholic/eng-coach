@@ -126,7 +126,7 @@ export function geminiTts(apiKey: string, voiceName = "Kore"): Synthesiser {
 /** The model answers either as raw L16 (`audio/L16;codec=pcm;rate=24000`) or
  *  as a WAV container (`audio/wav`); both carry PCM16 mono. */
 export function decodeAudio(mime: string, bytes: ArrayBuffer): Synthesised {
-  if (/^audio\/(wav|x-wav|wave)/i.test(mime) || isRiffWave(bytes)) return decodeWav(bytes);
+  if (/^audio\/(wav|x-wav|wave)\b/i.test(mime) || isRiffWave(bytes)) return decodeWav(bytes);
   const rate = Number.parseInt(/rate=(\d+)/.exec(mime)?.[1] ?? "", 10);
   if (!Number.isInteger(rate)) throw new Error(`TTS returned an unexpected mime type: ${mime}`);
   return { pcm: bytes, sampleRate: rate };
