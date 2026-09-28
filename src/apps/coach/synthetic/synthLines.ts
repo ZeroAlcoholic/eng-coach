@@ -8,7 +8,7 @@
 // recogniser can follow — it is a learner's voice, not a product's.
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { float32ToPcm16, pcm16ToFloat32, resampleLinear } from "../../../audio/pcm";
@@ -39,6 +39,7 @@ export function diskStore(dir = CACHE_DIR): LineStore {
     read: async (key) => {
       try {
         const buf = await readFile(join(dir, `${key}.pcm`));
+        if (buf.byteLength === 0) return null; // a write cut short is a miss, not a silent line
         return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -47,7 +48,11 @@ export function diskStore(dir = CACHE_DIR): LineStore {
     },
     write: async (key, pcm) => {
       await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, `${key}.pcm`), new Uint8Array(pcm));
+      // Write beside, then rename: a crash mid-write leaves no half file under
+      // the real name for a later run to trust.
+      const tmp = join(dir, `${key}.tmp`);
+      await writeFile(tmp, new Uint8Array(pcm));
+      await rename(tmp, join(dir, `${key}.pcm`));
     },
   };
 }
@@ -156,11 +161,12 @@ export function decodeWav(bytes: ArrayBuffer): Synthesised {
       bits = v.getUint16(body + 14, true);
       if (format !== 1) throw new Error(`WAV format ${format} is not PCM`);
     } else if (id === "data") {
-      pcm = bytes.slice(body, Math.min(bytes.byteLength, body + size));
+      if (body + size > bytes.byteLength) throw new Error("WAV data chunk is truncated");
+      pcm = bytes.slice(body, body + size);
     }
     at = body + size + (size % 2); // chunks are word-aligned
   }
-  if (!pcm || !sampleRate) throw new Error("WAV without fmt/data chunks");
+  if (!pcm?.byteLength || !sampleRate) throw new Error("WAV without fmt/data chunks, or empty");
   if (channels !== 1 || bits !== 16) throw new Error(`WAV is ${channels} ch × ${bits} bit; expected mono 16-bit`);
   return { pcm, sampleRate };
 }

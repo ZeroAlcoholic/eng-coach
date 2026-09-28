@@ -85,8 +85,14 @@ export interface GeminiDirectOptions {
   handoverTimeoutMs?: number;
 }
 
+// `proactivity` and `enableAffectiveDialog` exist only on the v1alpha surface;
+// on the SDK's default v1beta the server rejects the whole setup message
+// ("Unknown name proactivity") and closes before setupComplete, so the coach
+// never speaks. Found by the synthetic learner (docs/DEVICE_E2E.md「合成」).
+const LIVE_API_VERSION = "v1alpha";
+
 function sdkConnector(apiKey: string): LiveConnector {
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: LIVE_API_VERSION } });
   return (req) => ai.live.connect(req);
 }
 

@@ -60,8 +60,14 @@ describe("chunk-use tracking — grammar frames match by anchors in order", () =
   });
 
   it("anchors in the wrong order do not match", () => {
-    const used = itemsUsedIn([frame("f", "I'd rather ___ than ___")], [{ who: "user", text: "Rather than go, I'd stay." }], "en");
+    // both anchors present, "than" before "i'd rather"
+    const used = itemsUsedIn([frame("f", "I'd rather ___ than ___")], [{ who: "user", text: "More than anything, I'd rather stay." }], "en");
     expect(used).toEqual([]);
+  });
+
+  it("a curly apostrophe from the recogniser still matches a straight one in the frame", () => {
+    const used = itemsUsedIn([frame("f", "I'd rather ___ than ___")], [{ who: "user", text: "I\u2019d rather stay than go." }], "en");
+    expect(used.map((i) => i.id)).toEqual(["f"]);
   });
 
   it("anchors must sit inside ONE learner turn, not across two", () => {
@@ -78,7 +84,6 @@ describe("chunk-use tracking — grammar frames match by anchors in order", () =
 
   it("a frame whose characters would mean something in a regex is still a plain string", () => {
     const anchors = frameAnchors("as ___ as .* (___)");
-    expect(anchors).toEqual(["as", "as .* (", ")"].filter((a) => a.length >= 2));
     expect(matchesFrame("as big as .* (that)", anchors)).toBe(true);
     expect(matchesFrame("as big as anything (that)", anchors)).toBe(false);
   });

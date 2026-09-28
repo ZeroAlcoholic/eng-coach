@@ -91,7 +91,9 @@ export interface FinalizeInput {
   aids?: SessionRecord["aids"];
   aidedTurnIdx?: readonly number[]; // transcript lengths at each help-button tap
   recycled?: string[]; // ids of the due items the coach was asked to elicit
-  micro?: { sourceSessionId: string }; // a follow-up drill of that session's focus
+  // A follow-up drill; the source is absent only for a draft written by a
+  // build that stored the focus as text (readouts then count it as undrilled).
+  micro?: { sourceSessionId?: string };
 }
 
 /** Everything the pipeline touches, so tests can run it against memory. */
@@ -169,7 +171,8 @@ export async function finalizeSession(
         transcript,
         ...(input.aids ? { aids: input.aids } : {}),
         ...(input.recycled ? { recycled: input.recycled } : {}),
-        ...(input.micro ? { kind: "micro" as const, drilledFocus: input.micro } : {}),
+        ...(input.micro ? { kind: "micro" as const } : {}),
+        ...(input.micro?.sourceSessionId ? { drilledFocus: { sourceSessionId: input.micro.sourceSessionId } } : {}),
         finalize: { ...EMPTY_LEDGER },
       },
     );
@@ -182,7 +185,10 @@ export async function finalizeSession(
 
   if (input.micro) {
     // A micro session is where taught chunks get produced: it counts for uses.
-    await recordItemUses(deps, sessionId, transcript, scenario.targetLanguage, now).catch(() => {});
+    // Derived data — a failure is logged, never turned into「沒儲存」.
+    await recordItemUses(deps, sessionId, transcript, scenario.targetLanguage, now).catch((e) =>
+      console.warn("item-use tracking failed", sessionId, e),
+    );
     return { kind: "micro" };
   }
   if (!transcript.length) {
@@ -254,11 +260,16 @@ export async function finalizeSession(
       }
     }
     // Chunk-use tracking is derived data: best-effort, after the load-bearing
-    // writes. It reads the stored turns, which now carry the judge's l1 marks.
-    const stored = (await deps.getSession(sessionId))?.transcript ?? transcript;
-    await recordItemUses(deps, sessionId, stored, scenario.targetLanguage, now).catch((e) =>
-      console.warn("item-use tracking failed", sessionId, e),
-    );
+    // writes. It reads the stored turns, which now carry the judge's l1 marks;
+    // the read is inside the best-effort step so it can never be reported as a
+    // failed results write.
+    await deps
+      .getSession(sessionId)
+      .then((rec) => {
+        if (!rec) throw new Error("session record missing");
+        return recordItemUses(deps, sessionId, rec.transcript, scenario.targetLanguage, now);
+      })
+      .catch((e) => console.warn("item-use tracking failed", sessionId, e));
   } catch (err) {
     // Storage died mid-pipeline (e.g. quota). The analysis itself succeeded —
     // a plain throw would be reported as "analysis failed", which is false.
@@ -385,10 +396,12 @@ async function applyReview(
   const folded = applySessionToProfile({ ...base, language: scenario.targetLanguage }, review, now);
   // E1 — tally confirmed error types against the practised language, same write.
   const withErrors = applyErrorsToProfile(folded, scenario.targetLanguage, review.errors, now);
-  // E2 — the sounds the coach named this time replace last time's note.
-  const withAccent: LearnerProfile = review.pronunciationNotes?.length
-    ? { ...withErrors, accentNotes: { ...withErrors.accentNotes, [scenario.targetLanguage]: review.pronunciationNotes } }
-    : withErrors;
+  // E2 — the sounds the coach named THIS session replace last session's note
+  // for the practised language; none named = nothing to carry forward.
+  const withAccent: LearnerProfile = {
+    ...withErrors,
+    accentNotes: { ...withErrors.accentNotes, [scenario.targetLanguage]: review.pronunciationNotes ?? [] },
+  };
   await deps.putProfile({ ...withAccent, language: fresh.language });
   // C1 — per-objective verdicts. Derived data: a failure here must NOT escalate
   // to ResultsPersistError (the recap and items are already stored).

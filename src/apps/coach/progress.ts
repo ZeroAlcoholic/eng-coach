@@ -53,7 +53,19 @@ export function medianReview(reviews: SessionReview[]): SessionReview {
         interaction: Math.round(median(subs.map((s) => s.interaction))),
       }
     : base.subscores;
-  return { ...base, cefr, subscores, errors: voteErrors(reviews) };
+  // Lists the validator may have emptied on one sample are taken from the
+  // first sample that has them: one sample's dropped quote must not erase what
+  // another sample quoted correctly.
+  const l1Fallbacks = reviews.find((r) => r.l1Fallbacks?.length)?.l1Fallbacks;
+  const pronunciationNotes = reviews.find((r) => r.pronunciationNotes?.length)?.pronunciationNotes;
+  return {
+    ...base,
+    cefr,
+    subscores,
+    errors: voteErrors(reviews),
+    ...(l1Fallbacks ? { l1Fallbacks } : {}),
+    ...(pronunciationNotes ? { pronunciationNotes } : {}),
+  };
 }
 
 // E1 — noise control for typed errors across samples. With several samples a

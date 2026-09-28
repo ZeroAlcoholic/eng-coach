@@ -119,7 +119,28 @@ describe("computeReadouts — hand-computed fixtures", () => {
     expect(r.unaidedCanDo.sourceSessionIds).not.toContain("micro");
   });
 
-  it("focus resolution looks past the window: a focus at the window's edge still gets its two follow-ups", () => {
+  it("sessions with an identical startedAt are ordered by id, so the input order cannot change a readout", () => {
+    const mk = (id: string) => session(id, 1, { review: review([true], id === "a" ? [err("tense")] : []), aids: zero, focus: id === "a" ? meaning("tense") : undefined });
+    const forward = computeReadouts({ sessions: [mk("a"), mk("b"), mk("c")], items: [], scenarios, language: "en" });
+    const backward = computeReadouts({ sessions: [mk("c"), mk("b"), mk("a")], items: [], scenarios, language: "en" });
+    expect(backward).toEqual(forward);
+    expect(forward.focusResolution).toMatchObject({ value: 1, n: 1 });
+  });
+
+  it("a micro session pointing at a session outside the input, or whose scenario is gone, changes nothing", () => {
+    const sessions = [
+      session("s1", 1, { review: review([true], [err("tense")]), aids: zero, focus: meaning("tense") }),
+      session("s2", 2, { review: review([true], []), aids: zero }),
+      session("s3", 3, { review: review([true], []), aids: zero }),
+      session("m-gone", 4, { kind: "micro", drilledFocus: { sourceSessionId: "s1" }, scenarioId: "gone" }),
+      session("m-else", 5, { kind: "micro", drilledFocus: { sourceSessionId: "nowhere" } }),
+    ];
+    const r = computeReadouts({ sessions, items: [], scenarios, language: "en" });
+    expect(r.focusResolution.undrilled).toMatchObject({ value: 1, n: 1, sourceSessionIds: ["s1"] });
+    expect(r.focusResolution.drilled).toMatchObject({ value: null, n: 0 });
+  });
+
+  it("focus resolution looks past the window: a focus outside the window is not counted, one inside gets follow-ups from beyond it", () => {
     const sessions = [
       session("old", 1, { review: review([true], [err("tense")]), aids: zero, focus: meaning("tense") }),
       session("n1", 2, { review: review([true], []), aids: zero }),

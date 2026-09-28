@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { TranscriptTurn } from "../../kernel/types";
 import { ANNOTATION_FIXTURES, FIXTURES } from "./ai/fixtures/transcripts";
-import { annotateTurns, isHelpRequest, isOwnProduction, markL1FromFallbacks } from "./annotate";
+import { aidedIndexAt, annotateTurns, isHelpRequest, isOwnProduction, markL1FromFallbacks, normaliseForMatch } from "./annotate";
 import { HELP_TRIGGERS } from "./prompt";
 
 /** Learner-turn indices (counting learner turns only) that carry `flag`. */
@@ -78,6 +78,15 @@ describe("annotateTurns — echo rule", () => {
   it("the very first learner line (no coach line before it) is never an echo", () => {
     expect(annotateTurns([{ who: "user", text: "Hello there, good morning to you" }], "en")[0].echo).toBeUndefined();
   });
+
+  it("a curly apostrophe from the recogniser does not break the echo rule", () => {
+    const out = annotateTurns([{ who: "coach", text: "I'd like a coffee, please." }, { who: "user", text: "I\u2019d like a coffee, please." }], "en");
+    expect(out[1].echo).toBe(true);
+  });
+
+  it("an empty coach line before the learner is not an echo source", () => {
+    expect(annotateTurns([{ who: "coach", text: "" }, { who: "user", text: "one two three four" }], "en")[1].echo).toBeUndefined();
+  });
 });
 
 describe("annotateTurns — aided rule", () => {
@@ -102,6 +111,32 @@ describe("annotateTurns — aided rule", () => {
     expect(isHelpRequest("这个怎么说")).toBe(true);
     expect(isHelpRequest("翻译一下")).toBe(true);
     expect(isHelpRequest("慢一点")).toBe(true);
+  });
+
+  it("the spoken request itself is Chinese, so it is l1 in BOTH languages (the one text rule Japanese practice has)", () => {
+    const out = annotateTurns([{ who: "coach", text: "何にしますか？" }, { who: "user", text: "這個怎麼說" }, { who: "user", text: "コーヒーをください" }], "ja");
+    expect(out[1].l1).toBe(true);
+    expect(out[2]).toMatchObject({ aided: true });
+    expect(out[2].l1).toBeUndefined();
+  });
+
+  it("aidedIndexAt: a tap while the learner's own turn is open points at that turn, otherwise at the next", () => {
+    expect(aidedIndexAt([{ who: "coach", text: "Hi" }])).toBe(1);
+    expect(aidedIndexAt([{ who: "coach", text: "Hi" }, { who: "user", text: "I want" }])).toBe(1);
+    expect(aidedIndexAt([])).toBe(0);
+  });
+
+  it("edge cases: repeated taps at one index mark one turn; a request as the last turn gets only l1; a negative index marks the first learner turn", () => {
+    const turns: TranscriptTurn[] = [
+      { who: "coach", text: "Hi" },
+      { who: "user", text: "Hello, I am here for the meeting" },
+      { who: "coach", text: "Which room?" },
+      { who: "user", text: "怎麼說" },
+    ];
+    const out = annotateTurns(turns, "en", [1, 1, 1]);
+    expect(flagged(out, "aided")).toEqual([0]);
+    expect(out[3]).toEqual({ who: "user", text: "怎麼說", l1: true });
+    expect(flagged(annotateTurns(turns, "en", [-5]), "aided")).toEqual([0]);
   });
 
   it("aidedTurnIdx: a button tap at transcript length k marks the first learner turn at index ≥ k", () => {
@@ -142,6 +177,13 @@ describe("annotateTurns — l1 rule and the judge's backfill", () => {
     ]);
     expect(flagged(out, "l1")).toEqual([0, 2]);
     expect(out.filter((t) => t.who === "coach").some((t) => t.l1)).toBe(false);
+  });
+
+  it("whatever the judge's validator accepts, the backfill finds on a turn (same normalisation: case, whitespace, script, apostrophes)", () => {
+    const turns: TranscriptTurn[] = [{ who: "user", text: "I want to 預約  a table" }, { who: "user", text: "I\u2019d 这个" }];
+    expect(flagged(markL1FromFallbacks(turns, [{ said: "預約 a" }]), "l1")).toEqual([0]);
+    expect(flagged(markL1FromFallbacks(turns, [{ said: "i'd 這個" }]), "l1")).toEqual([1]);
+    expect(normaliseForMatch("  I\u2019d   说 ")).toBe("i'd 說");
   });
 
   it("markL1FromFallbacks with nothing quoted returns the turns unchanged", () => {

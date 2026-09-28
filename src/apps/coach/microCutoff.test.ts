@@ -42,32 +42,35 @@ describe("armMicroCutoff — the micro session's hard stop", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("a micro session is stopped through the session's own Stop after 120 seconds", async () => {
+  it("a micro session reaches stopping through the screen's own stop path after exactly 120 seconds", async () => {
     const { session, phases } = await liveSession();
-    const after = vi.fn();
-    armMicroCutoff(true, session, after);
+    const stopPath = vi.fn(() => void session.stop()); // what Practice passes: stopAndFinalize
+    armMicroCutoff(true, stopPath);
     await vi.advanceTimersByTimeAsync(MICRO_CUTOFF_MS - 1);
     expect(phases).not.toContain("stopping");
+    expect(stopPath).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
+    expect(stopPath).toHaveBeenCalledTimes(1);
     expect(phases).toContain("stopping");
     expect(phases.at(-1)).toBe("ended");
-    expect(after).toHaveBeenCalledTimes(1);
   });
 
   it("a full session has no timer: nothing happens however long it runs", async () => {
-    const { session, phases } = await liveSession();
-    const after = vi.fn();
-    armMicroCutoff(false, session, after);
+    const { phases } = await liveSession();
+    const stopPath = vi.fn();
+    armMicroCutoff(false, stopPath);
     await vi.advanceTimersByTimeAsync(MICRO_CUTOFF_MS * 10);
     expect(phases.at(-1)).toBe("live");
-    expect(after).not.toHaveBeenCalled();
+    expect(stopPath).not.toHaveBeenCalled();
   });
 
   it("disarming before the deadline cancels the stop (the learner stopped first)", async () => {
-    const { session, phases } = await liveSession();
-    const disarm = armMicroCutoff(true, session, () => {});
+    const { phases } = await liveSession();
+    const stopPath = vi.fn();
+    const disarm = armMicroCutoff(true, stopPath);
     disarm();
     await vi.advanceTimersByTimeAsync(MICRO_CUTOFF_MS * 2);
     expect(phases.at(-1)).toBe("live");
+    expect(stopPath).not.toHaveBeenCalled();
   });
 });

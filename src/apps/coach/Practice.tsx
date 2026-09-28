@@ -18,6 +18,7 @@ import { CanDoSelfCheck } from "./CanDoSelfCheck";
 import { LevelMeter, type LevelSubscribe } from "./LevelMeter";
 import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
 import { describeFocus, microInstruction, type Focus } from "./focus";
+import { aidedIndexAt } from "./annotate";
 import { normaliseStoryState } from "./arcs";
 import { armMicroCutoff } from "./microCutoff";
 import { weakObjectives } from "./objectives";
@@ -132,7 +133,7 @@ export function Practice(props: {
   function armCutoffOnce() {
     if (cutoffArmedRef.current) return;
     cutoffArmedRef.current = true;
-    disarmCutoffRef.current = armMicroCutoff(microRef.current !== null, session(), () => void stopAndFinalize());
+    disarmCutoffRef.current = armMicroCutoff(microRef.current !== null, () => void stopAndFinalize());
   }
 
   const listener: SessionListener = {
@@ -377,10 +378,14 @@ export function Practice(props: {
   async function helpMe() {
     if (helping || !apiKey) return;
     setHelping(true);
+    // The index is taken at the tap, not after the fetch: the learner may keep
+    // talking while the suggestions load, and the help belongs to the turn they
+    // were in when they asked.
+    const at = aidedIndexAt(turnsRef.current);
     try {
       setSuggestions(await suggestReplies(apiKey, { scenario, transcript: turnsRef.current }));
       aidsRef.current.suggestions += 1;
-      aidedTurnIdxRef.current.push(turnsRef.current.length);
+      aidedTurnIdxRef.current.push(at);
     } catch {
       setNotice("提示載入失敗，請再試一次。");
     }
@@ -428,11 +433,12 @@ export function Practice(props: {
       return;
     }
     if (!apiKey) return;
+    const at = aidedIndexAt(turnsRef.current);
     try {
       const zh = await translateLine(apiKey, text);
       setTx((m) => ({ ...m, [i]: { src: text, zh } }));
       aidsRef.current.translations += 1;
-      aidedTurnIdxRef.current.push(turnsRef.current.length);
+      aidedTurnIdxRef.current.push(at);
     } catch {
       /* ignore translate failures */
     }

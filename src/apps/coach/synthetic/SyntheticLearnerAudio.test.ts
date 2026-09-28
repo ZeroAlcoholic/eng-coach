@@ -45,13 +45,14 @@ function harness() {
 const pcm = (samples: number) => new ArrayBuffer(samples * 2);
 
 describe("SyntheticLearnerAudio — the SessionAudio contract, on a clock", () => {
-  it("start resolves at once; stop resolves at once and cancels pending speech", async () => {
+  it("start resolves at once; stop resolves at once, cancels pending speech and settles the awaited say()", async () => {
     const h = harness();
     await expect(h.audio.start()).resolves.toBeUndefined();
-    void h.audio.say(pcm(320 * 5));
+    const said = h.audio.say(pcm(320 * 5));
     expect(h.pending()).toBeGreaterThan(0);
     await expect(h.audio.stop()).resolves.toBeUndefined();
     expect(h.pending()).toBe(0);
+    await expect(said).resolves.toBeUndefined();
   });
 
   it("playPcm accounts for the coach's audio by duration: isPlaying until it runs out, then onDrained once", () => {
@@ -123,11 +124,9 @@ describe("SyntheticLearnerAudio — the SessionAudio contract, on a clock", () =
     expect(SyntheticLearnerAudio.framesFor(bytes)).toBe(8 + 30);
   });
 
-  it("say() before start sends nothing but still resolves", async () => {
+  it("say() before start (or after stop) rejects: a line that could not be sent is never reported as spoken", async () => {
     const h = harness();
-    const p = h.audio.say(pcm(320));
-    h.advance(20 * 40);
-    await p;
+    await expect(h.audio.say(pcm(320))).rejects.toThrow(/before start/);
     expect(h.chunks).toHaveLength(0);
   });
 

@@ -86,7 +86,7 @@ function allJudged(sessions: SessionRecord[], scenarios: Scenario[], language: T
   const lang = languageOf(scenarios);
   return sessions
     .filter((s) => s.kind !== "micro" && !!s.review && lang(s) === language)
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
 }
 
 function canDoRate(sessions: SessionRecord[]): ReadoutPart {

@@ -314,7 +314,9 @@ export function Home(props: {
           aids: draft.aids,
           aidedTurnIdx: draft.aidedTurnIdx,
           recycled: draft.recycled,
-          ...(draft.kind === "micro" && draft.drilledFocus ? { micro: draft.drilledFocus } : {}),
+          // kind alone decides: a micro draft from the previous build has no
+          // drilledFocus and must still never be judged as a full session.
+          ...(draft.kind === "micro" ? { micro: { sourceSessionId: draft.drilledFocus?.sourceSessionId } } : {}),
         });
         setBusy(describeOutcome(out, "已救回上次練習"));
       } else {
@@ -331,7 +333,8 @@ export function Home(props: {
               transcript: draft.transcript,
               ...(draft.aids ? { aids: draft.aids } : {}),
               ...(draft.recycled ? { recycled: draft.recycled } : {}),
-              ...(draft.kind ? { kind: draft.kind, drilledFocus: draft.drilledFocus } : {}),
+              ...(draft.kind ? { kind: draft.kind } : {}),
+              ...(draft.drilledFocus ? { drilledFocus: draft.drilledFocus } : {}),
             }
           );
         });

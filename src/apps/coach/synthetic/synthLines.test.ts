@@ -80,4 +80,21 @@ describe("decodeAudio — what the TTS model may answer with", () => {
     expect(raw).toEqual({ pcm: new ArrayBuffer(100), sampleRate: 24_000 });
     expect(() => decodeAudio("audio/mpeg", new ArrayBuffer(100))).toThrow(/unexpected mime/);
   });
+
+  it("refuses a truncated or empty data chunk instead of caching a stub line", async () => {
+    const { decodeWav } = await import("./synthLines");
+    const { encodeWav } = await import("../../../audio/pcm");
+    const wav = encodeWav(new Float32Array(2400), 24_000);
+    expect(() => decodeWav(wav.slice(0, 60))).toThrow(/truncated/);
+    expect(() => decodeWav(encodeWav(new Float32Array(0), 24_000))).toThrow(/empty/);
+  });
+
+  it("an empty cache file counts as a miss", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const dir = tempDir();
+    writeFileSync(join(dir, `${keyOf("x y")}.pcm`), "");
+    const { tts, calls } = counting();
+    await ensureLines(["x y"], tts, diskStore(dir));
+    expect(calls()).toBe(1);
+  });
 });

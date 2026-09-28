@@ -39,6 +39,7 @@ export class SyntheticLearnerAudio implements SessionAudio {
   private capturedLength = 0;
   private lastTurn: CoachClip | null = null;
   private readonly frames: number[] = []; // pending say() frame timers
+  private readonly pendingSay: Array<() => void> = []; // say() promises still open
 
   private speaking = false;
   private idleTimer: number | null = null;
@@ -65,6 +66,8 @@ export class SyntheticLearnerAudio implements SessionAudio {
     this.started = false;
     this.flushPlayback();
     for (const id of this.frames.splice(0)) this.clock.clearTimeout(id);
+    this.speaking = false;
+    for (const settle of this.pendingSay.splice(0)) settle(); // an awaited line must not hang forever
     if (this.idleTimer !== null) {
       this.clock.clearTimeout(this.idleTimer);
       this.idleTimer = null;
@@ -152,6 +155,7 @@ export class SyntheticLearnerAudio implements SessionAudio {
    *  onChunk at 20 ms intervals, then 600 ms of silence. Resolves after the
    *  last frame. A paused mic swallows the frames, like a muted microphone. */
   say(pcm16k: ArrayBuffer): Promise<void> {
+    if (!this.started) return Promise.reject(new Error("say() before start() or after stop(): nothing would be sent"));
     const bytes = new Uint8Array(pcm16k);
     const frameBytes = FRAME_SAMPLES * 2;
     const speech = Math.ceil(bytes.byteLength / frameBytes);
@@ -159,6 +163,13 @@ export class SyntheticLearnerAudio implements SessionAudio {
     const total = speech + silence;
     this.speaking = true;
     return new Promise((resolve) => {
+      const settle = () => {
+        this.speaking = false;
+        const at = this.pendingSay.indexOf(settle);
+        if (at >= 0) this.pendingSay.splice(at, 1);
+        resolve();
+      };
+      this.pendingSay.push(settle);
       for (let i = 0; i < total; i++) {
         const id = this.clock.setTimeout(() => {
           this.frames.splice(this.frames.indexOf(id), 1);
@@ -166,17 +177,11 @@ export class SyntheticLearnerAudio implements SessionAudio {
             const frame = i < speech ? bytes.slice(i * frameBytes, (i + 1) * frameBytes) : new Uint8Array(frameBytes);
             this.callbacks.onChunk(padded(frame, frameBytes));
           }
-          if (i === total - 1) {
-            this.speaking = false;
-            resolve();
-          }
+          if (i === total - 1) settle();
         }, i * 20);
         this.frames.push(id);
       }
-      if (total === 0) {
-        this.speaking = false;
-        resolve();
-      }
+      if (total === 0) settle();
     });
   }
 

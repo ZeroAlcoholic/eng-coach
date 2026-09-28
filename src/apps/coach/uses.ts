@@ -14,7 +14,7 @@
 // learner turn, so a pattern filled with different words still counts.
 
 import type { LearnedItem, TargetLanguage, TranscriptTurn } from "../../kernel/types";
-import { isOwnProduction } from "./annotate";
+import { isOwnProduction, normaliseForMatch } from "./annotate";
 
 const MIN_ITEM_CHARS = 2; // one-character items ("a", "を") match everything
 const SLOT = "___";
@@ -26,7 +26,7 @@ const MIN_ANCHOR_CHARS = 2;
 export function frameAnchors(frame: string): string[] {
   return frame
     .split(SLOT)
-    .map((part) => part.trim().toLocaleLowerCase())
+    .map((part) => normaliseForMatch(part))
     .filter((part) => part.length >= MIN_ANCHOR_CHARS);
 }
 
@@ -44,7 +44,7 @@ export function matchesFrame(text: string, anchors: readonly string[]): boolean 
 
 /** Pure: which of `items` were produced in these learner turns. */
 export function itemsUsedIn(items: LearnedItem[], transcript: TranscriptTurn[], language: TargetLanguage): LearnedItem[] {
-  const turns = transcript.filter(isOwnProduction).map((t) => t.text.toLocaleLowerCase());
+  const turns = transcript.filter(isOwnProduction).map((t) => normaliseForMatch(t.text));
   const said = turns.join("\n");
   if (!said.trim()) return [];
   return items.filter((it) => {
@@ -53,7 +53,7 @@ export function itemsUsedIn(items: LearnedItem[], transcript: TranscriptTurn[], 
       const anchors = frameAnchors(it.frame);
       return turns.some((turn) => matchesFrame(turn, anchors));
     }
-    const needle = it.text.trim().toLocaleLowerCase();
+    const needle = normaliseForMatch(it.text);
     return needle.length >= MIN_ITEM_CHARS && said.includes(needle);
   });
 }

@@ -435,10 +435,57 @@ describe("finalizeSession — measurement honesty (Phase D)", () => {
     expect(m.profile.accentNotes).toEqual({ en: ["watch the th in think"], ja: ["keep"] });
   });
 
-  it("a review without pronunciation notes leaves the previous note in place", async () => {
-    const m = memory({ profile: { ...DEFAULT_PROFILE, accentNotes: { en: ["old"] } } });
+  it("a review without pronunciation notes clears the previous note (nothing was pointed out this time)", async () => {
+    const m = memory({ profile: { ...DEFAULT_PROFILE, accentNotes: { en: ["old"], ja: ["keep"] } } });
     await finalizeSession("k", input, m.deps);
-    expect(m.profile.accentNotes).toEqual({ en: ["old"] });
+    expect(m.profile.accentNotes).toEqual({ en: [], ja: ["keep"] });
+  });
+
+  it("a micro draft from the previous build (kind micro, no drilled source) is still a micro session: not judged, no drilledFocus", async () => {
+    const m = memory();
+    const out = await finalizeSession("k", { ...input, sessionId: "m-old", micro: {} }, m.deps);
+    expect(out).toEqual({ kind: "micro" });
+    expect(m.sessions.get("m-old")).toMatchObject({ kind: "micro" });
+    expect(m.sessions.get("m-old")!.drilledFocus).toBeUndefined();
+    expect(m.deps.judge).not.toHaveBeenCalled();
+  });
+
+  it("retryReview stores the focus and backfills l1 exactly as a first run would", async () => {
+    const m = memory({ items: [{ ...item("taught", "s0"), text: "office", language: "ja" as const }] });
+    const ja = { ...scenario, targetLanguage: "ja" as const };
+    const transcript = [
+      { who: "user" as const, text: "office に 辦公室 行きます" },
+      { who: "user" as const, text: "はい、office です" },
+    ];
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: "unavailable", reason: "503" });
+    await finalizeSession("k", { ...input, scenario: ja, transcript }, m.deps);
+    const r = review();
+    if (r.kind === "review") r.review = { ...r.review, l1Fallbacks: [{ said: "辦公室", target: "オフィス" }] };
+    (m.deps.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce(r);
+    await retryReview("k", { session: m.sessions.get("s1")!, scenario: ja, profile: input.profile }, m.deps);
+    const rec = m.sessions.get("s1")!;
+    expect(rec.focus).toEqual({ kind: "meaning", type: "tense", example: "I goed", correction: "I went" });
+    expect(rec.transcript[0].l1).toBe(true);
+    expect(rec.transcript[1].l1).toBeUndefined();
+  });
+
+  it("a results-write failure leaves the focus unset and null in the outcome; the re-run stores it once", async () => {
+    const m = memory();
+    let fail = true;
+    const realPut = m.deps.putProfile;
+    m.deps.putProfile = async (p) => {
+      if (fail) throw new Error("QuotaExceededError");
+      return realPut(p);
+    };
+    const err = await finalizeSession("k", input, m.deps).catch((e) => e);
+    expect(err.name).toBe("ResultsPersistError");
+    expect(err.outcome.focus).toBeNull();
+    expect(m.sessions.get("s1")!.focus).toBeUndefined();
+    fail = false;
+    const again = await finalizeSession("k", input, m.deps);
+    const focus = { kind: "meaning", type: "tense", example: "I goed", correction: "I went" };
+    expect(again).toMatchObject({ kind: "done", focus });
+    expect(m.sessions.get("s1")!.focus).toEqual(focus);
   });
 
   it("an all-echo transcript is stored, judged unavailable with a readable reason, and no level is written", async () => {

@@ -207,9 +207,14 @@ const parseItem: Parser<LearnedItem> = (v, path) => {
 
 // --- session ------------------------------------------------------------------
 
-// A flag is stored only as `true`; anything else (false, a string) is treated
-// as absent rather than refused, because an absent flag is the ordinary case.
-const flag: Parser<true | undefined> = (v) => (v === true ? true : undefined);
+// A flag is stored only as `true`. Absent or false = unflagged (the ordinary
+// case); anything else is refused, because a corrupt `aided` read as unflagged
+// would fake「無提示」exactly as a negative aid count would.
+const flag: Parser<true | undefined> = (v, path) => {
+  if (v === undefined || v === false) return undefined;
+  if (v === true) return true;
+  throw new Invalid(path, "expected true");
+};
 
 const parseTurn: Parser<TranscriptTurn> = (v, path) => {
   const r = record(v, path);
@@ -238,21 +243,24 @@ const parseFocus: Parser<SessionFocus | string> = (v, path) => {
       return {
         kind,
         type: field(r, "type", enumOf(ERROR_TYPES), path),
-        example: field(r, "example", string, path),
-        correction: field(r, "correction", string, path),
+        example: field(r, "example", nonEmptyString, path),
+        correction: field(r, "correction", nonEmptyString, path),
       };
     case "recurring":
       return {
         kind,
         type: field(r, "type", enumOf(ERROR_TYPES), path),
-        example: field(r, "example", string, path),
-        correction: field(r, "correction", string, path),
-        sessions: field(r, "sessions", number, path),
+        example: field(r, "example", nonEmptyString, path),
+        correction: field(r, "correction", nonEmptyString, path),
+        sessions: field(r, "sessions", integerIn(2, Number.MAX_SAFE_INTEGER), path),
       };
-    case "gap":
-      return { kind, gaps: field(r, "gaps", arrayOf(parseFallback), path) };
+    case "gap": {
+      const gaps = field(r, "gaps", arrayOf(parseFallback), path);
+      if (!gaps.length) throw new Invalid(`${path}.gaps`, "expected at least one gap");
+      return { kind, gaps };
+    }
     case "cando":
-      return { kind, objective: field(r, "objective", string, path) };
+      return { kind, objective: field(r, "objective", nonEmptyString, path) };
     default:
       return assertNever(kind);
   }

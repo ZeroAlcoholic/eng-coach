@@ -34,6 +34,7 @@ import {
   string,
   type Parser,
 } from "../../../kernel/validate";
+import { normaliseForMatch } from "../annotate";
 import { medianReview, numToCefr } from "../progress";
 import { generateJson, type GenerateOptions } from "./client";
 
@@ -100,22 +101,20 @@ export type JudgeOutcome =
   | { kind: "review"; review: SessionReview; samples: number }
   | { kind: "unavailable"; reason: string };
 
-const normalise = (s: string) => s.toLocaleLowerCase().replace(/\s+/g, " ").trim();
-
 /** Build the validator for ONE session: it needs the learner's own words to
  *  check that every reported error example was actually said, and the coach's
- *  to check that every pronunciation note quotes the coach. */
+ *  to check that every pronunciation note quotes the coach. A quote must sit
+ *  inside ONE turn, under the same normalisation the l1 backfill uses, so
+ *  whatever passes here can be found again on a turn. */
 export function reviewParser(learnerTurns: string[], coachTurns: string[] = []): Parser<SessionReview> {
-  const learnerText = normalise(learnerTurns.join("\n"));
-  const coachText = normalise(coachTurns.join("\n"));
-  const saidByLearner = (example: string) => {
-    const e = normalise(example);
-    return e.length >= 2 && learnerText.includes(e);
+  const learner = learnerTurns.map(normaliseForMatch);
+  const coach = coachTurns.map(normaliseForMatch);
+  const saidIn = (turns: string[], quote: string) => {
+    const q = normaliseForMatch(quote);
+    return q.length >= 2 && turns.some((t) => t.includes(q));
   };
-  const saidByCoach = (note: string) => {
-    const n = normalise(note);
-    return n.length >= 2 && coachText.includes(n);
-  };
+  const saidByLearner = (example: string) => saidIn(learner, example);
+  const saidByCoach = (note: string) => saidIn(coach, note);
   const parseFallback: Parser<{ said: string; target: string }> = (v, path) => {
     const r = record(v, path);
     const said = field(r, "said", nonEmptyString, path);

@@ -64,6 +64,11 @@ describe("judge validator — the recap claims only what the transcript can show
     expect(r.errors).toEqual([]);
   });
 
+  it("a quote spanning two learner turns is invented evidence (no single turn contains it)", () => {
+    const r = parse({ ...good, errors: [{ type: "tense", example: "yesterday. We discuss", correction: "x" }] }, "$");
+    expect(r.errors).toEqual([]);
+  });
+
   it("matches the example case- and whitespace-insensitively (ASR punctuation drift)", () => {
     const r = parse({ ...good, errors: [{ type: "tense", example: "  i GOED to the   office", correction: "went" }] }, "$");
     expect(r.errors).toHaveLength(1);

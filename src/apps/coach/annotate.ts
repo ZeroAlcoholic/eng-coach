@@ -22,7 +22,7 @@ const ECHO_MIN_TOKENS: Record<TargetLanguage, number> = { en: 3, ja: 6 };
 /** Words for English (letters/digits, case-folded); characters for Japanese
  *  (no word boundaries to lean on), punctuation and spaces dropped. */
 function tokens(text: string, language: TargetLanguage): string[] {
-  const lower = text.toLocaleLowerCase();
+  const lower = normaliseForMatch(text);
   if (language === "en") return lower.match(/[\p{L}\p{N}']+/gu) ?? [];
   return [...lower].filter((ch) => /[\p{L}\p{N}]/u.test(ch));
 }
@@ -36,15 +36,29 @@ function isEcho(learner: string, coach: string, language: TargetLanguage): boole
 }
 
 // Speech recognition may write a Chinese request in simplified script even
-// though the learner speaks Taiwanese Mandarin. Fold the few characters the
-// triggers contain, so the match does not hinge on the recogniser's script.
+// though the learner speaks Taiwanese Mandarin, and may use curly apostrophes.
+// Fold both, so a match never hinges on the recogniser's typography. ONE
+// normalisation for every substring check in this app (the judge's validator,
+// the l1 backfill, the echo tokens), so what one side accepts the other finds.
 const SIMPLIFIED: Record<string, string> = { 说: "說", 讲: "講", 么: "麼", 译: "譯", 点: "點", 这: "這", 个: "個" };
-const foldScript = (s: string) => [...s].map((ch) => SIMPLIFIED[ch] ?? ch).join("");
+export function normaliseForMatch(s: string): string {
+  return [...s.toLocaleLowerCase().replace(/[\u2018\u2019\u02BC`]/g, "'").replace(/\s+/g, " ").trim()]
+    .map((ch) => SIMPLIFIED[ch] ?? ch)
+    .join("");
+}
 
 /** Does this learner line ask the coach for help (out loud)? */
 export function isHelpRequest(text: string): boolean {
-  const folded = foldScript(text);
+  const folded = normaliseForMatch(text);
   return HELP_TRIGGERS.some((trigger) => folded.includes(trigger));
+}
+
+/** The transcript index a help tap should record: the turn the learner is
+ *  speaking right now if their turn is already open (its deltas keep merging
+ *  into it), else the next one. */
+export function aidedIndexAt(turns: readonly TranscriptTurn[]): number {
+  const last = turns[turns.length - 1];
+  return last?.who === "user" ? turns.length - 1 : turns.length;
 }
 
 const HAN_OR_KANA = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
@@ -80,10 +94,13 @@ export function annotateTurns(
       return turn;
     }
     const flags: Pick<TranscriptTurn, "echo" | "aided" | "l1"> = {};
+    const help = isHelpRequest(turn.text);
     if (lastCoach !== null && isEcho(turn.text, lastCoach, language)) flags.echo = true;
     if (helpPending || aidedAt.has(i)) flags.aided = true;
-    if (containsL1(turn.text, language)) flags.l1 = true;
-    helpPending = isHelpRequest(turn.text);
+    // A spoken request is Chinese whatever the target language — for Japanese
+    // practice this is the one case text alone can settle.
+    if (help || containsL1(turn.text, language)) flags.l1 = true;
+    helpPending = help;
     return { ...turn, ...flags };
   });
 }
@@ -95,11 +112,11 @@ export function markL1FromFallbacks(
   transcript: readonly TranscriptTurn[],
   fallbacks: readonly { said: string }[] | undefined,
 ): TranscriptTurn[] {
-  const said = (fallbacks ?? []).map((f) => f.said.trim().toLocaleLowerCase()).filter((s) => s.length > 0);
+  const said = (fallbacks ?? []).map((f) => normaliseForMatch(f.said)).filter((s) => s.length > 0);
   if (!said.length) return [...transcript];
   return transcript.map((turn) => {
     if (turn.who !== "user" || turn.l1) return turn;
-    const text = turn.text.toLocaleLowerCase();
+    const text = normaliseForMatch(turn.text);
     return said.some((s) => text.includes(s)) ? { ...turn, l1: true } : turn;
   });
 }

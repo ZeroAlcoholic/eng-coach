@@ -185,16 +185,25 @@ async function runScript(script: Script): Promise<Run> {
   });
   try {
     expect(session.currentPhase().kind).toBe("live");
+    // A session that ends on its own (setup rejected, quota, drop) must fail
+    // the check at once — never let the script talk to a dead socket.
+    const alive = () => {
+      const p = session.currentPhase();
+      if (p.kind !== "live") throw new Error(`session is not live: ${JSON.stringify(p)}；notices=${notices.join(" / ")}`);
+    };
     // the coach greets first; wait for that turn to finish playing
-    const greeted = await waitFor(() => youCount >= 1, FIRST_CUE_MS);
+    const greeted = await waitFor(() => youCount >= 1 || session.currentPhase().kind !== "live", FIRST_CUE_MS);
+    alive();
     if (!greeted) record(`- 教練 ${FIRST_CUE_MS / 1000} 秒內沒有開口（cue 未轉「you」），照樣送出第一句`);
     const speak = async (text: string) => {
       const pcm = lines.get(text);
       if (!pcm) throw new Error(`no synthesised audio for a scripted line (${keyOf(text).slice(0, 8)})`);
+      alive();
       const before = youCount;
-      await audio!.say(pcm);
+      await audio!.say(pcm); // rejects if the engine was stopped: the line is then not counted as sent
       run.sent++;
-      const replied = await waitFor(() => youCount > before || cue === "you" && youCount > before, REPLY_MS);
+      const replied = await waitFor(() => youCount > before || session.currentPhase().kind !== "live", REPLY_MS);
+      alive();
       if (!replied) record(`- 第 ${run.sent} 句之後 ${REPLY_MS / 1000} 秒內教練沒有回完（cue 未再轉「you」）`);
     };
     let i = 0;
@@ -294,7 +303,7 @@ describe.skipIf(!enabled)("synthetic learner E2E — real Live model, scripted l
       expect(run.elapsedMs).toBeLessThanOrEqual(MAX_SESSION_MS);
       const n = learnerLines(hotel).length;
       const users = userTurns(run).length;
-      verdict("F3-a 換你說時機", run.cuesYouWhilePlaying === 0, `cue→you ${run.cueChanges} 次，其中播放中 ${run.cuesYouWhilePlaying} 次`);
+      const cueOk = verdict("F3-a 換你說時機", run.cueChanges > 0 && run.cuesYouWhilePlaying === 0, `cue→you ${run.cueChanges} 次，其中播放中 ${run.cuesYouWhilePlaying} 次`);
       const continuity = verdict("F3-b 逐字稿連續", users >= 0.8 * n, `送 ${n} 句 → user turn ${users} 個`);
       const m = memoryDeps();
       const out = await finalizeSession(apiKey, {
@@ -309,10 +318,12 @@ describe.skipIf(!enabled)("synthetic learner E2E — real Live model, scripted l
       const learnerText = rec.transcript.filter((t) => t.who === "user").map((t) => t.text.toLocaleLowerCase()).join("\n");
       const examplesOk = (rec.review?.errors ?? []).every((e) => learnerText.includes(e.example.toLocaleLowerCase().trim()));
       const band = rec.review ? Math.abs(cefrToNum(rec.review.cefr) - cefrToNum(hotel.expectBand!)) <= 1 : false;
-      verdict("F3-h 判斷輸出", out.kind === "done" && out.judge.kind === "review" && examplesOk && band, `judge=${out.kind === "done" ? out.judge.kind : out.kind}，cefr=${rec.review?.cefr ?? "—"}（期望 ${hotel.expectBand}±1），errors=${rec.review?.errors?.length ?? 0} 皆子字串=${examplesOk}，focus=${JSON.stringify(rec.focus ?? null)}`);
+      const hOk = verdict("F3-h 判斷輸出", out.kind === "done" && out.judge.kind === "review" && examplesOk && band, `judge=${out.kind === "done" ? out.judge.kind : out.kind}，cefr=${rec.review?.cefr ?? "—"}（期望 ${hotel.expectBand}±1），errors=${rec.review?.errors?.length ?? 0} 皆子字串=${examplesOk}，focus=${JSON.stringify(rec.focus ?? null)}`);
       record(`- U2 讀數：合成 hotel 逐字稿 CEFR=${rec.review?.cefr ?? "—"}，unaided can-do 判定 ${JSON.stringify(rec.review?.objectivesMet ?? [])}`);
+      record(`- 逐字稿（learner）：${rec.transcript.filter((t) => t.who === "user").map((t) => t.text).join(" ‖ ")}`);
+      expect(cueOk).toBe(true);
       expect(continuity).toBe(true);
-      expect(run.cuesYouWhilePlaying).toBe(0);
+      expect(hOk).toBe(true);
     },
     MAX_SESSION_MS + 60_000,
   );
@@ -358,9 +369,9 @@ describe.skipIf(!enabled)("synthetic learner E2E — real Live model, scripted l
         micro: { sourceSessionId: "synthetic-hotel" },
       }, m.deps);
       const rec = m.sessions.get("synthetic-micro-1")!;
-      verdict("F3-e 微 session 流程", out.kind === "micro" && !rec.review && m.profile.levels === undefined && rec.kind === "micro", `finalize=${out.kind}，review=${!!rec.review}，levels=${JSON.stringify(m.profile.levels ?? null)}，user turns=${userTurns(run).length}`);
+      const eOk = verdict("F3-e 微 session 流程", out.kind === "micro" && !rec.review && m.profile.levels === undefined && rec.kind === "micro" && userTurns(run).length > 0 && run.transcript.some((t) => t.who === "coach"), `finalize=${out.kind}，review=${!!rec.review}，levels=${JSON.stringify(m.profile.levels ?? null)}，user turns=${userTurns(run).length}`);
       record(`- 教練首句：${run.transcript.find((t) => t.who === "coach")?.text.slice(0, 120) ?? "—"}`);
-      expect(out.kind).toBe("micro");
+      expect(eOk).toBe(true);
     },
     MAX_SESSION_MS + 60_000,
   );
@@ -397,8 +408,10 @@ describe.skipIf(!enabled)("synthetic learner E2E — real Live model, scripted l
       const nextCoach = enAnnotated.slice(mixedIdx + 1).find((t) => t.who === "coach")?.text ?? "";
       record(`- en 逐字稿（learner）：${enAnnotated.filter((t) => t.who === "user").map((t) => `[${t.l1 ? "l1" : "-"}] ${t.text}`).join(" ‖ ")}`);
       const enOk = mixedIdx >= 0 && mixedTurn?.l1 === true && /book|reserv/i.test(nextCoach);
-      verdict("F3-i en 夾雜中文", enOk, `含 Han 的 learner turn=${mixedIdx >= 0 ? `「${mixedTurn?.text}」 l1=${mixedTurn?.l1 === true}` : "無（U5：ASR 未保留中文字元）"}；教練下一 turn 含 book/reserve=${/book|reserv/i.test(nextCoach)}`);
+      const enSpoke = en.transcript.some((t) => t.who === "user") && en.transcript.some((t) => t.who === "coach");
+      verdict("F3-i en 夾雜中文", enOk, `含 Han 的 learner turn=${mixedIdx >= 0 ? `「${mixedTurn?.text}」 l1=${mixedTurn?.l1 === true}` : "無（U5：ASR 未保留中文字元，en 半邊未驗證）"}；教練下一 turn 含 book/reserve=${/book|reserv/i.test(nextCoach)}`);
       if (mixedIdx < 0) record("- U5 觸發：Live 的輸入逐字稿未保留英文句中的中文字元；en 的 l1 改由 judge l1Fallbacks 回填（機制不變，來源改一處）。");
+      expect(enSpoke).toBe(true);
 
       const ja = await runScript({ scenario: scenarioFor(jaMixed), lines: learnerLines(jaMixed) });
       const m = memoryDeps();

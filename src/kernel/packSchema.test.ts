@@ -173,7 +173,7 @@ describe("parsePack — older packs without newer fields still read", () => {
 
 describe("parsePack — Phase D/E fields round-trip and are narrowed", () => {
   it("turn flags survive only as true; a structured focus of each kind, drilledFocus, recycled, review extras, item frame and accent notes round-trip", () => {
-    const flagged = { ...session, id: "f", transcript: [{ who: "user", text: "x", echo: true, aided: "yes", l1: false }] };
+    const flagged = { ...session, id: "f", transcript: [{ who: "user", text: "x", echo: true, l1: false }] };
     const focused = {
       ...session,
       id: "g",
@@ -197,6 +197,17 @@ describe("parsePack — Phase D/E fields round-trip and are narrowed", () => {
     expect(p.sessions[3].focus).toEqual({ kind: "recurring", type: "tense", example: "a", correction: "b", sessions: 2 });
     expect(p.items[0].frame).toBe("I'd rather ___ than ___");
     expect(p.profile?.accentNotes).toEqual({ en: ["th in think"] });
+  });
+
+  it("refuses a turn flag that is neither true nor false/absent (it would fake「無提示」)", () => {
+    expect(() => parsePack({ ...valid, arcs: [], sessions: [{ ...session, transcript: [{ who: "user", text: "x", aided: "yes" }] }] })).toThrow(/aided/);
+  });
+
+  it("refuses a focus that pickFocus could never produce: empty gaps, sessions below 2, empty objective", () => {
+    const withFocus = (focus: unknown) => () => parsePack({ ...valid, arcs: [], sessions: [{ ...session, focus }] });
+    expect(withFocus({ kind: "gap", gaps: [] })).toThrow(/gaps/);
+    expect(withFocus({ kind: "recurring", type: "tense", example: "a", correction: "b", sessions: 1 })).toThrow(/sessions/);
+    expect(withFocus({ kind: "cando", objective: " " })).toThrow(/objective/);
   });
 
   it("refuses a focus with an unknown kind or an error type outside the closed set", () => {
