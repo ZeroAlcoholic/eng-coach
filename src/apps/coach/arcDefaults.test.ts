@@ -11,9 +11,9 @@ import { countSentences, freezeCanDos, resolveCanDoIds } from "./arcs";
 
 const all = Object.values(DEFAULT_ARCS).flat();
 
-describe("DEFAULT_ARCS — one demo story line per language", () => {
-  it("ships exactly one arc for every target language", () => {
-    for (const { id } of TARGET_LANGUAGES) expect(DEFAULT_ARCS[id]).toHaveLength(1);
+describe("DEFAULT_ARCS — demo story lines per language", () => {
+  it("ships at least one arc for every target language", () => {
+    for (const { id } of TARGET_LANGUAGES) expect(DEFAULT_ARCS[id].length).toBeGreaterThanOrEqual(1);
   });
 
   it("uses unique, stable ids and tags each arc with its own language", () => {

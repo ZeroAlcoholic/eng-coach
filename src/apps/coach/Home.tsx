@@ -56,11 +56,13 @@ import {
 } from "./arcs";
 import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
+import { briefPrompt } from "./briefPrompt";
 import { HistorySheet } from "./HistorySheet";
 import { levelSummary } from "./progress";
 import { computeReadouts } from "./readouts";
 import { ReadoutStrip } from "./ReadoutStrip";
 import { ReviewSheet } from "./ReviewSheet";
+import { Sheet } from "./Sheet";
 import { countDue } from "./srs";
 import { VocabSheet } from "./VocabSheet";
 
@@ -95,7 +97,6 @@ export function Home(props: {
   const [recovering, setRecovering] = useState(false); // guard double-tap on 恢復
   const [backingUp, setBackingUp] = useState(false); // guard double-tap on 備份
   const [editing, setEditing] = useState<Scenario | null>(null);
-  const [showSettings, setShowSettings] = useState(false); // W5: settings tucked away
   // props.persist arrives async from CoachApp (the mount-time request). On top of
   // that we re-read the state (without re-requesting) whenever ⚙️ opens — some
   // engines grant persistence LATER from engagement signals (PWA install, repeat
@@ -107,7 +108,9 @@ export function Home(props: {
   const [serial, setSerial] = useState(false); // 新增: build a story arc, not a one-off
   const [advancing, setAdvancing] = useState<string | null>(null); // arc id being advanced
   const [showOtherArcs, setShowOtherArcs] = useState(false); // progressive disclosure, not a list
-  const [sheet, setSheet] = useState<"history" | "vocab" | "review" | null>(null);
+  // Settings is a sheet like the others: a panel appended to the bottom of a
+  // long page looked like a dead button when tapped at the top.
+  const [sheet, setSheet] = useState<"history" | "vocab" | "review" | "settings" | null>(null);
   // A readout tapped on the progress strip opens History filtered to its sources.
   const [historyFocus, setHistoryFocus] = useState<string[] | null>(null);
   const levelId = useId();
@@ -295,6 +298,20 @@ export function Home(props: {
     downloadFile(`${slug(sc.title)}.json`, JSON.stringify(pack, null, 2), "application/json");
   }
 
+  // One tap → the prompt is on the clipboard. When the clipboard is not
+  // available (an old WebView, a denied permission) the prompt goes into the
+  // brief box instead, so the learner can still select and copy it by hand.
+  async function copyPrompt() {
+    const text = briefPrompt({ language: lang, level: profile.level, serial });
+    try {
+      await navigator.clipboard.writeText(text);
+      setBusy("✓ 已複製提示詞。貼到 ChatGPT／Gemini／Claude，附上你的材料；把回覆貼回「練習簡報」，或存成 .md 用「匯入 .md」。");
+    } catch {
+      setBrief(text);
+      setBusy("這個瀏覽器不讓我直接複製，提示詞已放進「練習簡報」欄——全選複製後再貼到 ChatGPT／Gemini。");
+    }
+  }
+
   // Crash recovery — a draft means a live session never reached「停止並儲存」
   // (the tab was killed or the page reloaded). Same finalize pipeline as a
   // normal stop; without a key or scenario we still keep the raw transcript.
@@ -391,13 +408,11 @@ export function Home(props: {
         <button
           className="btn btn--ghost btn--sm"
           aria-label="設定與資料"
-          aria-pressed={showSettings}
-          onClick={() =>
-            setShowSettings((v) => {
-              if (!v) void persistedState().then(setRefreshedPersist); // refresh on open
-              return !v;
-            })
-          }
+          aria-haspopup="dialog"
+          onClick={() => {
+            void persistedState().then(setRefreshedPersist); // refresh on open
+            setSheet("settings");
+          }}
         >
           ⚙️
         </button>
@@ -636,9 +651,14 @@ export function Home(props: {
               : "例：和美國團隊的季度預算檢討，要為 10% 增幅辯護。"
           }
         />
-        <p className="muted" style={{ margin: "8px 0" }}>
-          小技巧：先在 ChatGPT／Gemini 網頁把雜亂資料整理成 Markdown，再匯入。
-        </p>
+        {/* The hand-off to another assistant is one tap: copy a prompt that asks
+            for exactly the brief shape the generator extracts best from. */}
+        <div className="row" style={{ margin: "8px 0", alignItems: "center" }}>
+          <span className="muted grow">有會議通知、行程或對話紀錄？讓 ChatGPT／Gemini 先整理成簡報再貼回來。</span>
+          <button className="btn btn--ghost btn--sm" onClick={() => void copyPrompt()}>
+            複製提示詞
+          </button>
+        </div>
         {/* S2 — one control, not a second screen: the same brief either makes a
             one-off scenario or a multi-episode story line. */}
         <label className="row" style={{ marginBottom: 10, gap: 8, alignItems: "center" }}>
@@ -653,11 +673,12 @@ export function Home(props: {
         </div>
       </div>
 
-      {/* 5. 設定與資料 — tucked behind ⚙️ (W5 minimalism) */}
-      {showSettings && (
-        <>
-          <div className="section-title">設定與資料</div>
-          <div className="card">
+      {busy && <p className="notice">{busy}</p>}
+
+      {/* 5. 設定與資料 — behind ⚙️, as a sheet like the other secondary screens */}
+      {sheet === "settings" && (
+        <Sheet title="設定與資料" onClose={() => setSheet(null)}>
+          <div>
             <button className="btn btn--primary btn--block" onClick={backup} disabled={backingUp}>
               💾 {backingUp ? "備份中…" : "備份資料（存到檔案／NAS）"}
             </button>
@@ -742,11 +763,10 @@ export function Home(props: {
                 套用
               </button>
             </div>
+            {busy && <p className="notice">{busy}</p>}
           </div>
-        </>
+        </Sheet>
       )}
-
-      {busy && <p className="notice">{busy}</p>}
 
       {sheet === "history" && (
         <HistorySheet
