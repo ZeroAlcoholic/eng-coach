@@ -305,7 +305,7 @@ build all green.
    影響，含 arc 讀取失敗時）；Home「▶ 繼續上次」改名「▶ 再練一次」。
 6. Home 新增「🎲 換個新劇情」卡：一鍵抽內建種子簡報（`seeds.ts`，英 14／日 12）走同一條生成路徑。
 證據層級：vitest 436 綠；N1 真模型合成探針 pass；兩輪獨立審查（工程 7 項採 5、教學 10 項採 8）。
-真人語音對推進節奏的感受仍 **blocked（本機無麥克風）**。
+推進節奏（10 s／15 s）若實用上太急或太慢，`session.ts` 的 `DEFAULT_SILENCE_DELAYS_MS` 一處可調。
 
 **Verification debts (none blocking):**
 1. `S2b-ii` is now **合成已驗證** (F3-f, synthetic learner against the real Live
