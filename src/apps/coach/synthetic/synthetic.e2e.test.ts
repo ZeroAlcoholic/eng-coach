@@ -22,7 +22,7 @@ import { annotateTurns } from "../annotate";
 import { finalizeSession, type FinalizeDeps } from "../finalize";
 import { microInstruction } from "../focus";
 import { cefrToNum } from "../progress";
-import { OPENING_CUE, sessionInstruction, type ArcContext } from "../prompt";
+import { OPENING_CUE, sessionInstruction, silenceNudges, type ArcContext } from "../prompt";
 import { defaultSessionDeps, PracticeSession, type SessionPhase } from "../session";
 import { describeEstimate, diskStore, ensureLines, geminiTts, keyOf, type SynthResult } from "./synthLines";
 import { SyntheticLearnerAudio } from "./SyntheticLearnerAudio";
@@ -94,6 +94,7 @@ interface Run {
   resumedWithMemory: boolean | null;
   elapsedMs: number;
   sent: number;
+  unpromptedCoachTurns: number; // N1: coach turns during the silent tail
 }
 
 interface Script {
@@ -103,6 +104,10 @@ interface Script {
   micro?: string;
   arc?: ArcContext;
   dynamicEcho?: boolean; // after line 0's reply, say the coach's last line back (F3-c)
+  // N1: after the last line, stay silent this long with silence nudges ON and
+  // count the coach turns that arrive with no learner line — the proof that a
+  // client text turn mid-realtime-audio makes the live model speak.
+  silentTailMs?: number;
   loopUntilMs?: number; // F3-g: keep cycling the lines until this long has passed or a hand-over was seen
 }
 
@@ -133,7 +138,7 @@ async function waitFor(pred: () => boolean, ms: number): Promise<boolean> {
 
 async function runScript(script: Script): Promise<Run> {
   expect(script.lines.length).toBeLessThanOrEqual(MAX_LINES);
-  const run: Run = { transcript: [], cuesYouWhilePlaying: 0, cueChanges: 0, phases: [], reconnectingSeen: false, resumedWithMemory: null, elapsedMs: 0, sent: 0 };
+  const run: Run = { transcript: [], cuesYouWhilePlaying: 0, cueChanges: 0, phases: [], reconnectingSeen: false, resumedWithMemory: null, elapsedMs: 0, sent: 0, unpromptedCoachTurns: 0 };
   let audio: SyntheticLearnerAudio | null = null;
   let youCount = 0;
   const notices: string[] = [];
@@ -141,6 +146,7 @@ async function runScript(script: Script): Promise<Run> {
     {
       createTransport: defaultSessionDeps.createTransport,
       createAudio: (cb) => (audio = new SyntheticLearnerAudio(cb, OUTPUT_RATE, undefined, true)),
+      ...(script.silentTailMs ? { silenceDelaysMs: { first: 8_000, next: 10_000 } } : {}),
     },
     {
       onPhase: (p) => {
@@ -181,6 +187,7 @@ async function runScript(script: Script): Promise<Run> {
     }),
     voiceName: "Puck",
     openingCue: OPENING_CUE,
+    ...(script.silentTailMs ? { silenceNudges: silenceNudges(script.scenario.targetLanguage) } : {}),
   });
   try {
     expect(session.currentPhase().kind).toBe("live");
@@ -227,6 +234,11 @@ async function runScript(script: Script): Promise<Run> {
         }
       }
       i++;
+    }
+    if (script.silentTailMs) {
+      const before = youCount;
+      await waitFor(() => youCount >= before + 2 || session.currentPhase().kind !== "live", script.silentTailMs);
+      run.unpromptedCoachTurns = youCount - before;
     }
   } finally {
     await session.stop();
@@ -294,6 +306,18 @@ describe.skipIf(!enabled)("synthetic learner E2E — real Live model, scripted l
     mkdirSync(".synthetic-cache", { recursive: true });
     writeFileSync(".synthetic-cache/last-run.md", [`# synthetic run ${new Date().toISOString()}`, "", ...results, ""].join("\n"));
   });
+
+  it.skipIf(goAwayEnabled)(
+    "N1 — silence nudges: a quiet learner gets the coach to take the lead (real model)",
+    async () => {
+      const run = await runScript({ scenario: scenarioFor(hotel), lines: learnerLines(hotel).slice(0, 1), silentTailMs: 45_000 });
+      const ok = verdict("N1 沉默推進", run.unpromptedCoachTurns >= 1, `靜默 45 秒內教練自行開口 ${run.unpromptedCoachTurns} 次（期望 ≥1，推進間隔 8/10 秒）`);
+      const coachTail = run.transcript.filter((t) => t.who === "coach").slice(-2).map((t) => t.text.trim().slice(0, 160));
+      record(`- N1 教練推進後的台詞：${coachTail.join(" ‖ ")}`);
+      expect(ok).toBe(true);
+    },
+    MAX_SESSION_MS + 60_000,
+  );
 
   it.skipIf(goAwayEnabled)(
     "F3-a/b/h — hotel script: cue timing, transcript continuity, judge output",

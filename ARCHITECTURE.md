@@ -110,7 +110,10 @@ stateDiagram-v2
   `turnComplete` **and** drained both hold. `interrupted` (barge-in) flips it at
   once. A drain that arrives mid-turn (network slower than playback) is not a cue.
 - **Model features.** `proactivity.proactiveAudio` and `enableAffectiveDialog`
-  are independent flags (both on) supported by `gemini-3.8-live`; they are not
+  are independent flags (both OFF by default since 2026-10-05: proactive audio
+  lets the model stay silent on speech it judges "not addressed to it", which a
+  tutor must never do; affective dialog made the model refuse audio) supported by
+  `gemini-3.8-live`; they are not
   prompt changes. The ⚙️ override can name any live model, including the legacy
   `gemini-3.1-flash-live-preview`; whether that legacy model accepts these flags
   has not been verified — if setup is rejected, the flags are the first suspect.

@@ -292,7 +292,9 @@ export async function startArc(
     updatedAt: at,
   };
   const canDoIds = resolveCanDoIds(arc.canDos, seed.episode.canDoIndexes);
-  const scenario = episodeScenario(arc, seed.episode, 1, canDoIds);
+  // Episode 1 keeps the brief as its `source` (like a one-off scenario does),
+  // so Home's random-seed picker can tell which seeds already became a story.
+  const scenario: Scenario = { ...episodeScenario(arc, seed.episode, 1, canDoIds), source: opts.brief };
   arc.episodes = [
     {
       n: 1,

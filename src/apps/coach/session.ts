@@ -47,12 +47,18 @@ export interface TransportSpec {
   systemInstruction: string;
   voiceName?: string;
   openingCue?: string; // the text turn that makes the coach speak first (prompt.ts OPENING_CUE)
+  // Stage directions sent when the learner stays silent on their turn, in
+  // escalation order (prompt.ts SILENCE_NUDGES); the last one repeats. The
+  // model never speaks unprompted, so without these a learner who freezes
+  // after the coach's question waits forever. Absent/empty = feature off.
+  silenceNudges?: readonly string[];
 }
 
 /** What the owner needs from a transport — the protocol lives behind it. */
 export interface SessionTransport {
   connect(): Promise<void>;
   sendAudio(pcm: ArrayBuffer): void;
+  sendText(text: string): boolean; // one mid-conversation text turn; false when not sent
   isOpen(): boolean;
   reconnect(): Promise<void>;
   close(): void;
@@ -85,6 +91,36 @@ export interface SessionDeps {
   createAudio: (callbacks: AudioCallbacks) => SessionAudio;
   // Screen wake lock; absent in unsupported browsers and in tests.
   wakeLock?: Pick<WakeLock, "request">;
+  // Silence before the first nudge, and between later ones (defaults below).
+  silenceDelaysMs?: { first: number; next: number };
+}
+
+// 10 s covers the planning pause the coach is told to leave (~5 s) plus the
+// time an unsure learner takes to start; a shorter wait would talk over them.
+// Later nudges wait longer: the coach has just spoken again.
+export const DEFAULT_SILENCE_DELAYS_MS = { first: 10_000, next: 15_000 } as const;
+// Bounds the cost of a learner who walked away: after this many unanswered
+// nudges in one silence the coach stops and waits (the mic is still live).
+export const MAX_SILENCE_NUDGES = 3;
+// A nudge must not talk over a learner who has just started speaking: the
+// transcript lags the voice by a second or two, so the mic level is the early
+// signal. Loud within this window → the nudge waits (not counted), a few times.
+const VOICE_HOLD_MS = 1_500;
+const VOICE_RMS_FLOOR = 0.02; // PCM16 normalised; room noise sits well below
+const MAX_VOICE_POSTPONES = 3;
+// A nudge the socket could not take (a resumed socket still completing setup)
+// is retried, not dropped: nothing else would ever re-arm it.
+const SEND_RETRY_MS = 2_000;
+const MAX_SEND_RETRIES = 5;
+
+/** Mean amplitude of a PCM16 chunk, 0..1 — cheap enough to run on every chunk. */
+function chunkRms(pcm: ArrayBuffer): number {
+  const n = pcm.byteLength >> 1;
+  if (!n) return 0;
+  const v = new Int16Array(pcm, 0, n);
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += v[i] * v[i];
+  return Math.sqrt(sum / n) / 32768;
 }
 
 export class PracticeSession {
@@ -100,6 +136,13 @@ export class PracticeSession {
   private awaitingDrain = false; // protocol said "you", audio still playing
   private playbackRate = 1;
   private levelReporting = false;
+  private silenceNudges: readonly string[] = [];
+  private silenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private silenceStreak = 0; // nudges sent since the learner last said anything
+  private lastVoiceAt = -Infinity; // last mic chunk above the voice floor
+  private postpones = 0; // voice-gated postponements of the pending nudge
+  private sendRetries = 0; // retries of a nudge the socket could not take
+  private coachSpoke = false; // a coach turn has started in this session (opening watch)
   private levelListener: ((rms: number) => void) | null = null;
 
   constructor(
@@ -124,6 +167,92 @@ export class PracticeSession {
     if (this.cue === turn) return;
     this.cue = turn;
     this.listener.onCue(turn);
+    // The learner's turn starts when the coach's audio has actually finished;
+    // that is the moment silence starts to count.
+    if (turn === "you") this.armSilenceTimer();
+    else this.clearSilenceTimer();
+  }
+
+  // ── Silence nudges ──────────────────────────────────────────────────────
+  // The live model only replies to input, so a learner who freezes after a
+  // question would otherwise sit opposite a coach that never takes the lead.
+  // Any learner speech (transcript, barge-in) resets the streak; pause,
+  // reconnect and stop clear the timer; the coach's own turn clears it too, so
+  // a nudge is never sent while the coach is already talking.
+  private armSilenceTimer(): void {
+    this.clearSilenceTimer();
+    if (!this.silenceNudges.length || this.paused || this.reconnecting) return;
+    if (this.silenceStreak >= MAX_SILENCE_NUDGES) return;
+    const delays = this.deps.silenceDelaysMs ?? DEFAULT_SILENCE_DELAYS_MS;
+    this.postpones = 0;
+    this.sendRetries = 0;
+    this.scheduleNudge(this.silenceStreak === 0 ? delays.first : delays.next);
+  }
+
+  private scheduleNudge(ms: number): void {
+    this.clearSilenceTimer();
+    this.silenceTimer = setTimeout(() => {
+      this.silenceTimer = null;
+      this.fireSilenceNudge();
+    }, ms);
+  }
+
+  // The opening: the coach is cued to speak first, but the model only replies
+  // to input — if the opening cue drew nothing, nothing would ever arm a nudge
+  // (the cue is still "coach"). So the first silence is watched from live.
+  private armOpeningWatch(): void {
+    if (!this.silenceNudges.length || this.coachSpoke || this.cue !== "coach") return;
+    const delays = this.deps.silenceDelaysMs ?? DEFAULT_SILENCE_DELAYS_MS;
+    this.scheduleNudge(delays.first);
+  }
+
+  private clearSilenceTimer(): void {
+    if (this.silenceTimer !== null) clearTimeout(this.silenceTimer);
+    this.silenceTimer = null;
+  }
+
+  private fireSilenceNudge(): void {
+    if (this.phase.kind !== "live" || this.paused || this.reconnecting) return;
+    if (this.cue === "coach") {
+      // Opening watch fired: no coach turn ever started. Hand the turn over
+      // (nothing is playing) and nudge right away.
+      if (this.coachSpoke) return;
+      this.awaitingDrain = false;
+      this.cue = "you";
+      this.listener.onCue("you");
+    }
+    if (Date.now() - this.lastVoiceAt < VOICE_HOLD_MS && this.postpones < MAX_VOICE_POSTPONES) {
+      this.postpones += 1; // they are talking: wait, don't count
+      this.scheduleNudge(VOICE_HOLD_MS);
+      return;
+    }
+    const text = this.silenceNudges[Math.min(this.silenceStreak, this.silenceNudges.length - 1)];
+    if (!this.transport?.sendText(text)) {
+      if (this.sendRetries < MAX_SEND_RETRIES) {
+        this.sendRetries += 1;
+        this.scheduleNudge(SEND_RETRY_MS); // socket still completing setup: retry, not counted
+      }
+      return;
+    }
+    this.silenceStreak += 1;
+    // Guard against a model that answers a stage direction with nothing: the
+    // turn never flips to "coach", so re-arm here rather than wait forever.
+    this.armSilenceTimer();
+  }
+
+  /** The learner said something: the silence streak is over. */
+  private learnerSpoke(): void {
+    this.silenceStreak = 0;
+    this.restartSilenceClock();
+  }
+
+  /** The turn changed hands without the learner saying anything we can
+   *  count (a barge-in, or a GoAway hand-over that cut the coach off): start
+   *  the clock again but keep the streak, so a hand-over never re-opens the
+   *  nudge budget. A real barge-in's transcript resets the streak itself. */
+  private restartSilenceClock(): void {
+    this.clearSilenceTimer();
+    if (this.cue === "you") this.armSilenceTimer();
   }
 
   /** Connect, then open the mic. Resolves once live, or once the attempt ended
@@ -135,6 +264,12 @@ export class PracticeSession {
     this.reconnecting = false;
     this.awaitingDrain = false;
     this.cue = "coach";
+    this.silenceNudges = spec.silenceNudges ?? [];
+    this.silenceStreak = 0;
+    this.lastVoiceAt = -Infinity;
+    this.postpones = 0;
+    this.sendRetries = 0;
+    this.coachSpoke = false;
     this.listener.onCue("coach"); // coach greets first
     this.setPhase({ kind: "connecting" });
     void this.acquireWakeLock();
@@ -148,7 +283,9 @@ export class PracticeSession {
 
       const audio = this.deps.createAudio({
         onChunk: (pcm) => {
-          if (gen === this.generation) this.transport?.sendAudio(pcm);
+          if (gen !== this.generation) return;
+          if (this.silenceNudges.length && chunkRms(pcm) > VOICE_RMS_FLOOR) this.lastVoiceAt = Date.now();
+          this.transport?.sendAudio(pcm);
         },
         onLevel: (rms) => this.levelListener?.(rms),
         onDrained: () => {
@@ -161,6 +298,7 @@ export class PracticeSession {
       audio.setPlaybackRate(this.playbackRate);
       audio.setLevelReporting(this.levelReporting);
       this.setLivePhase();
+      this.armOpeningWatch();
     } catch (reason) {
       if (gen !== this.generation) return; // a Stop already reported its own phase
       await this.release(); // never throws, so the terminal phase always follows
@@ -187,6 +325,7 @@ export class PracticeSession {
     const audio = this.audio;
     this.transport = null;
     this.audio = null;
+    this.clearSilenceTimer();
     try {
       transport?.close();
     } catch (err) {
@@ -205,6 +344,7 @@ export class PracticeSession {
   pause(): void {
     if (this.phase.kind !== "live" || this.paused) return;
     this.paused = true;
+    this.clearSilenceTimer(); // a paused learner is not a silent one
     this.audio?.pauseMic(); // flushes playback, which is not a drain…
     if (this.awaitingDrain) {
       // …so a turn that had already completed must hand over here, or the cue
@@ -222,12 +362,24 @@ export class PracticeSession {
     const gen = this.generation;
     this.resuming = true;
     try {
-      if (this.transport && !this.transport.isOpen()) await this.transport.reconnect();
+      let reconnected = false;
+      if (this.transport && !this.transport.isOpen()) {
+        await this.transport.reconnect();
+        reconnected = true;
+      }
       if (gen !== this.generation) return;
       this.paused = false; // let resumed coach audio through before the mic is back
       await this.audio?.resumeMic();
       if (gen !== this.generation) return;
       this.setLivePhase();
+      // A coach turn that was mid-flight when the socket dropped dies with that
+      // socket: the resumed one never completes it. Hand the turn over here, or
+      // the cue says「教練說話中」, the model waits for input, and no silence
+      // nudge is armed — the exact stall the nudges exist to end.
+      if (reconnected && this.cue === "coach") {
+        this.awaitingDrain = false;
+        this.setCue("you");
+      } else if (this.cue === "you") this.armSilenceTimer();
     } catch (err) {
       if (gen !== this.generation) return;
       this.paused = true;
@@ -291,11 +443,13 @@ export class PracticeSession {
         if (!live()) return;
         this.audio?.flushPlayback();
         this.awaitingDrain = false;
-        this.setCue("you"); // barge-in: the learner is already talking
+        this.setCue("you"); // barge-in (or a hand-over cut the coach off)
+        this.restartSilenceClock();
       },
       onTurnState: (turn) => {
         if (!live()) return;
         if (turn === "coach") {
+          this.coachSpoke = true;
           this.awaitingDrain = false;
           this.audio?.beginCoachTurn();
           this.listener.onCoachClip(null); // a new turn: the old clip isn't「剛才那句」
@@ -308,7 +462,9 @@ export class PracticeSession {
         else this.setCue("you");
       },
       onUserTranscript: (text) => {
-        if (live()) this.listener.onTranscript("user", text);
+        if (!live()) return;
+        this.learnerSpoke();
+        this.listener.onTranscript("user", text);
       },
       onAssistantTranscript: (text) => {
         if (live()) this.listener.onTranscript("coach", text);
@@ -319,12 +475,14 @@ export class PracticeSession {
       onReconnecting: () => {
         if (!live() || this.phase.kind !== "live") return;
         this.reconnecting = true;
+        this.clearSilenceTimer();
         this.setLivePhase();
       },
       onResumed: (resumed) => {
         if (!live() || this.phase.kind !== "live") return;
         this.reconnecting = false;
         this.setLivePhase();
+        if (this.cue === "you") this.armSilenceTimer();
         if (!resumed) this.listener.onNotice("連線已重建，但教練可能不記得前段對話。");
       },
       onClose: (reason) => {

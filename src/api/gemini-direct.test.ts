@@ -136,12 +136,12 @@ describe("GeminiLiveDirect — opening cue", () => {
 });
 
 describe("GeminiLiveDirect — setup config", () => {
-  it("asks for context-window compression and proactive audio by default; affective dialog is NOT sent (the model refuses audio with it on)", async () => {
+  it("asks for context-window compression; proactive audio is OFF by default (a tutor must answer every utterance); affective dialog is NOT sent (the model refuses audio with it on)", async () => {
     const h = harness();
     await h.client.connect();
     const cfg = h.sockets[0].req.config;
     expect(cfg.contextWindowCompression).toEqual({ slidingWindow: {} });
-    expect(cfg.proactivity).toEqual({ proactiveAudio: true });
+    expect("proactivity" in cfg).toBe(false); // off = field omitted; an explicit false is refused by the server
     expect("enableAffectiveDialog" in cfg).toBe(false);
     expect(cfg.sessionResumption).toEqual({});
   });
@@ -153,7 +153,7 @@ describe("GeminiLiveDirect — setup config", () => {
       apiKey: "unused",
       model: "m",
       systemInstruction: "s",
-      features: { proactiveAudio: false, affectiveDialog: true },
+      features: { proactiveAudio: true, affectiveDialog: true },
       handlers: h.handlers,
       connector: (req) => {
         seen.push(req);
@@ -161,7 +161,7 @@ describe("GeminiLiveDirect — setup config", () => {
       },
     });
     await client.connect();
-    expect(seen[0].config.proactivity).toEqual({ proactiveAudio: false });
+    expect(seen[0].config.proactivity).toEqual({ proactiveAudio: true });
     expect(seen[0].config.enableAffectiveDialog).toBe(true);
   });
 });
@@ -354,5 +354,26 @@ describe("GeminiLiveDirect — protocol turn state", () => {
     h.sockets[0].serverSays({ serverContent: { interrupted: true } });
     expect(h.handlers.onInterrupted).toHaveBeenCalledTimes(1);
     expect((h.handlers.onTurnState as ReturnType<typeof vi.fn>).mock.calls).toEqual([["coach"], ["you"]]);
+  });
+});
+
+describe("GeminiLiveDirect — sendText (stage directions mid-conversation)", () => {
+  it("sends one client text turn once setup is complete, and reports it", async () => {
+    const h = harness();
+    await h.client.connect();
+    expect(h.client.sendText("(nudge)")).toBe(false); // before setupComplete: dropped, not buffered
+    expect(h.sockets[0].content).toHaveLength(0);
+    h.sockets[0].serverSays({ setupComplete: {} });
+    expect(h.client.sendText("(nudge)")).toBe(true);
+    expect(h.sockets[0].content).toEqual([{ turns: [{ role: "user", parts: [{ text: "(nudge)" }] }], turnComplete: true }]);
+  });
+
+  it("is a no-op after close()", async () => {
+    const h = harness();
+    await h.client.connect();
+    h.sockets[0].serverSays({ setupComplete: {} });
+    h.client.close();
+    expect(h.client.sendText("(nudge)")).toBe(false);
+    expect(h.sockets[0].content).toHaveLength(0);
   });
 });

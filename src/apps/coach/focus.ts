@@ -65,7 +65,7 @@ export function microInstruction(f: Focus): string {
   const target = drillTarget(f);
   return [
     "",
-    "── 90-SECOND FOCUSED FOLLOW-UP (overrides the opening sequence above) ──",
+    "── 90-SECOND FOCUSED FOLLOW-UP (overrides the opening sequence, the Closing order and the never-drill rule above) ──",
     "This is NOT a new scene and there is no planning beat or recap. Say in ONE short Traditional Chinese " +
       "sentence what the next minute drills, then go straight into it, staying inside the same context.",
     `Drill ONLY this: ${target}.`,

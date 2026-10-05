@@ -8,7 +8,7 @@ import {
 } from "../../kernel/types";
 import { band } from "./progress";
 import { microInstruction } from "./focus";
-import { composeSystemInstruction, HELP_TRIGGERS, sessionInstruction } from "./prompt";
+import { composeSystemInstruction, HELP_TRIGGERS, sessionInstruction, silenceNudges } from "./prompt";
 
 const scenario: Scenario = {
   id: "s1",
@@ -217,13 +217,18 @@ describe("composeSystemInstruction — Phase E: accent, code-mixing, continuity"
 
   it("E1 — names the closed list of sounds and drops the old open-ended accent feedback", () => {
     const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
-    expect(out).toContain("/θ/ and /ð/");
+    expect(out).toContain("/l/ vs /n/ vs /r/"); // highest functional load for Mandarin-L1, not /θ/
+    expect(out).not.toContain("/θ/");
     expect(out).toContain("/iː/ vs /ɪ/");
     expect(out).toContain("word stress");
+    expect(out).toContain("sentence stress");
     expect(out).toContain("at most once every three or four exchanges");
     expect(out).not.toContain("brief, specific accent feedback");
     expect(out).toContain("Never rate their accent");
-    expect(composeSystemInstruction(ja, DEFAULT_PROFILE)).toContain("small っ");
+    const jp = composeSystemInstruction(ja, DEFAULT_PROFILE);
+    expect(jp).toContain("small っ");
+    expect(jp).toContain("voiced vs voiceless");
+    expect(jp).not.toContain("pitch accent");
   });
 
   it("E4 — the code-mixing section exists for both languages and the help section is unchanged", () => {
@@ -296,5 +301,141 @@ describe("band — display mapping for per-skill subscores", () => {
   it("shows — (not A1) for missing/zero/out-of-range, unlike numToCefr's clamp", () => {
     expect(band(0)).toBe("—");
     expect(band(7)).toBe("—");
+  });
+});
+
+describe("composeSystemInstruction — the coach carries the conversation", () => {
+  it("tells the coach to own the agenda and never to leave the topic to the learner", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(out).toContain("You carry the conversation");
+    expect(out).toContain("4–6 BEATS");
+    expect(out).toContain("Never ask what they want to talk about");
+    expect(out).toContain("DIG DEEPER");
+    expect(out).not.toContain("don't fill the silence"); // the old rule that made it wait passively
+  });
+
+  it("explains the silence stage directions the session owner will send", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(out).toContain("stage direction");
+    for (const lang of ["en", "ja"] as const) {
+      const nudges = silenceNudges(lang);
+      expect(nudges.length).toBeGreaterThanOrEqual(2);
+      for (const n of nudges) expect(n).toMatch(/^\(.*\)$/); // a direction, never the learner's words
+    }
+  });
+
+  it("Japanese: the coach still owns the agenda, but teaches each line (kana + romaji + 繁中) and never asks why", () => {
+    const ja = composeSystemInstruction({ ...scenario, targetLanguage: "ja", level: "A1" }, DEFAULT_PROFILE);
+    expect(ja).toContain("You carry the conversation");
+    expect(ja).toContain("Never ask what they want to talk about");
+    expect(ja).toContain("mora by mora");
+    expect(ja).not.toContain("kana + romaji"); // voice-only: never spelt aloud
+    expect(ja).toContain("Never spell kana or romaji out loud");
+    expect(ja).toContain("The Chinese explanation is not optional");
+    expect(ja).toContain("Choice questions (A か B か) are the DEFAULT");
+    expect(ja).not.toContain("never yes/no"); // that rule is English-only
+    expect(ja).toContain("Never ask「どうして？」");
+    expect(ja).not.toContain("push back gently on their view");
+    expect(ja).not.toContain("DIG DEEPER");
+    const en = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(en).toContain("DIG DEEPER");
+    expect(en).not.toContain("どうして");
+  });
+
+  it("Japanese silence nudges hand over the Japanese line with a Chinese explanation", () => {
+    for (const n of silenceNudges("ja")) {
+      expect(n).toContain("Traditional Chinese");
+    }
+    expect(silenceNudges("ja")[0]).toContain("mora by mora");
+    expect(silenceNudges("ja")[0]).toContain("say in Chinese"); // the L1 route comes FIRST for a comprehension-ahead beginner
+    expect(silenceNudges("en")[0]).not.toContain("TWO short example answers"); // wait-time: room first, answers second
+    expect(silenceNudges("en")[1]).toContain("TWO short example answers");
+    expect(silenceNudges("ja")).not.toEqual(silenceNudges("en"));
+  });
+
+  it("frames the progress note as coaching targets, not as a conversation to resume", () => {
+    const out = composeSystemInstruction({ ...scenario, progressNote: "past tense of irregular verbs" }, DEFAULT_PROFILE);
+    expect(out).toContain("Coaching targets carried over");
+    expect(out).toContain("past tense of irregular verbs");
+    expect(out).toContain("do NOT mention 'last time'");
+    expect(out).not.toContain("Where the learner left off");
+  });
+
+  it("a replayed standalone scenario is told to run a fresh variation, never to resume", () => {
+    const first = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], undefined, 0);
+    expect(first).not.toContain("FRESH variation");
+    const again = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], undefined, 2);
+    expect(again).toContain("already been practised 2 times");
+    expect(again).toContain("FRESH variation");
+    expect(again).toContain("Do NOT resume");
+    const once = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], undefined, 1);
+    expect(once).toContain("already been practised 1 time —");
+  });
+
+  it("an arc episode keeps its continuity even when replayed (the arc, not the replay rule, owns the story)", () => {
+    const arc = {
+      title: "A",
+      episode: 2,
+      planned: 6,
+      storyState: { characters: [], events: [], openThreads: [] },
+      isFinal: false,
+    };
+    const out = composeSystemInstruction({ ...scenario, arc: { arcId: "a", episode: 2 } }, DEFAULT_PROFILE, [], [], arc, 1);
+    expect(out).not.toContain("FRESH variation");
+    expect(out).toContain("第 2 集");
+  });
+
+  it("an arc episode whose arc record could not be read is still never told to run a fresh variation", () => {
+    const out = composeSystemInstruction({ ...scenario, arc: { arcId: "a", episode: 2 } }, DEFAULT_PROFILE, [], [], undefined, 1);
+    expect(out).not.toContain("FRESH variation");
+  });
+
+  it("sessionInstruction passes priorPlays through for a full session and drops it for a micro drill", () => {
+    const base = { scenario, profile: DEFAULT_PROFILE, dueItems: [], weakObjectives: [] };
+    expect(sessionInstruction({ ...base, priorPlays: 3 })).toContain("FRESH variation");
+    expect(sessionInstruction({ ...base, priorPlays: 3, micro: "\nDRILL" })).not.toContain("FRESH variation");
+  });
+});
+
+describe("composeSystemInstruction — pedagogy calibration (one correction policy, turn budget, closing order)", () => {
+  it("runs ONE correction policy per phase: recast-and-go during, prompt only when meaning breaks, form work after", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(out).toContain("ONE policy per phase");
+    expect(out).toContain("recast it once, folded naturally into your reply, and do NOT ask them to repeat");
+    expect(out).toContain("ONE self-repair prompt");
+    expect(out).not.toContain("first echo the gist back"); // the per-turn recast+repeat that ran alongside
+    expect(out).not.toContain("Prompts beat silent recasts");
+  });
+
+  it("caps the per-turn load and orders the closing (scene → form → can-do)", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(out).toContain("TURN BUDGET");
+    expect(out).toContain("Closing order");
+    expect(out.indexOf("Close the scene IN character")).toBeLessThan(out.indexOf("Step OUT of character"));
+  });
+
+  it("English: fragments are rebuilt and repeated up to B1, folded in from B2", () => {
+    expect(composeSystemInstruction({ ...scenario, level: "B1" }, DEFAULT_PROFILE)).toContain("GATHER their words");
+    const b2 = composeSystemInstruction({ ...scenario, level: "B2" }, DEFAULT_PROFILE);
+    expect(b2).not.toContain("GATHER their words");
+    expect(b2).toContain("fold the complete natural sentence");
+  });
+
+  it("scaffolding is stated as triggers, not percentages the model cannot measure", () => {
+    for (const level of ["A1", "B1", "C1"] as const) {
+      const en = composeSystemInstruction({ ...scenario, level }, DEFAULT_PROFILE);
+      const ja = composeSystemInstruction({ ...scenario, targetLanguage: "ja", level }, DEFAULT_PROFILE);
+      expect(en).not.toMatch(/~\d+%/);
+      expect(ja).not.toMatch(/~\d+%/);
+    }
+    expect(composeSystemInstruction({ ...scenario, targetLanguage: "ja", level: "A1" }, DEFAULT_PROFILE)).toContain(
+      "a short gloss after each Japanese line",
+    );
+  });
+
+  it("help requests step out of the role for one line instead of being answered in character", () => {
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(out).toContain("step OUT of the role for one line");
+    expect(out).not.toContain("briefly IN CHARACTER");
   });
 });

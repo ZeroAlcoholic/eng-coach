@@ -59,7 +59,12 @@ export interface LiveFeatures {
   affectiveDialog: boolean; // model adapts tone to the learner's
 }
 
-export const DEFAULT_LIVE_FEATURES: LiveFeatures = { proactiveAudio: true, affectiveDialog: false };
+// proactiveAudio is OFF: it lets the model decide a learner's utterance was
+// "not addressed to it" and stay silent — exactly the stall a tutor must never
+// have. Every sound the learner makes in a 1:1 lesson is addressed to the coach.
+// Off = the `proactivity` field is omitted (see openSocket); an explicit false
+// is rejected by the server.
+export const DEFAULT_LIVE_FEATURES: LiveFeatures = { proactiveAudio: false, affectiveDialog: false };
 
 /** The slice of the SDK's `Session` this transport needs. Kept minimal so a
  *  test can stand in at exactly this boundary and nothing else. */
@@ -171,7 +176,11 @@ export class GeminiLiveDirect {
         // A sliding window keeps the system instruction and the recent turns;
         // an empty window object means "server defaults".
         contextWindowCompression: { slidingWindow: {} },
-        proactivity: { proactiveAudio: features.proactiveAudio },
+        // Sent ONLY when on: the server refuses an explicit `false` ("Explicitly
+        // disabling proactive audio is not supported for this model") and closes
+        // before setupComplete. Omitting the field is the off state. Found by the
+        // synthetic learner (N1) on gemini-3.8-live, 2026-10-05.
+        ...(features.proactiveAudio ? { proactivity: { proactiveAudio: true } } : {}),
         ...(features.affectiveDialog ? { enableAffectiveDialog: true } : {}),
         systemInstruction: this.opts.systemInstruction,
         // Native-audio model => no languageCode (accent is voice + prompt driven).
@@ -197,6 +206,18 @@ export class GeminiLiveDirect {
       },
     });
     return opened;
+  }
+
+  /** Send one text turn mid-conversation (a stage direction, never the
+   *  learner's words — it is not transcribed, so the transcript never shows it).
+   *  The model only ever replies to input: this is how the app makes the coach
+   *  speak when the learner has gone quiet. Dropped, not buffered, when no live
+   *  socket is ready — a nudge that arrives late would talk over whatever came
+   *  next. Returns whether it was sent. */
+  sendText(text: string): boolean {
+    if (!this.socket || !this.ready) return false;
+    this.socket.sendClientContent({ turns: [{ role: "user", parts: [{ text }] }], turnComplete: true });
+    return true;
   }
 
   /** Stream one PCM16 chunk (from AudioEngine.onChunk) to the model. */

@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { getArc, listItems, putDraft, putProfile } from "../../kernel/db";
+import { getArc, listItems, listSessionsFor, putDraft, putProfile } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
 import { liveModel } from "../../kernel/overrides";
 import { ERROR_TYPE_LABEL } from "../../kernel/types";
@@ -23,7 +23,7 @@ import { normaliseStoryState } from "./arcs";
 import { armMicroCutoff } from "./microCutoff";
 import { weakObjectives } from "./objectives";
 import { band } from "./progress";
-import { OPENING_CUE, sessionInstruction, type ArcContext } from "./prompt";
+import { OPENING_CUE, sessionInstruction, silenceNudges, type ArcContext } from "./prompt";
 import {
   defaultSessionDeps,
   PracticeSession,
@@ -309,7 +309,7 @@ export function Practice(props: {
       // the mastery ledger flags as still-developing, so the coach prioritises
       // them. Both best-effort: a read failure just means no recycle / no flag.
       // S2 — if this scenario is an arc episode, load the story continuity too.
-      const [dueItems, weak, arcContext] = await Promise.all([
+      const [dueItems, weak, arcContext, priorPlays] = await Promise.all([
         listItems()
           .then((its) => dueQueue(its, scenario.targetLanguage, new Date(), RECYCLE_CAP))
           .catch(() => []),
@@ -327,6 +327,12 @@ export function Practice(props: {
             setNotice(`讀不到前情提要，教練可能不記得之前的劇情：${describeError(e)}`);
           return undefined;
         }),
+        // How many FULL sessions this exact scenario already had: a replay is
+        // told to run a fresh variation instead of「接續上次」. Micro drills
+        // are not plays of the scenario. Best-effort: unknown = first time.
+        listSessionsFor(scenario.id)
+          .then((ss) => ss.filter((r) => r.kind !== "micro").length)
+          .catch(() => 0),
       ]);
       if (finalizingRef.current) return; // Back was tapped while the reads ran
       if (cancelledRef.current) {
@@ -348,10 +354,12 @@ export function Practice(props: {
           dueItems,
           weakObjectives: weak,
           arc: arcContext,
+          priorPlays,
           ...(micro ? { micro: microInstruction(micro) } : {}),
         }),
         voiceName: pickVoice(scenario.targetLanguage),
         openingCue: OPENING_CUE,
+        silenceNudges: silenceNudges(scenario.targetLanguage),
       };
       // Outcome arrives through the phase stream (live / start-failed / cancelled).
       await session().start(spec);

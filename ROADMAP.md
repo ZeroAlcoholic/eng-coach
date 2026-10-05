@@ -282,6 +282,31 @@ shipped; the worklist is still fully built, and nothing in "Deferred" has gained
 its missing precondition. Quality gate on `63a8061`: typecheck, lint, 404 tests,
 build all green.
 
+**Update 2026-10-05 — 教練主動性＋換新劇情＋教學法校準（使用者回報：教練偏被動、只等人想話題；
+很難輕鬆選到新劇情、被要求「接續上次」卻沒話題；日文程度低需要中文說明）。** 機制與修法：
+1. Live 模型沒有輸入就不開口（DEVICE_E2E 2026-09-28 探針），學習者卡住＝教練永遠等。新增
+   `GeminiLiveDirect.sendText()`；`PracticeSession` 在輪到學習者且靜默 10 s 送舞台指示（`prompt.ts
+   silenceNudges(lang)`，三段升級、每段靜默最多 3 則、之後每 15 s）；學習者開口即重置；麥克風有聲
+   （RMS 門檻）時延後不計數；socket 尚未就緒時 2 s 重試；開場完全沒聲音也由同一機制救援；
+   暫停／重連／停止／教練說話中一律不送。**N1 合成探針（真 `gemini-3.8-live`）：靜默 45 秒內教練
+   自行開口 2 次，推進後先給例句再問 — pass。**
+2. `proactiveAudio` 預設改為 off。**N1 第一次跑就抓到：伺服器拒絕明示 `proactiveAudio:false`
+   （「Explicitly disabling proactive audio is not supported」）並在 setupComplete 前關線** — 關閉＝
+   不送該欄位。若當時沒跑探針，部署後每一場都連不上。
+3. 教學法校準（語言教學／口說輔導審查，十項採八）：糾錯政策合一（場中不阻礙意思→recast 不要求複誦；
+   阻礙意思→一次自我修正提示再明示；場後再回顧 1–2 處；量測能力段優先）；每輪預算（兩句內容＋一個
+   要求）；收尾順序（在角色內收場→出角色改 1–2 處→一句繁中 can-do→下一集預告）；英文發音目標改為
+   華語母語者高功能負荷項（/l n r/、/v w/、/æ ɛ/、尾子音與子音群、詞重音、句重音；移除 /θ ð/）；
+   日文改為清濁音、ん、です／ます的無聲化 u（移除音高重音）；中文使用比例改寫為觸發條件；B2 以上
+   不強迫複誦重組句；求助時「出角色一句再回來」。
+4. 日文版「教練主導」：語音通道不再唸假名／羅馬拼音，改「慢說一次、再逐音節拆、給繁中意思、請他說」；
+   二選一問句為預設；禁問「どうして？」與反駁；中文說明明寫為必要。推進指示日文版第一則先讓他用中文說。
+5. 「接續上次」：`progressNote` 改寫為教學目標、不提「上次」；單場重玩明示「跑新變化」（arc 集數不受
+   影響，含 arc 讀取失敗時）；Home「▶ 繼續上次」改名「▶ 再練一次」。
+6. Home 新增「🎲 換個新劇情」卡：一鍵抽內建種子簡報（`seeds.ts`，英 14／日 12）走同一條生成路徑。
+證據層級：vitest 436 綠；N1 真模型合成探針 pass；兩輪獨立審查（工程 7 項採 5、教學 10 項採 8）。
+真人語音對推進節奏的感受仍 **blocked（本機無麥克風）**。
+
 **Verification debts (none blocking):**
 1. `S2b-ii` is now **合成已驗證** (F3-f, synthetic learner against the real Live
    model); a human-voice pass is still open.

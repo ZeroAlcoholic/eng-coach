@@ -8,6 +8,7 @@ import { PracticeSession, type SessionAudio, type SessionPhase, type SessionTran
 const transport: SessionTransport = {
   connect: () => Promise.resolve(),
   sendAudio: () => {},
+  sendText: () => true,
   isOpen: () => true,
   reconnect: () => Promise.resolve(),
   close: () => {},

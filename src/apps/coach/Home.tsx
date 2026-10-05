@@ -63,6 +63,7 @@ import { levelSummary } from "./progress";
 import { computeReadouts } from "./readouts";
 import { ReadoutStrip } from "./ReadoutStrip";
 import { ReviewSheet } from "./ReviewSheet";
+import { randomSeedBrief } from "./seeds";
 import { Sheet } from "./Sheet";
 import { countDue } from "./srs";
 import { VocabSheet } from "./VocabSheet";
@@ -170,37 +171,59 @@ export function Home(props: {
     // The brief is checked first: it needs no key, and fixing it is the next step either way.
     const problem = briefProblem(brief);
     if (problem) return setBusy(problem);
+    await buildFrom(brief, serial, { fromBriefBox: true });
+  }
+
+  // 換個新劇情 — zero typing: a built-in seed brief goes through the SAME
+  // generator as a typed one, so the result is an ordinary scenario / arc.
+  // Seeds already turned into a scenario here are skipped (Scenario.source).
+  async function surprise(asSerial: boolean) {
+    const seed = randomSeedBrief(
+      lang,
+      scenarios.filter((sc) => sc.targetLanguage === lang).map((sc) => sc.source),
+    );
+    await buildFrom(seed, asSerial, { fromBriefBox: false });
+  }
+
+  // One generation path for both the typed brief and a random seed. On
+  // success a one-off scenario goes straight into practice (that is what the
+  // tap meant); an arc lands as the page's「▶ 下一集 · 第 1 集」.
+  async function buildFrom(submitted: string, asSerial: boolean, opts: { fromBriefBox: boolean }) {
     if (!apiKey) return setBusy("請先連結 API 金鑰。");
     if (building) return; // guard double-submit
     setBuilding(true);
-    const submitted = brief;
-    setBusy(serial ? "編寫連續劇中…（約 10–20 秒）" : "建立情境中…（約 10 秒）");
+    setBusy(asSerial ? "編寫連續劇中…（約 10–20 秒）" : "建立情境中…（約 10 秒）");
     try {
-      let done: string;
-      if (serial) {
+      if (asSerial) {
         // S1/S2 — an arc lands with episode 1 already materialised, so the very
         // next tap is「▶ 下一集 · 第 1 集」.
         const { arc } = await startArc(
           { brief: submitted.trim(), language: lang, level: profile.level },
           seedGenerator(apiKey),
         );
-        done = `✓ 已建立連續劇「${arc.title}」，在頁面上方的故事線卡片按「▶」開始第 1 集。`;
-      } else {
-        const sc = await generateScenario(apiKey, {
-          brief: submitted.trim(),
-          language: lang,
-          level: profile.level,
-        });
-        await putScenario(sc);
-        done = `✓ 已建立「${sc.title}」，在頁面上方「你的情境」可以開始練習。`;
+        if (opts.fromBriefBox) setBrief((b) => (b === submitted ? "" : b));
+        props.onChanged();
+        setBusy(`✓ 已建立連續劇「${arc.title}」，在頁面上方的故事線卡片按「▶」開始第 1 集。`);
+        return;
       }
+      const sc = await generateScenario(apiKey, {
+        brief: submitted.trim(),
+        language: lang,
+        level: profile.level,
+      });
+      await putScenario(sc);
       // Clear only what was sent: text typed or imported while the model was
       // writing is the learner's next brief, not this one.
-      setBrief((b) => (b === submitted ? "" : b));
+      if (opts.fromBriefBox) setBrief((b) => (b === submitted ? "" : b));
       props.onChanged();
-      setBusy(done);
+      if (opts.fromBriefBox) {
+        setBusy(`✓ 已建立「${sc.title}」，在頁面上方「你的情境」可以開始練習。`);
+      } else {
+        setBusy("");
+        props.onPractice(sc);
+      }
     } catch (err) {
-      setBusy(`錯誤：${describeError(err)}（簡報還在，不用重貼）`);
+      setBusy(opts.fromBriefBox ? `錯誤：${describeError(err)}（簡報還在，不用重貼）` : `錯誤：${describeError(err)}（再點一次換一題）`);
     } finally {
       setBuilding(false);
     }
@@ -533,16 +556,38 @@ export function Home(props: {
           </button>
         ))}
 
-      {/* One-tap continue — the most recently practiced scenario in this language */}
+      {/* One-tap replay — the most recently practiced scenario in this language.
+          「再練一次」, not「繼續上次」: the coach runs a fresh variation of the
+          same scenario (prompt.ts priorPlays), it does not resume a conversation
+          it cannot see. */}
       {props.lastPracticed && (
         <button
           className="btn btn--primary btn--block"
           style={{ marginTop: 16 }}
           onClick={() => props.onPractice(props.lastPracticed!)}
         >
-          ▶ 繼續上次 · {props.lastPracticed.title}
+          ▶ 再練一次 · {props.lastPracticed.title}
         </button>
       )}
+
+      {/* 換個新劇情 — a new story is one tap, as cheap as continuing the old one.
+          Without this the only new-story paths were typing a brief or digging
+          the samples out from behind「顯示範例」, so practice drifted into
+          replaying the same scenario. */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="scenario-title">🎲 換個新劇情</div>
+        <p className="muted" style={{ margin: "6px 0 10px" }}>
+          不用想題目：隨機抽一個{LANG_LABEL[lang]}情境，教練會帶著你聊。
+        </p>
+        <div className="row">
+          <button className="btn btn--primary grow" onClick={() => void surprise(false)} disabled={building}>
+            {building ? "準備中…" : "單場情境"}
+          </button>
+          <button className="btn btn--ghost grow" onClick={() => void surprise(true)} disabled={building}>
+            連續劇（約 6 集）
+          </button>
+        </div>
+      </div>
 
       {/* 1. 首次：金鑰 */}
       {!apiKey && (

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { GeminiDirectHandlers } from "../../api/gemini-direct";
 import {
@@ -30,12 +30,19 @@ class FakeTransport implements SessionTransport {
   reconnects = 0;
   open = true;
   sent: ArrayBuffer[] = [];
+  texts: string[] = []; // stage directions (silence nudges)
+  textReady = true; // false = socket not ready, sendText reports "not sent"
   constructor(public readonly handlers: GeminiDirectHandlers) {}
   connect(): Promise<void> {
     return this.connectGate.promise;
   }
   sendAudio(pcm: ArrayBuffer): void {
     this.sent.push(pcm);
+  }
+  sendText(text: string): boolean {
+    if (!this.textReady) return false;
+    this.texts.push(text);
+    return true;
   }
   isOpen(): boolean {
     return this.open;
@@ -103,7 +110,7 @@ class FakeAudio implements SessionAudio {
   }
 }
 
-function harness() {
+function harness(silenceDelaysMs?: { first: number; next: number }) {
   const transports: FakeTransport[] = [];
   const audios: FakeAudio[] = [];
   const phases: SessionPhase[] = [];
@@ -129,6 +136,7 @@ function harness() {
         return a;
       },
       wakeLock,
+      ...(silenceDelaysMs ? { silenceDelaysMs } : {}),
     },
     listener,
   );
@@ -472,5 +480,205 @@ describe("PracticeSession — connection lifecycle", () => {
     h.session.pause();
     transport.handlers.onAudio(new ArrayBuffer(4));
     expect(audio.played).toHaveLength(0);
+  });
+});
+
+// ── Silence nudges ─────────────────────────────────────────────────────
+// The live model only replies to input: when the learner freezes on their turn
+// the owner sends a stage direction so the coach takes the lead.
+describe("PracticeSession — silence nudges", () => {
+  const nudges = ["(n1)", "(n2)", "(n3)"];
+  const nudgeSpec: TransportSpec = { ...spec, silenceNudges: nudges };
+  const delays = { first: 100, next: 50 }; // fake-clock units; margins below are +10
+  // Fake clock: the assertions are about ORDER on a timeline, not wall time.
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+  /** Coach turn that finishes with nothing left to play → cue "you". */
+  function coachTurnEnds(transport: FakeTransport) {
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onTurnState?.("you");
+  }
+
+  it("is off when the spec carries no nudges", async () => {
+    const h = harness(delays);
+    const started = h.session.start(spec); // plain spec, no nudges
+    const transport = h.transports.at(-1)!;
+    transport.connectGate.resolve();
+    await wait(0);
+    h.audios.at(-1)!.startGate.resolve();
+    await started;
+    coachTurnEnds(transport);
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual([]);
+  });
+
+  it("nudges on silence, escalates, and stops at the cap", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    coachTurnEnds(transport);
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual(["(n1)"]);
+    await wait(delays.next + 10);
+    expect(transport.texts).toEqual(["(n1)", "(n2)"]);
+    await wait(delays.next + 10);
+    expect(transport.texts).toEqual(["(n1)", "(n2)", "(n3)"]);
+    await wait(delays.next * 3);
+    expect(transport.texts).toHaveLength(3); // MAX_SILENCE_NUDGES: the mic stays live, the coach waits
+  });
+
+  async function liveWithNudges(h: ReturnType<typeof harness>) {
+    const started = h.session.start(nudgeSpec);
+    const transport = h.transports.at(-1)!;
+    transport.connectGate.resolve();
+    await wait(0);
+    const audio = h.audios.at(-1)!;
+    audio.startGate.resolve();
+    await started;
+    return { transport, audio };
+  }
+
+  it("learner speech resets the clock and the escalation", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    coachTurnEnds(transport);
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual(["(n1)"]);
+    transport.handlers.onUserTranscript?.("hello"); // they spoke
+    await wait(delays.next + 5);
+    expect(transport.texts).toEqual(["(n1)"]); // the shorter "next" delay no longer applies…
+    await wait(delays.first - delays.next + 10);
+    expect(transport.texts).toEqual(["(n1)", "(n1)"]); // …a fresh streak starts from the first nudge
+  });
+
+  it("never nudges while the coach is talking, paused, or reconnecting", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    transport.handlers.onTurnState?.("coach"); // coach is talking
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual([]);
+    coachTurnEnds(transport);
+    h.session.pause();
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual([]);
+    await h.session.resume(); // resumed on the learner's turn → clock restarts
+    transport.handlers.onReconnecting?.();
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual([]);
+    transport.handlers.onResumed?.(true);
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual(["(n1)"]);
+  });
+
+  it("a barge-in restarts the clock but keeps the streak (a GoAway hand-over also lands here)", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    coachTurnEnds(transport);
+    await wait(delays.first - 5);
+    transport.handlers.onInterrupted?.();
+    await wait(10);
+    expect(transport.texts).toEqual([]); // the clock restarted at the barge-in
+    await wait(delays.first);
+    expect(transport.texts).toEqual(["(n1)"]);
+    // The coach replies to the nudge, then a hand-over cuts it off: no learner
+    // speech happened, so the next nudge is the SECOND one, not a fresh first.
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onInterrupted?.();
+    await wait(delays.next + 10);
+    expect(transport.texts).toEqual(["(n1)", "(n2)"]);
+  });
+
+  it("resuming over a dropped socket mid-coach-turn hands the turn over and arms the clock", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    transport.handlers.onTurnState?.("coach"); // coach mid-sentence
+    h.session.pause();
+    transport.open = false; // socket dropped while paused (phone slept)
+    await h.session.resume();
+    expect(transport.reconnects).toBe(1);
+    expect(h.cues.at(-1)).toBe("you"); // not stuck on「教練說話中」
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual(["(n1)"]);
+  });
+
+  it("resuming over a still-open socket mid-coach-turn leaves the turn with the coach", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    transport.handlers.onTurnState?.("coach");
+    h.session.pause();
+    await h.session.resume();
+    expect(h.cues.at(-1)).toBe("coach");
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual([]);
+  });
+
+  it("waits (uncounted) while the mic is loud — the learner has started talking", async () => {
+    const h = harness(delays);
+    const { transport, audio } = await liveWithNudges(h);
+    coachTurnEnds(transport);
+    await wait(delays.first - 10);
+    const loud = new Int16Array(160).fill(8000); // ~0.24 rms: speech
+    audio.callbacks.onChunk(loud.buffer);
+    await wait(20);
+    expect(transport.texts).toEqual([]); // postponed, not fired
+    await wait(1500 + 10); // VOICE_HOLD_MS later, still quiet since → fires as the FIRST nudge
+    expect(transport.texts).toEqual(["(n1)"]);
+    audio.callbacks.onChunk(new Int16Array(160).buffer); // silence never counts as voice
+  });
+
+  it("retries a nudge the socket could not take instead of dropping it", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    transport.textReady = false; // resumed socket still completing setup
+    coachTurnEnds(transport);
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual([]);
+    transport.textReady = true;
+    await wait(2000 + 10); // SEND_RETRY_MS
+    expect(transport.texts).toEqual(["(n1)"]); // still the FIRST nudge
+  });
+
+  it("opening watch: no coach turn at all after going live → hand over and nudge", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    expect(h.cues).toEqual(["coach"]);
+    await wait(delays.first + 10);
+    expect(h.cues.at(-1)).toBe("you");
+    expect(transport.texts).toEqual(["(n1)"]);
+  });
+
+  it("opening watch is disarmed by the coach's first turn", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    transport.handlers.onTurnState?.("coach");
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual([]);
+  });
+
+  it("stop clears the timer: nothing is sent after the session ended", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    coachTurnEnds(transport);
+    await h.session.stop();
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual([]);
+  });
+
+  it("a nudge the socket could not take is not counted; retries stop after the cap", async () => {
+    const h = harness(delays);
+    const { transport } = await liveWithNudges(h);
+    transport.textReady = false;
+    coachTurnEnds(transport);
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual([]);
+    await wait(2000 * 6); // past MAX_SEND_RETRIES × SEND_RETRY_MS
+    transport.textReady = true;
+    await wait(2000 * 2);
+    expect(transport.texts).toEqual([]); // gave up; nothing fires on its own
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onTurnState?.("you");
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual(["(n1)"]); // still the FIRST nudge: the failed ones never counted
   });
 });
