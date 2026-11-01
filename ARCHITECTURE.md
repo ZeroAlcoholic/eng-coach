@@ -275,6 +275,21 @@ items, with the coach's target-language sentence as the example; grammar items
 may carry a `frame` (`I'd rather ___ than ___`) whose anchors `uses.ts` matches
 in order.
 
+### Taiwan Chinese (`ai/client.ts`, `kernel/zhTw.ts`, `prompt.ts`)
+Every Chinese word the app outputs must be Taiwan Traditional Chinese in Taiwan
+usage. Two halves, one source each:
+- **Prompt side.** Text model: `ZH_TW_RULE` in `ai/client.ts`, appended by
+  `generateJson` to every prompt; capabilities say only "Chinese". Live voice:
+  `TW_MANDARIN_RULE` in `prompt.ts` (say / never-say phrases, no 兒化, Taiwan
+  day and time words); the 前情提要 and planning beat name `TW_MANDARIN`. The
+  native-audio model takes no `languageCode`, so voice has no output check.
+- **Output side.** `zhTwProblem` is a closed-set check (Simplified characters
+  that Japanese writes differently, Mainland terms in Traditional spelling).
+  `zhTw(parser)` wraps each model-written Chinese field, so a hit is an
+  `Invalid` and takes the existing refusal path (a judge sample is discarded;
+  zero samples → `unavailable`). Target-language fields are not checked, and in
+  the judge, Han runs quoted verbatim from the learner's turns are exempt.
+
 ### Synthetic learner (`synthetic/`, tests only)
 `SyntheticLearnerAudio` implements `SessionAudio` at the owner's injection point:
 coach audio is accounted for by duration on a clock, `say()` streams a cached

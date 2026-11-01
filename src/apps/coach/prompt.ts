@@ -67,6 +67,24 @@ export const HELP_TRIGGERS: readonly string[] = [
   "卡住了",
   "提示一下",
 ];
+// The live coach's Mandarin. The native-audio model takes no languageCode, so
+// the accent and wording can only come from the prompt; concrete phrases steer
+// it further than "use Taiwan Mandarin" alone. The language section states the
+// rule once for the whole session; the 前情提要 and the planning beat, the two
+// openings spoken in Chinese, name TW_MANDARIN rather than a variety of their
+// own. 台灣國語 is avoided as the label: in Taiwan it often means a heavy,
+// comic accent. Never-say examples are whole phrases: a bare 行 or 牛 would
+// steer the model away from 行李、銀行、牛肉.
+export const TW_MANDARIN = "Taiwan Mandarin (台灣華語)";
+export const TW_MANDARIN_SAY: readonly string[] = ["好喔", "沒問題", "這樣喔", "對啊", "不會", "欸"];
+export const TW_MANDARIN_AVOID: readonly string[] = ["挺好的", "行啊", "沒事兒", "咱們", "太牛了", "靠譜"];
+const quoteAll = (xs: readonly string[]) => xs.map((x) => `「${x}」`).join("");
+export const TW_MANDARIN_RULE =
+  `When you speak Mandarin Chinese, speak ${TW_MANDARIN}: Taiwan vocabulary and phrasing with a gentle Taiwan accent. ` +
+  `Sound like a friendly Taiwanese person — say things like ${quoteAll(TW_MANDARIN_SAY)}; never say ${quoteAll(TW_MANDARIN_AVOID)}. ` +
+  `No 兒化音 (never add -兒 to a word). Days and times the Taiwan way: 「禮拜三」「下午三點半」. ` +
+  `NEVER a Mainland-China / Beijing accent or Mainland-specific terms.`;
+
 // Traditional-Chinese name of the target language, for learner-facing example
 // phrases inside the prompt (e.g. the hands-free help triggers).
 const LANGUAGE_NAME_ZH: Record<TargetLanguage, string> = { en: "英文", ja: "日文" };
@@ -186,7 +204,7 @@ export function composeSystemInstruction(
     "",
     "── Language ──",
     `Code-switch between ${lang} and Traditional Chinese (Taiwan colloquial) as a teaching aid. ${SCAFFOLD[s.targetLanguage][s.level]}`,
-    "When you speak Mandarin Chinese, use TAIWANESE Mandarin (台灣國語): Taiwan vocabulary and phrasing with a gentle Taiwan accent. NEVER use a Mainland-China / Beijing accent, 兒化音, or Mainland-specific terms.",
+    TW_MANDARIN_RULE,
     s.targetLanguage === "ja"
       ? `This is voice-only: the learner HEARS you and never sees text. Whenever you teach a Japanese line, ${JA_TEACH_LINE}. Never read out kana or romaji letter by letter.`
       : "",
@@ -409,9 +427,9 @@ export function composeSystemInstruction(
     lines.push(
       "",
       "── 開場順序（照這個順序，不要顛倒）──",
-      "1) 前情提要 FIRST — your very FIRST words are the recap, spoken in Traditional Chinese (Taiwan) like a drama's「前情提要」: warm, in AT MOST 3 short sentences, about 20–30 seconds. Deliver exactly this content — you may polish the wording, but add NO new plot and do not mention episode numbers:",
+      `1) 前情提要 FIRST — your very FIRST words are the recap, spoken in ${TW_MANDARIN} like a drama's「前情提要」: warm, in AT MOST 3 short sentences, about 20–30 seconds. Deliver exactly this content — you may polish the wording, but add NO new plot and do not mention episode numbers:`,
       `「${recap}」`,
-      "2) Then the planning beat: in ONE short Traditional Chinese sentence say what you'll practise this episode; offer 1–2 key words/phrases they'll need (with a 繁中 gloss; for Japanese say each slowly, mora by mora); say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) — do NOT fill it.",
+      `2) Then the planning beat: in ONE short ${TW_MANDARIN} sentence say what you'll practise this episode; offer 1–2 key words/phrases they'll need (with a 繁中 gloss; for Japanese say each slowly, mora by mora); say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) — do NOT fill it.`,
       "3) Then greet them in character and ask your first question.",
       "",
       "Tone: friendly and encouraging, no exam pressure. Begin now.",
@@ -420,7 +438,7 @@ export function composeSystemInstruction(
     lines.push(
       "",
       "── Open with a short planning beat, THEN start (B3) ──",
-      "Before the role-play proper: (1) in ONE short Traditional Chinese sentence, say what you'll practise together and why it's useful; (2) offer 1–2 key words/phrases they'll likely need (with a 繁中 gloss; for Japanese say each slowly, mora by mora); (3) say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) for them to plan — do NOT fill it. Then greet them in character and ask your first question.",
+      `Before the role-play proper: (1) in ONE short ${TW_MANDARIN} sentence, say what you'll practise together and why it's useful; (2) offer 1–2 key words/phrases they'll likely need (with a 繁中 gloss; for Japanese say each slowly, mora by mora); (3) say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) for them to plan — do NOT fill it. Then greet them in character and ask your first question.`,
       "",
       "Tone: friendly and encouraging, no exam pressure. Begin now.",
     );

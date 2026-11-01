@@ -8,7 +8,15 @@ import {
 } from "../../kernel/types";
 import { band } from "./progress";
 import { microInstruction } from "./focus";
-import { composeSystemInstruction, HELP_TRIGGERS, sessionInstruction, silenceNudges } from "./prompt";
+import {
+  composeSystemInstruction,
+  HELP_TRIGGERS,
+  sessionInstruction,
+  silenceNudges,
+  TW_MANDARIN,
+  TW_MANDARIN_AVOID,
+  TW_MANDARIN_SAY,
+} from "./prompt";
 
 const scenario: Scenario = {
   id: "s1",
@@ -437,5 +445,40 @@ describe("composeSystemInstruction — pedagogy calibration (one correction poli
     const out = composeSystemInstruction(scenario, DEFAULT_PROFILE);
     expect(out).toContain("step OUT of the role for one line");
     expect(out).not.toContain("briefly IN CHARACTER");
+  });
+});
+
+describe("composeSystemInstruction — Taiwan Mandarin examples (T3)", () => {
+  const arcContext = {
+    title: "T",
+    episode: 2,
+    planned: 6,
+    recap: "你昨天抵達倫敦。",
+    storyState: { characters: [], events: [], openThreads: [] },
+    isFinal: false,
+  };
+
+  it("carries every say / never-say example, the 兒化 ban and Taiwan time words, single scene and arc alike", () => {
+    expect(TW_MANDARIN_SAY.length).toBeGreaterThanOrEqual(5);
+    expect(TW_MANDARIN_AVOID.length).toBeGreaterThanOrEqual(5);
+    // A one-character ban (行, 牛) would also ban 行李、銀行、牛肉.
+    for (const w of TW_MANDARIN_AVOID) expect(Array.from(w).length, w).toBeGreaterThanOrEqual(2);
+    for (const out of [
+      composeSystemInstruction(scenario, DEFAULT_PROFILE),
+      composeSystemInstruction({ ...scenario, targetLanguage: "ja" }, DEFAULT_PROFILE),
+      composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], arcContext),
+    ]) {
+      for (const w of [...TW_MANDARIN_SAY, ...TW_MANDARIN_AVOID]) expect(out).toContain(`「${w}」`);
+      expect(out).toContain("No 兒化音");
+      expect(out).toContain("「禮拜三」「下午三點半」");
+    }
+  });
+
+  it("the 前情提要 and the planning beat name the same variety as the language section", () => {
+    const arc = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], arcContext);
+    expect(arc).toContain(`spoken in ${TW_MANDARIN}`);
+    expect(arc).toContain(`in ONE short ${TW_MANDARIN} sentence say what you'll practise`);
+    const single = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+    expect(single).toContain(`in ONE short ${TW_MANDARIN} sentence, say what you'll practise`);
   });
 });
