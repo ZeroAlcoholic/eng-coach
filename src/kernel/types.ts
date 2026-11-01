@@ -172,6 +172,14 @@ export interface SkillLevels {
   interaction: number;
 }
 
+/** I1 — who the learner is, so the coach can address them and cast them in the
+ *  role-play. Every field optional; an absent persona = the coach as before. */
+export interface LearnerPersona {
+  name?: string; // what the coach calls them
+  jobTitle?: string; // their real job, used as their role in English scenes
+  orgType?: string; // the kind of organisation they work at
+}
+
 /** The learner's standing settings — defaults applied to new scenarios, plus the
  *  remembered, smoothed ability used to adapt the coach (W1/W3). */
 export interface LearnerProfile {
@@ -192,6 +200,7 @@ export interface LearnerProfile {
   // the next session's prompt can pick them up. Replaced each session, never
   // accumulated: a note for continuity, not a record of weakness.
   accentNotes?: Partial<Record<TargetLanguage, string[]>>;
+  persona?: LearnerPersona; // I1 — normalised by kernel/persona.ts
 }
 
 export interface TranscriptTurn {

@@ -38,6 +38,7 @@ import {
   planImport,
   readTextFile,
 } from "../../kernel/pack";
+import { withPersona } from "../../kernel/persona";
 import { persistedState, type PersistState } from "../../kernel/storage";
 import { generateScenario, validateApiKey } from "./ai";
 import { DEFAULT_ARCS } from "./arcDefaults";
@@ -59,6 +60,7 @@ import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcom
 import { MAX_BRIEF_FILE_BYTES, briefProblem, briefPrompt, looksLikeText } from "./briefPrompt";
 import { copyText } from "./clipboard";
 import { HistorySheet } from "./HistorySheet";
+import { PersonaFields } from "./PersonaFields";
 import { levelSummary } from "./progress";
 import { computeReadouts } from "./readouts";
 import { ReadoutStrip } from "./ReadoutStrip";
@@ -312,7 +314,7 @@ export function Home(props: {
       }
       const plan = await planImport(json);
       const { added, overwritten, replacesProfile } = plan.summary;
-      const profileNote = replacesProfile ? "並取代學習者設定（等級／錯誤紀錄／偏好）。" : "";
+      const profileNote = replacesProfile ? "並取代學習者設定（等級／錯誤紀錄／偏好／稱呼與職務）。" : "";
       if (!window.confirm(`匯入將新增 ${added} 筆、覆蓋 ${overwritten} 筆現有資料${profileNote ? "，" + profileNote : "。"}要繼續嗎？`)) {
         setBusy("");
         return;
@@ -802,6 +804,7 @@ export function Home(props: {
             {persist === "persisted" && (
               <p className="muted" style={{ margin: "10px 0 0" }}>✓ 資料已設為永久保存於本機。</p>
             )}
+            <PersonaFields persona={profile.persona} onSave={(p) => props.onProfile(withPersona(profile, p))} />
             <div className="row" style={{ marginTop: 12 }}>
               {apiKey && <span className="muted grow">✓ 金鑰已設定於本機</span>}
               {apiKey && (

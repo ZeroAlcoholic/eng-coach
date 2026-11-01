@@ -23,11 +23,13 @@
 import type {
   CEFRLevel,
   LearnedItem,
+  LearnerPersona,
   LearnerProfile,
   Scenario,
   StoryState,
   TargetLanguage,
 } from "../../kernel/types";
+import { normalisePersona } from "../../kernel/persona";
 import { ERROR_TYPE_LABEL } from "../../kernel/types";
 import { cefrToNum, coachPolicy, recurringErrors } from "./progress";
 import { scaffoldTier } from "./srs";
@@ -84,6 +86,24 @@ export const TW_MANDARIN_RULE =
   `Sound like a friendly Taiwanese person — say things like ${quoteAll(TW_MANDARIN_SAY)}; never say ${quoteAll(TW_MANDARIN_AVOID)}. ` +
   `No 兒化音 (never add -兒 to a word). Days and times the Taiwan way: 「禮拜三」「下午三點半」. ` +
   `NEVER a Mainland-China / Beijing accent or Mainland-specific terms.`;
+
+/** I1 — the learner's own name and job, when they gave any. A standalone English
+ *  scene may cast them as their real job where that job fits the scene; an arc
+ *  episode never does, because its recap and recurring characters already fix
+ *  who they are. Japanese scenes keep them a traveller, so only the name is
+ *  used. Nothing usable → no section at all, the prompt as before. */
+export function learnerSection(raw: LearnerPersona | undefined, language: TargetLanguage, inArc = false): string[] {
+  const p = normalisePersona(raw);
+  const lines: string[] = [];
+  if (p?.name) lines.push(`Their name is ${p.name} — address them by it now and then, naturally (not every turn).`);
+  if (language === "en" && !inArc && (p?.jobTitle || p?.orgType)) {
+    const job = [p.jobTitle, p.orgType && `(organisation type: ${p.orgType})`].filter(Boolean).join(" ");
+    lines.push(
+      `In real life they work as: ${job}. If this scene is one where their own job fits (a work setting), cast them as that job at that kind of organisation instead of the learner role above; otherwise keep the learner role above. Either way keep the situation and your own role unchanged.`,
+    );
+  }
+  return lines.length ? ["", "── The learner ──", ...lines] : [];
+}
 
 // Traditional-Chinese name of the target language, for learner-facing example
 // phrases inside the prompt (e.g. the hands-free help triggers).
@@ -216,6 +236,7 @@ export function composeSystemInstruction(
     "── This session's context (do NOT drift outside it) ──",
     s.contentContext || "(no specific context — improvise a fitting situation within the frame)",
     `You play: ${s.coachRole || "a fitting counterpart"}. The learner plays: ${s.userRole || "themselves"}.`,
+    ...learnerSection(profile.persona, s.targetLanguage, !!s.arc),
     "",
     `── Difficulty — calibrate to CEFR ${s.level}${jlpt} ──`,
     LEVEL_GUIDE[s.level],

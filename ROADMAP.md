@@ -331,3 +331,6 @@ build all green.
 - T3 語音語例：`prompt.ts` 的 `TW_MANDARIN_RULE` 列「說」（好喔、沒問題、這樣喔、對啊、不會、欸）與「不說」（挺好的、行啊、沒事兒、
   咱們、太牛了、靠譜，全為短語，避免誤傷行李／牛肉）、禁兒化、台灣時間用語（禮拜三、下午三點半）；前情提要與規劃拍引用同一個 `TW_MANDARIN`。
   Phase T 證據層級：替身（vitest）；Live 語音口吻無輸出端驗證，只靠 prompt。
+- I1 學習者身分：`LearnerProfile.persona`（稱呼／職務／公司型態，選填）。`kernel/persona.ts` 一處正規化（空白收成一格、trim、≤40 字、全空＝不存在），
+  pack 匯入、⚙️ 表單、prompt 共用。prompt「── The learner ──」段：有稱呼就叫名字；英文單場在職務合用時改寫學習者角色，故事線不改（前情與角色已固定）；
+  日文只用稱呼。缺席＝prompt 與改動前相同；匯出入 round-trip 有測試。

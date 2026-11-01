@@ -5,6 +5,7 @@
 // person cannot reason about afterwards. Fields this app does not know are
 // dropped on import; the pack format is the contract, not the file's extras.
 
+import { normalisePersona } from "./persona";
 import { CEFR_LEVELS, DEFAULT_ARC_LENGTH, ERROR_TYPES, TARGET_LANGUAGES } from "./types";
 import type {
   Arc,
@@ -123,6 +124,7 @@ const historyEntry: Parser<{ at: string; cefr: string; overall: number }> = (v, 
 const parseProfile: Parser<LearnerProfile> = (v, path) => {
   const r = record(v, path);
   const prefs = field(r, "prefs", optional(record), path);
+  const persona = field(r, "persona", optional(record), path);
   return compact({
     language: field(r, "language", language, path),
     level: field(r, "level", level, path),
@@ -137,6 +139,13 @@ const parseProfile: Parser<LearnerProfile> = (v, path) => {
       : undefined,
     errorLog: field(r, "errorLog", optional(byLanguage(errorLogForLanguage)), path),
     accentNotes: field(r, "accentNotes", optional(byLanguage(strings)), path),
+    persona: persona
+      ? normalisePersona({
+          name: field(persona, "name", optional(string), `${path}.persona`),
+          jobTitle: field(persona, "jobTitle", optional(string), `${path}.persona`),
+          orgType: field(persona, "orgType", optional(string), `${path}.persona`),
+        })
+      : undefined,
   });
 };
 
