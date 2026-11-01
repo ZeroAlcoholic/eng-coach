@@ -346,3 +346,8 @@ build all green.
 - C1 換你說提示：cue 轉給學習者時，`AudioEngine.chime()`（80 ms、880 Hz 正弦、增益 0.15 淡出，`audio/chime.ts`）＋`vibrate(60)`；
   暫停、重連、插話、session 結束後不響；GoAway 換手時欠下的一聲在恢復連線後補發（學習者先開口則取消）。`prefs.turnCue`（缺席＝開）由 🔔 切換。
   已知取捨：turnComplete 後學習者搶在殘餘音訊播完前開口，提示音仍會響；開場靜默指示的換手不響（教練隨即接話）。真機喇叭可聽度＝blocked（參數為常數）。
+- C2 收場：`CLOSING_LINE`「今天就練到這裡」（`prompt.ts`）。收場順序第 1 步在戲中交代學習者目標的具體結果，最後一句恰為此常數；微 session 用同一常數。
+  owner 累積當前教練 turn 的逐字稿（在 turn 結束時清空，因 transport 先送逐字稿再宣告 turn），含此句（`closing.ts`：只比漢字，簡體寫法對映）即進入 closing：
+  靜默指示清除且不再 arm、不響提示音；收尾播完後 15 s 無學習者逐字稿（麥克風有聲則有限延後）→ `onAutoStop` 走與停止鈕相同的 stopAndFinalize；
+  學習者開口取消自動停止、closing 不清。**合成已驗證**（`synthetic.closing.e2e.test.ts`，6 句上限 12、≤4 分鐘，修正後重跑）：第 73 秒進入收場、收場後指示 0、
+  自動結束、judge review A2、教練最後一個 turn 含結束語。觀察（範圍外）：第一輪合成的 can-do 句用英文而非繁中，第二輪為繁中。

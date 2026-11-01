@@ -105,6 +105,11 @@ export function learnerSection(raw: LearnerPersona | undefined, language: Target
   return lines.length ? ["", "── The learner ──", ...lines] : [];
 }
 
+/** C2 — the coach's last words, word for word. The session watches the coach's
+ *  transcript for it: it ends the silence nudges and starts the auto-stop.
+ *  The micro follow-up ends with the same line, so there is one signal. */
+export const CLOSING_LINE = "今天就練到這裡";
+
 /** I4 — the first words of a standalone scene. */
 export const SCENE_SETTER =
   `(0) Your very FIRST words: ONE short ${TW_MANDARIN} sentence that puts them IN the scene, like a story's narrator — ` +
@@ -266,12 +271,9 @@ export function composeSystemInstruction(
       ". Model it once in a short phrase, have them say it once, then move on. Never rate their accent.",
     "",
     "── Closing order (once the objectives are met, do not drag on) ──",
-    "1) Close the scene IN character, naturally. 2) Step OUT of character: 1–2 slips from the scene — say the natural line, they say it once each. 3) ONE sentence of Traditional Chinese naming what they can now do. " +
-      (arc
-        ? arc.isFinal
-          ? "4) Close the whole story."
-          : "4) The 下一集預告 (below)."
-        : "Then stop."),
+    "1) Close the scene IN character AND state the concrete OUTCOME of the learner's goal — what they got, what was agreed, or what happens next for them. 2) Step OUT of character: 1–2 slips from the scene — say the natural line, they say it once each. 3) ONE sentence of Traditional Chinese naming what they can now do. " +
+      (arc ? (arc.isFinal ? "4) Close the whole story. " : "4) The 下一集預告 (below). ") : "") +
+      `LAST: say exactly「${CLOSING_LINE}」as your final words, then stop and say nothing more.`,
     "",
     "── Hands-free help — the learner can ask for help out loud (B1) ──",
     "This is voice-only practice (they may be walking or driving), so the learner asks for help BY SPEAKING, usually in Traditional Chinese, mid-conversation. Treat these as help requests, not as part of the role-play: step OUT of the role for one line, answer immediately and briefly, then step back in and hand the turn back:",
@@ -446,7 +448,7 @@ export function composeSystemInstruction(
       "",
       arc.isFinal
         ? "This is the FINAL episode: steer toward resolving the unresolved threads, and close the story properly at the end."
-        : "Near the end, once the objectives are met, follow the Closing order above — do NOT start the next episode. Its last step is ONE short Traditional Chinese sentence teasing what's coming next（下一集預告）so they want to come back.",
+        : "Near the end, once the objectives are met, follow the Closing order above — do NOT start the next episode. Its step 4 is ONE short Traditional Chinese sentence teasing what's coming next（下一集預告）so they want to come back; the final words are still「" + CLOSING_LINE + "」.",
     );
   }
 

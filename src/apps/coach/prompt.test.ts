@@ -9,6 +9,7 @@ import {
 import { band } from "./progress";
 import { microInstruction } from "./focus";
 import {
+  CLOSING_LINE,
   composeSystemInstruction,
   HELP_TRIGGERS,
   SCENE_SETTER,
@@ -517,5 +518,29 @@ describe("composeSystemInstruction — the scene sentence opens a standalone sce
     const noRecap = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], { ...arcContext, recap: undefined });
     for (const out of [withRecap, noRecap]) expect(out).not.toContain("puts them IN the scene");
     expect(noRecap).toContain("say what you'll practise together"); // the old planning beat is untouched
+  });
+});
+
+describe("closing — one line, said last, in every session kind (C2)", () => {
+  it("the closing order states the outcome first and ends on exactly CLOSING_LINE", () => {
+    for (const out of [
+      composeSystemInstruction(scenario, DEFAULT_PROFILE),
+      composeSystemInstruction({ ...scenario, targetLanguage: "ja" }, DEFAULT_PROFILE),
+    ]) {
+      expect(out).toContain("state the concrete OUTCOME of the learner's goal");
+      expect(out).toContain(`LAST: say exactly「${CLOSING_LINE}」as your final words`);
+    }
+  });
+
+  it("an arc episode's 預告 comes before the closing line", () => {
+    const arcContext = { title: "T", episode: 2, planned: 6, recap: "r", storyState: { characters: [], events: [], openThreads: [] }, isFinal: false };
+    const out = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], arcContext);
+    expect(out.indexOf("4) The 下一集預告")).toBeLessThan(out.indexOf(`LAST: say exactly「${CLOSING_LINE}」`));
+    expect(out).toContain(`the final words are still「${CLOSING_LINE}」`);
+  });
+
+  it("the micro follow-up ends on the same line", () => {
+    const micro = microInstruction({ kind: "cando", objective: "能說明需求", sessions: 2 } as Parameters<typeof microInstruction>[0]);
+    expect(micro).toContain(`say exactly「${CLOSING_LINE}」as your final words`);
   });
 });

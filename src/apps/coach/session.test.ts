@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { GeminiDirectHandlers } from "../../api/gemini-direct";
 import {
+  AUTO_STOP_MS,
   PracticeSession,
   type AudioCallbacks,
   type SessionAudio,
@@ -11,6 +12,7 @@ import {
   type SessionTransport,
   type TransportSpec,
 } from "./session";
+import { CLOSING_LINE } from "./prompt";
 
 // Stand-ins at the two injection boundaries (transport, audio). They decide
 // nothing: each await is a promise the test resolves or rejects by hand, so the
@@ -349,11 +351,11 @@ describe("PracticeSession — connection lifecycle", () => {
     const h = harness();
     const { transport } = await goLive(h);
     transport.handlers.onReconnecting?.();
-    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: false, reconnecting: true });
+    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: false, reconnecting: true, closing: false, autoStop: false });
     transport.handlers.onUserTranscript?.("still here");
     expect(h.listener.onTranscript).toHaveBeenCalledWith("user", "still here");
     transport.handlers.onResumed?.(true);
-    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: false, reconnecting: false });
+    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: false, reconnecting: false, closing: false, autoStop: false });
     expect(h.listener.onNotice).not.toHaveBeenCalled();
     expect(transport.closed).toBe(0);
   });
@@ -420,11 +422,11 @@ describe("PracticeSession — connection lifecycle", () => {
     expect(audio.paused).toBe(1);
     transport.open = false;
     transport.handlers.onClose?.("idle timeout");
-    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: true, reconnecting: false });
+    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: true, reconnecting: false, closing: false, autoStop: false });
     await h.session.resume();
     expect(transport.reconnects).toBe(1);
     expect(audio.resumed).toBe(1);
-    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: false, reconnecting: false });
+    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: false, reconnecting: false, closing: false, autoStop: false });
   });
 
   it("pausing while the finished turn is still playing hands over: no stuck 教練說話中 after resume", async () => {
@@ -446,7 +448,7 @@ describe("PracticeSession — connection lifecycle", () => {
     transport.open = false;
     transport.handlers.onClose?.("resume refused");
     await h.session.resume();
-    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: false, reconnecting: false });
+    expect(h.phases.at(-1)).toEqual({ kind: "live", paused: false, reconnecting: false, closing: false, autoStop: false });
   });
 
   it("a drop and a Stop in the same window produce one ended phase, not two", async () => {
@@ -827,5 +829,155 @@ describe("PracticeSession —「換你說」tone and buzz (C1)", () => {
     expect(() => transport.handlers.onTurnState?.("you")).not.toThrow();
     expect(h.cues.at(-1)).toBe("you");
     expect(h.session.currentPhase().kind).toBe("live");
+  });
+});
+
+describe("PracticeSession — the coach's closing line ends the session (C2)", () => {
+  const nudges = ["(n1)", "(n2)", "(n3)"];
+  const nudgeSpec: TransportSpec = { ...spec, silenceNudges: nudges };
+  const delays = { first: 100, next: 50 };
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+  async function live() {
+    const onAutoStop = vi.fn();
+    const h = harness(delays);
+    h.listener.onAutoStop = onAutoStop;
+    const started = h.session.start(nudgeSpec);
+    const transport = h.transports.at(-1)!;
+    transport.connectGate.resolve();
+    await wait(0);
+    const audio = h.audios.at(-1)!;
+    audio.startGate.resolve();
+    await started;
+    return { h, transport, audio, onAutoStop };
+  }
+
+  /** One coach turn saying `parts` as transcript deltas, ending with nothing left to play. */
+  function coachSays(transport: FakeTransport, ...parts: string[]) {
+    transport.handlers.onTurnState?.("coach");
+    for (const p of parts) transport.handlers.onAssistantTranscript?.(p);
+    transport.handlers.onTurnState?.("you");
+  }
+
+  it("closing line → no nudge ever, and the session asks to stop once, 15 s after the turn ends", async () => {
+    const { h, transport, onAutoStop } = await live();
+    coachSays(transport, "You got the window seat. 很好，你今天能說明需求了。", CLOSING_LINE, "。");
+    expect(h.phases.at(-1)).toMatchObject({ kind: "live", closing: true });
+    await wait(AUTO_STOP_MS - 10);
+    expect(onAutoStop).not.toHaveBeenCalled();
+    await wait(20);
+    expect(onAutoStop).toHaveBeenCalledTimes(1);
+    await wait(AUTO_STOP_MS * 2);
+    expect(onAutoStop).toHaveBeenCalledTimes(1);
+    expect(transport.texts).toEqual([]); // not one nudge after the close
+  });
+
+  it("the line split across deltas, with spacing, or in Simplified form still counts", async () => {
+    for (const parts of [["今天就", "練到這", "裡"], ["好，今天 就練到", " 這裡！"], ["今天就练到这里"]]) {
+      const { transport, onAutoStop } = await live();
+      coachSays(transport, ...parts);
+      await wait(AUTO_STOP_MS + 10);
+      expect(onAutoStop, parts.join("|")).toHaveBeenCalledTimes(1);
+      expect(transport.texts).toEqual([]);
+    }
+  });
+
+  it("no closing line → the nudges go out as before and nothing stops", async () => {
+    const { transport, onAutoStop } = await live();
+    coachSays(transport, "So, what would you like to order?");
+    await wait(delays.first + 10);
+    expect(transport.texts).toEqual(["(n1)"]);
+    await wait(AUTO_STOP_MS * 2);
+    expect(onAutoStop).not.toHaveBeenCalled();
+  });
+
+  it("the learner speaks after the close → no auto-stop, still no nudges (closing stays)", async () => {
+    const { h, transport, onAutoStop } = await live();
+    coachSays(transport, CLOSING_LINE);
+    await wait(1000);
+    transport.handlers.onUserTranscript?.("Thank you so much!");
+    coachSays(transport, "You're welcome!");
+    await wait(AUTO_STOP_MS * 3);
+    expect(onAutoStop).not.toHaveBeenCalled();
+    expect(transport.texts).toEqual([]);
+    expect(h.phases.at(-1)).toMatchObject({ closing: true, autoStop: false });
+  });
+
+  it("the phase says the session will end itself only until the learner speaks", async () => {
+    const { h, transport } = await live();
+    coachSays(transport, CLOSING_LINE);
+    expect(h.phases.at(-1)).toMatchObject({ closing: true, autoStop: true });
+    transport.handlers.onUserTranscript?.("Thanks!");
+    expect(h.phases.at(-1)).toMatchObject({ closing: true, autoStop: false });
+  });
+
+  it("voice on the mic as the countdown ends postpones it (a last word is not cut off)", async () => {
+    const { transport, audio, onAutoStop } = await live();
+    coachSays(transport, CLOSING_LINE);
+    await wait(AUTO_STOP_MS - 100);
+    const loud = new Int16Array(160).fill(16000).buffer;
+    audio.callbacks.onChunk(loud);
+    await wait(200);
+    expect(onAutoStop).not.toHaveBeenCalled();
+    await wait(5_000); // quiet again: the bounded postpones run out
+    expect(onAutoStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("transcript that arrives before the turn is announced still counts toward the line", async () => {
+    const { transport, onAutoStop } = await live();
+    coachSays(transport, "Here is your key.");
+    // one server message: its transcript is delivered before setTurn("coach")
+    transport.handlers.onAssistantTranscript?.("Enjoy your stay. 今天就");
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onAssistantTranscript?.("練到這裡。");
+    transport.handlers.onTurnState?.("you");
+    await wait(AUTO_STOP_MS + 10);
+    expect(onAutoStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("paused → no auto-stop however long; resumed → the countdown starts again", async () => {
+    const { h, transport, onAutoStop } = await live();
+    coachSays(transport, CLOSING_LINE);
+    await wait(1000);
+    h.session.pause();
+    await wait(AUTO_STOP_MS * 3);
+    expect(onAutoStop).not.toHaveBeenCalled();
+    await h.session.resume();
+    await wait(AUTO_STOP_MS + 10);
+    expect(onAutoStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("the countdown starts only when the closing turn has finished playing", async () => {
+    const { transport, audio, onAutoStop } = await live();
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onAudio(new ArrayBuffer(4));
+    transport.handlers.onAssistantTranscript?.(CLOSING_LINE);
+    transport.handlers.onTurnState?.("you"); // audio still playing
+    await wait(AUTO_STOP_MS * 2);
+    expect(onAutoStop).not.toHaveBeenCalled();
+    audio.playing = false;
+    audio.callbacks.onDrained();
+    await wait(AUTO_STOP_MS + 10);
+    expect(onAutoStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("no turn tone after the close (C1)", async () => {
+    const { transport, audio } = await live();
+    coachSays(transport, CLOSING_LINE);
+    expect(audio.chimes).toBe(0);
+  });
+
+  it("a new session starts open again", async () => {
+    const { h, transport } = await live();
+    coachSays(transport, CLOSING_LINE);
+    await h.session.stop();
+    const started = h.session.start(nudgeSpec);
+    h.transports.at(-1)!.connectGate.resolve();
+    await wait(0);
+    h.audios.at(-1)!.startGate.resolve();
+    await started;
+    expect(h.phases.at(-1)).toMatchObject({ kind: "live", closing: false, autoStop: false });
   });
 });

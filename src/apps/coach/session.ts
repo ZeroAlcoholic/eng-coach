@@ -15,6 +15,7 @@ import type { GeminiDirectHandlers } from "../../api/gemini-direct";
 import { GeminiLiveDirect } from "../../api/gemini-direct";
 import { AudioEngine, type CoachClip } from "../../audio/AudioEngine";
 import { describeError } from "../../kernel/errors";
+import { saysClosingLine } from "./closing";
 
 export type { CoachClip };
 
@@ -24,7 +25,11 @@ export type SessionPhase =
   | { kind: "idle" }
   | { kind: "connecting" }
   | { kind: "awaiting-mic" }
-  | { kind: "live"; paused: boolean; reconnecting: boolean }
+  // closing (C2): the coach has said its closing line — no more nudges, and the
+  // session ends itself unless the learner speaks.
+  // autoStop: closing AND the learner has not spoken since, so the session will
+  // end itself after AUTO_STOP_MS of quiet.
+  | { kind: "live"; paused: boolean; reconnecting: boolean; closing: boolean; autoStop: boolean }
   | { kind: "stopping" }
   | { kind: "ended"; by: "user" }
   | { kind: "ended"; by: "start-failed"; reason: unknown }
@@ -39,6 +44,9 @@ export interface SessionListener {
   onTranscript: (who: "user" | "coach", text: string) => void;
   onCoachClip: (clip: CoachClip | null) => void;
   onNotice: (text: string) => void;
+  // C2 — the coach closed and the learner stayed silent: end and save, exactly
+  // as if they had tapped Stop.
+  onAutoStop?: () => void;
 }
 
 export interface TransportSpec {
@@ -94,11 +102,15 @@ export interface SessionDeps {
   wakeLock?: Pick<WakeLock, "request">;
   // Silence before the first nudge, and between later ones (defaults below).
   silenceDelaysMs?: { first: number; next: number };
+  autoStopMs?: number; // C2 — tests shorten it; production uses AUTO_STOP_MS
   // C1 — a short buzz with the turn tone; absent where the API is (iOS, desktop).
   vibrate?: (ms: number) => void;
 }
 
 const TURN_VIBRATE_MS = 60;
+// C2 — after the closing line has finished playing, this long without a word
+// from the learner ends the session. Long enough to say a last「謝謝」.
+export const AUTO_STOP_MS = 15_000;
 
 // 10 s covers the planning pause the coach is told to leave (~5 s) plus the
 // time an unsure learner takes to start; a shorter wait would talk over them.
@@ -154,6 +166,17 @@ export class PracticeSession {
   // cut the coach off, or the drain landed mid-reconnect). Paid on resume
   // unless the learner has spoken or the coach took the turn back first.
   private turnSignalOwed = false;
+  // C2 — closing state. Set once per session by the coach's closing line; the
+  // learner speaking afterwards never clears it (the scene is over), it only
+  // cancels the auto-stop.
+  private closing = false;
+  // The current coach turn's transcript so far. Reset when the turn ENDS
+  // (turnComplete or interrupted), not when it starts: the transport hands a
+  // message's transcript over before it announces the turn that message opens.
+  private coachTurnText = "";
+  private autoStopTimer: ReturnType<typeof setTimeout> | null = null;
+  private autoStopCancelled = false;
+  private autoStopPostpones = 0;
 
   constructor(
     private readonly deps: SessionDeps,
@@ -170,7 +193,13 @@ export class PracticeSession {
   }
 
   private setLivePhase(): void {
-    this.setPhase({ kind: "live", paused: this.paused, reconnecting: this.reconnecting });
+    this.setPhase({
+      kind: "live",
+      paused: this.paused,
+      reconnecting: this.reconnecting,
+      closing: this.closing,
+      autoStop: this.closing && !this.autoStopCancelled,
+    });
   }
 
   private setCue(turn: Turn, opts: { bargeIn?: boolean } = {}): void {
@@ -184,15 +213,20 @@ export class PracticeSession {
     if (turn === "you" && !this.turnSignalOwed) this.signalTurn();
     // The learner's turn starts when the coach's audio has actually finished;
     // that is the moment silence starts to count.
-    if (turn === "you") this.armSilenceTimer();
-    else this.clearSilenceTimer();
+    if (turn === "you") {
+      this.armSilenceTimer();
+      this.armAutoStop();
+    } else {
+      this.clearSilenceTimer();
+      this.clearAutoStop();
+    }
   }
 
   /** C1 — tell a learner who is not looking that it is their turn. Not on a
    *  barge-in (they are already talking), and never while paused or
    *  reconnecting. A failing tone or buzz must not touch the session. */
   private signalTurn(): void {
-    if (!this.turnCueOn || this.phase.kind !== "live" || this.paused || this.reconnecting) return;
+    if (!this.turnCueOn || this.phase.kind !== "live" || this.paused || this.reconnecting || this.closing) return;
     try {
       this.audio?.chime();
     } catch {
@@ -217,7 +251,7 @@ export class PracticeSession {
   // a nudge is never sent while the coach is already talking.
   private armSilenceTimer(): void {
     this.clearSilenceTimer();
-    if (!this.silenceNudges.length || this.paused || this.reconnecting) return;
+    if (!this.silenceNudges.length || this.paused || this.reconnecting || this.closing) return;
     if (this.silenceStreak >= MAX_SILENCE_NUDGES) return;
     const delays = this.deps.silenceDelaysMs ?? DEFAULT_SILENCE_DELAYS_MS;
     this.postpones = 0;
@@ -276,8 +310,55 @@ export class PracticeSession {
     this.armSilenceTimer();
   }
 
+  // ── Closing (C2) ────────────────────────────────────────────────────────
+  private coachSaid(text: string): void {
+    this.coachTurnText += text;
+    if (this.closing || !saysClosingLine(this.coachTurnText)) return;
+    this.closing = true;
+    this.clearSilenceTimer();
+    this.setLivePhase();
+    this.armAutoStop(); // arms only if the turn is already the learner's
+  }
+
+  /** Counts from when the closing turn has finished playing (cue → you), and
+   *  never while paused or reconnecting: a learner who stepped away mid-pause
+   *  is not a learner who has nothing more to say. */
+  private armAutoStop(): void {
+    this.clearAutoStop();
+    if (!this.closing || this.autoStopCancelled || this.cue !== "you") return;
+    if (this.phase.kind !== "live" || this.paused || this.reconnecting) return;
+    this.autoStopPostpones = 0;
+    this.scheduleAutoStop(this.deps.autoStopMs ?? AUTO_STOP_MS);
+  }
+
+  private scheduleAutoStop(ms: number): void {
+    this.clearAutoStop();
+    this.autoStopTimer = setTimeout(() => {
+      this.autoStopTimer = null;
+      if (this.phase.kind !== "live" || this.paused || this.reconnecting || this.autoStopCancelled) return;
+      // The mic hears them before the transcript arrives: a last「謝謝」must
+      // not be cut off mid-word. Same voice gate as the nudges, same bound.
+      if (Date.now() - this.lastVoiceAt < VOICE_HOLD_MS && this.autoStopPostpones < MAX_VOICE_POSTPONES) {
+        this.autoStopPostpones += 1;
+        this.scheduleAutoStop(VOICE_HOLD_MS);
+        return;
+      }
+      this.listener.onAutoStop?.();
+    }, ms);
+  }
+
+  private clearAutoStop(): void {
+    if (this.autoStopTimer !== null) clearTimeout(this.autoStopTimer);
+    this.autoStopTimer = null;
+  }
+
   /** The learner said something: the silence streak is over. */
   private learnerSpoke(): void {
+    if (this.closing && !this.autoStopCancelled) {
+      this.autoStopCancelled = true; // they are still talking; Stop is theirs
+      this.clearAutoStop();
+      this.setLivePhase();
+    }
     this.silenceStreak = 0;
     this.turnSignalOwed = false; // they already know it is their turn
     this.restartSilenceClock();
@@ -307,6 +388,11 @@ export class PracticeSession {
     this.postpones = 0;
     this.sendRetries = 0;
     this.coachSpoke = false;
+    this.closing = false;
+    this.coachTurnText = "";
+    this.autoStopCancelled = false;
+    this.autoStopPostpones = 0;
+    this.clearAutoStop();
     this.listener.onCue("coach"); // coach greets first
     this.setPhase({ kind: "connecting" });
     void this.acquireWakeLock();
@@ -363,6 +449,7 @@ export class PracticeSession {
     this.transport = null;
     this.audio = null;
     this.clearSilenceTimer();
+    this.clearAutoStop();
     try {
       transport?.close();
     } catch (err) {
@@ -382,6 +469,7 @@ export class PracticeSession {
     if (this.phase.kind !== "live" || this.paused) return;
     this.paused = true;
     this.clearSilenceTimer(); // a paused learner is not a silent one
+    this.clearAutoStop();
     this.audio?.pauseMic(); // flushes playback, which is not a drain…
     if (this.awaitingDrain) {
       // …so a turn that had already completed must hand over here, or the cue
@@ -416,7 +504,10 @@ export class PracticeSession {
       if (reconnected && this.cue === "coach") {
         this.awaitingDrain = false;
         this.setCue("you");
-      } else if (this.cue === "you") this.armSilenceTimer();
+      } else if (this.cue === "you") {
+        this.armSilenceTimer();
+        this.armAutoStop();
+      }
     } catch (err) {
       if (gen !== this.generation) return;
       this.paused = true;
@@ -478,6 +569,7 @@ export class PracticeSession {
       },
       onInterrupted: () => {
         if (!live()) return;
+        this.coachTurnText = "";
         this.audio?.flushPlayback();
         this.awaitingDrain = false;
         this.setCue("you", { bargeIn: true }); // barge-in (or a hand-over cut the coach off)
@@ -494,6 +586,7 @@ export class PracticeSession {
           return;
         }
         this.audio?.endCoachTurn();
+        this.coachTurnText = ""; // see coachTurnText: reset at the END of a coach turn
         this.listener.onCoachClip(this.audio?.lastCoachTurn() ?? null);
         if (this.audio?.isPlaying()) this.awaitingDrain = true;
         else this.setCue("you");
@@ -504,7 +597,9 @@ export class PracticeSession {
         this.listener.onTranscript("user", text);
       },
       onAssistantTranscript: (text) => {
-        if (live()) this.listener.onTranscript("coach", text);
+        if (!live()) return;
+        this.listener.onTranscript("coach", text);
+        this.coachSaid(text);
       },
       onError: (message) => {
         if (live()) this.listener.onNotice(`錯誤：${describeError(message)}`);
@@ -513,6 +608,7 @@ export class PracticeSession {
         if (!live() || this.phase.kind !== "live") return;
         this.reconnecting = true;
         this.clearSilenceTimer();
+        this.clearAutoStop();
         this.setLivePhase();
       },
       onResumed: (resumed) => {
@@ -523,7 +619,10 @@ export class PracticeSession {
           this.turnSignalOwed = false;
           this.signalTurn();
         }
-        if (this.cue === "you") this.armSilenceTimer();
+        if (this.cue === "you") {
+          this.armSilenceTimer();
+          this.armAutoStop();
+        }
         if (!resumed) this.listener.onNotice("連線已重建，但教練可能不記得前段對話。");
       },
       onClose: (reason) => {

@@ -6,6 +6,7 @@
 
 import type { ErrorType, LearnerProfile, SessionFocus, SessionReview, TargetLanguage } from "../../kernel/types";
 import { ERROR_TYPE_LABEL } from "../../kernel/types";
+import { CLOSING_LINE } from "./prompt";
 
 /** Error types that change WHAT was said, not just how well. */
 export const MEANING_BLOCKING: readonly ErrorType[] = ["wordChoice", "wordOrder", "particle", "tense"];
@@ -70,7 +71,7 @@ export function microInstruction(f: Focus): string {
       "sentence what the next minute drills, then go straight into it, staying inside the same context.",
     `Drill ONLY this: ${target}.`,
     "Keep every prompt to one line. After about 90 seconds (three to four exchanges), stop cleanly: one short " +
-      "sentence of encouragement in Traditional Chinese and「好，這段結束。」Do not start anything new.",
+      `sentence of encouragement in Traditional Chinese, then say exactly「${CLOSING_LINE}」as your final words. Do not start anything new.`,
   ].join("\n");
 }
 

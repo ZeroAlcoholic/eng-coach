@@ -25,6 +25,7 @@ import { weakObjectives } from "./objectives";
 import { band } from "./progress";
 import { OPENING_CUE, sessionInstruction, silenceNudges, type ArcContext } from "./prompt";
 import {
+  AUTO_STOP_MS,
   defaultSessionDeps,
   PracticeSession,
   type CoachClip,
@@ -88,6 +89,8 @@ export function Practice(props: {
   const [turn, setTurn] = useState<Turn>("coach"); // whose turn (voice UX), drain-gated
   const [paused, setPaused] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [closing, setClosing] = useState(false); // C2 — the coach has said its closing line
+  const [autoStop, setAutoStop] = useState(false); // C2 — …and the learner has stayed quiet since
   const [suggestions, setSuggestions] = useState<ReplySuggestion[] | null>(null);
   const [helping, setHelping] = useState(false);
   const [slow, setSlow] = useState(!!profile.prefs?.slowSpeech);
@@ -159,12 +162,16 @@ export function Practice(props: {
           setStatus("live");
           setPaused(p.paused);
           setReconnecting(p.reconnecting);
+          setClosing(p.closing);
+          setAutoStop(p.autoStop);
           if (!p.paused && !p.reconnecting) armCutoffOnce();
           return;
         case "ended":
           if (finalizingRef.current) return; // stopAndFinalize / unmount drive their own status
           setPaused(false); // live-only flags must not colour the pill after the session ended
           setReconnecting(false);
+          setClosing(false);
+          setAutoStop(false);
           switch (p.by) {
             case "user":
               setStatus("ready"); // cancelled while connecting
@@ -196,6 +203,13 @@ export function Practice(props: {
     onTranscript: (who, text) => pushDelta(who, text),
     onCoachClip: setCoachClip,
     onNotice: setNotice,
+    // C2 — same path as the Stop button; stopAndFinalize reads only refs and
+    // props, so this listener's first-render closure is safe to call.
+    onAutoStop: () => {
+      if (finalizingRef.current) return; // the learner's own Stop got there first
+      setNotice("教練已收尾，已自動結束並儲存這段。");
+      void stopAndFinalize();
+    },
   };
 
   // Authoritative safety net: release mic + WebSocket if the screen unmounts
@@ -596,9 +610,16 @@ export function Practice(props: {
             // live in the pinned bottom bar so a tap here can't end the session.
             <>
               <div className="mic-btn mic-btn--live mic-btn--status" role="status" aria-live="polite">
-                <span className="mic-emoji">{paused ? "⏸" : turn === "coach" ? "🔊" : "🎤"}</span>
-                {paused ? "已暫停" : turn === "coach" ? "教練說話中" : "換你說"}
+                <span className="mic-emoji">{paused ? "⏸" : autoStop ? "🏁" : turn === "coach" ? "🔊" : "🎤"}</span>
+                {paused ? "已暫停" : autoStop ? "教練已收尾" : turn === "coach" ? "教練說話中" : "換你說"}
               </div>
+              {/* Only while the session will end itself: once the learner talks
+                  on, the turn display returns and Stop is theirs. */}
+              {autoStop && !paused && (
+                <p className="muted" style={{ textAlign: "center", margin: "4px 0 0" }}>
+                  這場結束了。按「■ 儲存」看回顧；沒開口的話，約 {AUTO_STOP_MS / 1000} 秒後會自動儲存。
+                </p>
+              )}
               {!paused && (
                 <div className="row" style={{ justifyContent: "center", marginTop: 4 }}>
                   <button className="btn btn--ghost btn--sm" onClick={helpMe} disabled={helping}>
@@ -709,8 +730,9 @@ export function Practice(props: {
               <button className="btn btn--ghost" onClick={paused ? resumeSession : pauseSession}>
                 {paused ? "▶ 接續" : "⏸ 暫停"}
               </button>
-              <button className="btn btn--danger grow" onClick={stopAndFinalize}>
-                ■ 停止並儲存
+              {/* C2 — once the coach has closed, saving is the expected next step. */}
+              <button className={`btn grow ${closing ? "btn--primary" : "btn--danger"}`} onClick={stopAndFinalize}>
+                {closing ? "■ 儲存" : "■ 停止並儲存"}
               </button>
             </div>
           </div>
