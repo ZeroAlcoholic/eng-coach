@@ -252,6 +252,19 @@ The transcript is stored **annotated**; after the review lands the judge's
 (`FinalizeOutcome.done.focus` is that same value, so the recap card never
 recomputes it). A micro session stores `drilledFocus.sourceSessionId`. The due
 item ids the coach was asked to recycle are stored as `recycled`.
+The next story episode is written **in the background** (U4): finalize awaits
+marking the episode played and the can-do ledger, then starts `advanceArc`
+without awaiting it (`story.advanced: "pending"`); `arcAdvanced` ticks when that
+settles. Home's「下一集」joins the same in-flight generation. A recovery re-run
+sees the episode's `completedAt` and does not record the can-dos twice.
+
+### Home and the recap (Phase U)
+Home shows one main action (`homePrimary.ts`: key → next episode → replay →
+new random scene) under the readout strip; own scenarios, samples, other story
+lines and the new-scenario form live in `ScenariosSheet`, with form state kept
+in Home. Practice starts by itself only on a granted microphone outside Apple
+touch devices (`autoStart.ts`). The recap (`Recap.tsx`) shows the self-check,
+one win and one fix; the rest is behind「看完整回顧」.
 
 ### Readouts (`readouts.ts`) — zero API, traceable, counted by session order only
 | readout | numerator / denominator | source sessions |

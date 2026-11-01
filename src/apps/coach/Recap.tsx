@@ -66,8 +66,8 @@ export function Recap(props: { outcome: FinalizeOutcome; scenarioId: string }) {
           {outcome.story && !outcome.story.played && (
             <p className="notice">故事線進度沒能記錄 — 「下一集」可能會重播這一集。</p>
           )}
-          {outcome.story?.played && !outcome.story.advanced && (
-            <p className="muted">下一集還沒寫好；回首頁點「下一集」會再試一次。</p>
+          {outcome.story?.played && (
+            <p className="muted">下一集正在寫；回首頁按「下一集」就會接上。</p>
           )}
         </>
       );

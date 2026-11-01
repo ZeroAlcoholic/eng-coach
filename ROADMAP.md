@@ -363,3 +363,6 @@ build all green.
   真機（Android Chrome 的權限查詢與自動播放）＝blocked，解鎖：使用者手機開一場。
 - U3 回顧減法：`Recap.tsx`（自 Practice 搬出）預設只顯示 can-do 自評、第一個 win、第一個 fix（焦點卡在其後）；「看完整回顧」展開 CEFR、四項分級、中英評語、
   其餘 wins／fixes、錯誤型態、下次重點。資料與儲存不變；練習頁頂端標籤改為「目標 CEFR」以免與本次評量混淆。
+- U4 下一集背景生成：finalize 不再 await 下一集生成（`story.advanced: "pending"`），背景完成後才 tick `arcAdvanced`，失敗只登錄；Home「下一集」靠 `advanceArc`
+  的 in-flight 去重共用同一次生成。恢復重跑以該集 `completedAt` 判斷，不重複記 can-do。已知取捨：兩個分頁同時練同一集時，第二個不記 can-do；
+  離開練習回首頁時下一集可能還沒寫好，按鈕照常可用（會接上同一次生成或直接取得）。Phase U 證據層級：替身（vitest＋Chrome 390×844 桌機）。

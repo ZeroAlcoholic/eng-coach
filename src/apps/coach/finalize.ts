@@ -75,11 +75,13 @@ export class ResultsPersistError extends Error {
   }
 }
 
-/** Whether the story-arc bookkeeping landed; a false here means「下一集」may
- *  replay this episode, and the recap says so. */
+/** Whether the story-arc bookkeeping landed; a false `played` means「下一集」may
+ *  replay this episode, and the recap says so. `advanced` is "pending" (U4):
+ *  the next episode is written in the background, so the recap does not wait
+ *  for a model call; Home's「下一集」joins the same in-flight generation. */
 export interface StoryOutcome {
   played: boolean;
-  advanced: boolean;
+  advanced: "pending";
 }
 
 export interface FinalizeInput {
@@ -282,8 +284,7 @@ export async function finalizeSession(
   //    recap, items and level are stored; a failed generation must leave the arc
   //    byte-identical so「下一集」simply retries. The outcome carries what landed.
   if (scenario.arc && !ledger.arcAdvanced) {
-    outcome.story = await advanceStory(deps, scenario, judge.kind === "review" ? judge.review : undefined);
-    if (outcome.story.played) await tick(deps, sessionId, { arcAdvanced: true }).catch(() => {});
+    outcome.story = await advanceStory(deps, sessionId, scenario, judge.kind === "review" ? judge.review : undefined);
   }
   return outcome;
 }
@@ -412,8 +413,19 @@ async function applyReview(
 }
 
 
-async function advanceStory(deps: FinalizeDeps, scenario: Scenario, review: SessionReview | undefined): Promise<StoryOutcome> {
+async function advanceStory(
+  deps: FinalizeDeps,
+  sessionId: string,
+  scenario: Scenario,
+  review: SessionReview | undefined,
+): Promise<StoryOutcome> {
   const { arcId, episode } = scenario.arc!;
+  // arcAdvanced is ticked only after the background generation settles, so a
+  // tab closed in between re-runs this step on recovery. The episode's own
+  // completedAt tells that re-run apart: the can-do ledger counts attempts, and
+  // counting this session twice would be worse than missing it once.
+  const before = await deps.arc.getArc(arcId).catch(() => undefined);
+  const rerun = !!before?.episodes.find((e) => e.n === episode)?.completedAt;
   // ORDER MATTERS, each step with its own catch. Marking the episode played is
   // the one authoritative fact; if a derived write threw first and took it
   // along,「▶ 下一集」would replay the episode just finished.
@@ -424,18 +436,19 @@ async function advanceStory(deps: FinalizeDeps, scenario: Scenario, review: Sess
       console.warn("arc: marking the episode played failed — it may replay", e);
       return false;
     });
-  if (review) {
+  if (review && !rerun) {
     await recordArcCanDos(deps, arcId, episode, review).catch((e) => console.warn("arc can-do ledger update failed", e));
   }
-  // Genuinely retryable: a failed generation leaves the arc untouched.
-  const advanced = await deps.arc
+  // U4 — not awaited: the recap shows now, the next episode is written behind
+  // it. Genuinely retryable: a failed generation leaves the arc untouched and
+  // 下一集 tries again; advanceArc's in-flight dedupe makes that tap join this
+  // generation instead of starting a second one.
+  void deps.arc
     .advance(arcId)
-    .then(() => true)
-    .catch((e) => {
-      console.warn("next episode not written yet (retried on 下一集)", e);
-      return false;
-    });
-  return { played, advanced };
+    .catch((e) => console.warn("next episode not written yet (retried on 下一集)", e))
+    .then(() => (played ? tick(deps, sessionId, { arcAdvanced: true }) : undefined))
+    .catch((e) => console.warn("arc ledger tick failed", sessionId, e));
+  return { played, advanced: "pending" };
 }
 
 /**
