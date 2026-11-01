@@ -11,6 +11,7 @@ import { microInstruction } from "./focus";
 import {
   composeSystemInstruction,
   HELP_TRIGGERS,
+  SCENE_SETTER,
   sessionInstruction,
   silenceNudges,
   TW_MANDARIN,
@@ -480,5 +481,41 @@ describe("composeSystemInstruction — Taiwan Mandarin examples (T3)", () => {
     expect(arc).toContain(`in ONE short ${TW_MANDARIN} sentence say what you'll practise`);
     const single = composeSystemInstruction(scenario, DEFAULT_PROFILE);
     expect(single).toContain(`in ONE short ${TW_MANDARIN} sentence, say what you'll practise`);
+  });
+});
+
+describe("composeSystemInstruction — the scene sentence opens a standalone scene (I4)", () => {
+  const arcContext = {
+    title: "T",
+    episode: 2,
+    planned: 6,
+    recap: "你昨天抵達倫敦。",
+    storyState: { characters: [], events: [], openThreads: [] },
+    isFinal: false,
+  };
+
+  it("single scene: the scene sentence comes before the planning sentence", () => {
+    for (const lang of ["en", "ja"] as const) {
+      const out = composeSystemInstruction({ ...scenario, targetLanguage: lang }, DEFAULT_PROFILE);
+      const sceneAt = out.indexOf(SCENE_SETTER);
+      const planAt = out.indexOf("say what you'll practise together");
+      expect(sceneAt).toBeGreaterThan(-1);
+      expect(planAt).toBeGreaterThan(sceneAt);
+    }
+  });
+
+  it("a micro follow-up and an arc episode whose arc record is missing get no scene sentence", () => {
+    const micro = sessionInstruction({ scenario, profile: DEFAULT_PROFILE, dueItems: [], weakObjectives: [], micro: "DRILL" });
+    expect(micro).not.toContain("puts them IN the scene");
+    const orphan = composeSystemInstruction({ ...scenario, arc: { arcId: "gone", episode: 2 } }, DEFAULT_PROFILE);
+    expect(orphan).not.toContain("puts them IN the scene");
+    expect(composeSystemInstruction(scenario, DEFAULT_PROFILE)).toContain("Open with ONE scene sentence");
+  });
+
+  it("arc episode, with or without a recap: no scene sentence (the recap / story does that)", () => {
+    const withRecap = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], arcContext);
+    const noRecap = composeSystemInstruction(scenario, DEFAULT_PROFILE, [], [], { ...arcContext, recap: undefined });
+    for (const out of [withRecap, noRecap]) expect(out).not.toContain("puts them IN the scene");
+    expect(noRecap).toContain("say what you'll practise together"); // the old planning beat is untouched
   });
 });

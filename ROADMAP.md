@@ -338,3 +338,5 @@ build all green.
 - I3 任務卡：`TaskCard.tsx`（你扮演／對方／這場要做到前 3＋還有 N 項／可以用的句子前 3），排在標題下、情境描述上；開始前展開，live 收合為單行可展開，
   選擇存 `prefs.taskCardOpen`（缺席＝live 收合）。Practice 的偏好改由一個 ref 持有，微 session 自動結束的舊 closure 也讀得到最新值
   （此缺陷原本就影響 slowSpeech／showLevelMeter）。替身（Chrome 390×844，桌機已驗證）：開始前卡片 201–622px 完整可見；收合列文字高 1 行。
+- I4 入戲開場：單場情境（`!arc && !s.arc`）的第一句是一句台灣華語場景句（在哪、剛發生什麼、想要什麼；重練時講這次改過的狀況），之後才是規劃拍；
+  故事線集數（含 arc 紀錄遺失時）與微 session 不加。

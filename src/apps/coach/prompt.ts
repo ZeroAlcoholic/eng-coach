@@ -105,6 +105,12 @@ export function learnerSection(raw: LearnerPersona | undefined, language: Target
   return lines.length ? ["", "── The learner ──", ...lines] : [];
 }
 
+/** I4 — the first words of a standalone scene. */
+export const SCENE_SETTER =
+  `(0) Your very FIRST words: ONE short ${TW_MANDARIN} sentence that puts them IN the scene, like a story's narrator — ` +
+  `where they are, what just happened, and what they want here (on a replay, the scene as changed this time). ` +
+  `No talk about practising in this sentence.`;
+
 // Traditional-Chinese name of the target language, for learner-facing example
 // phrases inside the prompt (e.g. the hands-free help triggers).
 const LANGUAGE_NAME_ZH: Record<TargetLanguage, string> = { en: "英文", ja: "日文" };
@@ -215,6 +221,7 @@ export function composeSystemInstruction(
   weakObjectives?: string[], // C1 — objectives the ledger shows aren't solid yet
   arc?: ArcContext, // S2 — this scenario is one episode of a continuing story
   priorPlays = 0, // full sessions already run on this exact scenario (standalone replays)
+  opts: { micro?: boolean } = {}, // a micro follow-up continues a scene, so it opens no new one
 ): string {
   const lang = LANGUAGE_NAME[s.targetLanguage];
   const jlpt = s.targetLanguage === "ja" ? ` (${JLPT[s.level]})` : "";
@@ -456,10 +463,18 @@ export function composeSystemInstruction(
       "Tone: friendly and encouraging, no exam pressure. Begin now.",
     );
   } else {
+    // I4 — a standalone scene has no 前情提要, so its first words would be a
+    // lesson plan; one scene sentence first puts the learner in the story.
+    // Same "standalone" rule as the replay block (!arc && !s.arc): an arc
+    // episode's story does this job. A micro follow-up continues a scene.
+    const sceneFirst = !arc && !s.arc && !opts.micro;
     lines.push(
       "",
-      "── Open with a short planning beat, THEN start (B3) ──",
-      `Before the role-play proper: (1) in ONE short ${TW_MANDARIN} sentence, say what you'll practise together and why it's useful; (2) offer 1–2 key words/phrases they'll likely need (with a 繁中 gloss; for Japanese say each slowly, mora by mora); (3) say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) for them to plan — do NOT fill it. Then greet them in character and ask your first question.`,
+      sceneFirst
+        ? "── Open with ONE scene sentence and a short planning beat, THEN start (B3) ──"
+        : "── Open with a short planning beat, THEN start (B3) ──",
+      (sceneFirst ? `${SCENE_SETTER} ` : "") +
+        `Before the role-play proper: (1) in ONE short ${TW_MANDARIN} sentence, say what you'll practise together and why it's useful; (2) offer 1–2 key words/phrases they'll likely need (with a 繁中 gloss; for Japanese say each slowly, mora by mora); (3) say 「給你幾秒想一下」 and actually leave a brief silent pause (~5 seconds) for them to plan — do NOT fill it. Then greet them in character and ask your first question.`,
       "",
       "Tone: friendly and encouraging, no exam pressure. Begin now.",
     );
@@ -521,7 +536,7 @@ export function sessionInstruction(input: {
   micro?: string; // the drill block from focus.ts microInstruction, when this is a micro session
 }): string {
   if (input.micro !== undefined) {
-    return composeSystemInstruction(input.scenario, input.profile, [], [], undefined) + input.micro;
+    return composeSystemInstruction(input.scenario, input.profile, [], [], undefined, 0, { micro: true }) + input.micro;
   }
   return composeSystemInstruction(
     input.scenario,
