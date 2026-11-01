@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GeminiDirectHandlers } from "../../api/gemini-direct";
 import {
   AUTO_STOP_MS,
+  NUDGES_SPENT_NOTICE,
   PracticeSession,
   type AudioCallbacks,
   type SessionAudio,
@@ -979,5 +980,120 @@ describe("PracticeSession — the coach's closing line ends the session (C2)", (
     h.audios.at(-1)!.startGate.resolve();
     await started;
     expect(h.phases.at(-1)).toMatchObject({ kind: "live", closing: false, autoStop: false });
+  });
+});
+
+describe("PracticeSession — after the last nudge, tell the learner what to do (C3)", () => {
+  const nudgeSpec: TransportSpec = { ...spec, silenceNudges: ["(n1)", "(n2)", "(n3)"] };
+  const delays = { first: 100, next: 50 };
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+  async function spentBudget() {
+    const h = harness(delays);
+    const started = h.session.start(nudgeSpec);
+    const transport = h.transports.at(-1)!;
+    transport.connectGate.resolve();
+    await wait(0);
+    h.audios.at(-1)!.startGate.resolve();
+    await started;
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onTurnState?.("you");
+    await wait(delays.first + delays.next * 2 + 30); // three nudges, unanswered
+    expect(transport.texts).toEqual(["(n1)", "(n2)", "(n3)"]);
+    const notices = () => vi.mocked(h.listener.onNotice).mock.calls.map((c) => c[0]);
+    return { h, transport, notices };
+  }
+
+  it("one more silence after the third nudge → the notice once, never repeated", async () => {
+    const { notices } = await spentBudget();
+    expect(notices()).toEqual([]);
+    await wait(delays.next + 10);
+    expect(notices()).toEqual([NUDGES_SPENT_NOTICE]);
+    await wait(delays.next * 20);
+    expect(notices()).toEqual([NUDGES_SPENT_NOTICE]);
+  });
+
+  it("the learner speaks → the notice is withdrawn", async () => {
+    const { transport, notices } = await spentBudget();
+    await wait(delays.next + 10);
+    transport.handlers.onUserTranscript?.("Sorry, I was thinking.");
+    expect(notices()).toEqual([NUDGES_SPENT_NOTICE, ""]);
+  });
+
+  it("paused, or the coach talks again, before the silence runs out → no notice", async () => {
+    const a = await spentBudget();
+    a.h.session.pause();
+    await wait(delays.next * 4);
+    expect(a.notices()).toEqual([]);
+
+    const b = await spentBudget();
+    b.transport.handlers.onTurnState?.("coach");
+    await wait(delays.next * 4);
+    expect(b.notices()).toEqual([]);
+  });
+
+  it("the coach answers the third nudge, then silence → the notice", async () => {
+    const { transport, notices } = await spentBudget();
+    transport.handlers.onTurnState?.("coach");
+    await wait(delays.next * 4);
+    expect(notices()).toEqual([]);
+    transport.handlers.onTurnState?.("you");
+    await wait(delays.next + 10);
+    expect(notices()).toEqual([NUDGES_SPENT_NOTICE]);
+  });
+
+  it("pause withdraws it; a new silence after resume earns it once more", async () => {
+    const { h, notices } = await spentBudget();
+    await wait(delays.next + 10);
+    h.session.pause();
+    expect(notices()).toEqual([NUDGES_SPENT_NOTICE, ""]);
+    await h.session.resume();
+    await wait(delays.next + 10);
+    expect(notices()).toEqual([NUDGES_SPENT_NOTICE, "", NUDGES_SPENT_NOTICE]);
+    await wait(delays.next * 10);
+    expect(notices()).toHaveLength(3);
+  });
+
+  it("stop withdraws it", async () => {
+    const { h, notices } = await spentBudget();
+    await wait(delays.next + 10);
+    await h.session.stop();
+    expect(notices()).toEqual([NUDGES_SPENT_NOTICE, ""]);
+  });
+
+  it("the coach's closing line before the silence runs out → no notice", async () => {
+    const { transport, notices } = await spentBudget();
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onAssistantTranscript?.(CLOSING_LINE);
+    transport.handlers.onTurnState?.("you");
+    await wait(delays.next * 10);
+    expect(notices()).toEqual([]);
+  });
+
+  it("a new session starts with the notice unspent", async () => {
+    const { h, notices } = await spentBudget();
+    await wait(delays.next + 10);
+    await h.session.stop();
+    const started = h.session.start(nudgeSpec);
+    const t2 = h.transports.at(-1)!;
+    t2.connectGate.resolve();
+    await wait(0);
+    h.audios.at(-1)!.startGate.resolve();
+    await started;
+    t2.handlers.onTurnState?.("coach");
+    t2.handlers.onTurnState?.("you");
+    await wait(delays.first + delays.next * 3 + 40);
+    expect(t2.texts).toEqual(["(n1)", "(n2)", "(n3)"]);
+    expect(notices().filter((n) => n === NUDGES_SPENT_NOTICE)).toHaveLength(2);
+  });
+
+  it("speaking resets the budget: the next silence nudges again before any notice", async () => {
+    const { transport, notices } = await spentBudget();
+    transport.handlers.onUserTranscript?.("OK");
+    await wait(delays.first + 10);
+    expect(transport.texts.at(-1)).toBe("(n1)");
+    expect(notices()).toEqual([]);
   });
 });

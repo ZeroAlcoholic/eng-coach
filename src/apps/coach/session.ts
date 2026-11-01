@@ -119,6 +119,9 @@ export const DEFAULT_SILENCE_DELAYS_MS = { first: 10_000, next: 15_000 } as cons
 // Bounds the cost of a learner who walked away: after this many unanswered
 // nudges in one silence the coach stops and waits (the mic is still live).
 export const MAX_SILENCE_NUDGES = 3;
+// C3 — after the last nudge the coach goes quiet by design; without this the
+// learner sits opposite a silent coach with no idea what to do next.
+export const NUDGES_SPENT_NOTICE = "教練在等你。可以說「提示一下」，或按暫停休息一下。";
 // A nudge must not talk over a learner who has just started speaking: the
 // transcript lags the voice by a second or two, so the mic level is the early
 // signal. Loud within this window → the nudge waits (not counted), a few times.
@@ -160,6 +163,7 @@ export class PracticeSession {
   private postpones = 0; // voice-gated postponements of the pending nudge
   private sendRetries = 0; // retries of a nudge the socket could not take
   private coachSpoke = false; // a coach turn has started in this session (opening watch)
+  private spentNoticeShown = false; // C3 — NUDGES_SPENT_NOTICE is on screen
   private levelListener: ((rms: number) => void) | null = null;
   private turnCueOn = true; // C1 — prefs.turnCue; absent = on
   // C1 — the turn passed to the learner while the tone was held back (a GoAway
@@ -252,11 +256,44 @@ export class PracticeSession {
   private armSilenceTimer(): void {
     this.clearSilenceTimer();
     if (!this.silenceNudges.length || this.paused || this.reconnecting || this.closing) return;
-    if (this.silenceStreak >= MAX_SILENCE_NUDGES) return;
+    if (this.silenceStreak >= MAX_SILENCE_NUDGES) {
+      // Budget spent: one more silence of the same length earns one notice. It
+      // rides the silence timer, so every path that clears the timer (pause,
+      // reconnect, the coach's turn, closing, stop) cancels it too.
+      if (!this.spentNoticeShown) {
+        const delays = this.deps.silenceDelaysMs ?? DEFAULT_SILENCE_DELAYS_MS;
+        this.postpones = 0;
+        this.scheduleSpentNotice(delays.next);
+      }
+      return;
+    }
     const delays = this.deps.silenceDelaysMs ?? DEFAULT_SILENCE_DELAYS_MS;
     this.postpones = 0;
     this.sendRetries = 0;
     this.scheduleNudge(this.silenceStreak === 0 ? delays.first : delays.next);
+  }
+
+  private scheduleSpentNotice(ms: number): void {
+    this.clearSilenceTimer();
+    this.silenceTimer = setTimeout(() => {
+      this.silenceTimer = null;
+      if (this.phase.kind !== "live" || this.paused || this.reconnecting || this.closing) return;
+      // Same voice gate as the nudges: they may have just started to answer.
+      if (Date.now() - this.lastVoiceAt < VOICE_HOLD_MS && this.postpones < MAX_VOICE_POSTPONES) {
+        this.postpones += 1;
+        this.scheduleSpentNotice(VOICE_HOLD_MS);
+        return;
+      }
+      this.spentNoticeShown = true;
+      this.listener.onNotice(NUDGES_SPENT_NOTICE);
+    }, ms);
+  }
+
+  /** Take NUDGES_SPENT_NOTICE off the screen (the silence it described is over). */
+  private withdrawSpentNotice(): void {
+    if (!this.spentNoticeShown) return;
+    this.spentNoticeShown = false;
+    this.listener.onNotice("");
   }
 
   private scheduleNudge(ms: number): void {
@@ -361,6 +398,7 @@ export class PracticeSession {
     }
     this.silenceStreak = 0;
     this.turnSignalOwed = false; // they already know it is their turn
+    this.withdrawSpentNotice(); // it was about their silence, which is over
     this.restartSilenceClock();
   }
 
@@ -384,6 +422,7 @@ export class PracticeSession {
     this.cue = "coach";
     this.silenceNudges = spec.silenceNudges ?? [];
     this.silenceStreak = 0;
+    this.spentNoticeShown = false;
     this.lastVoiceAt = -Infinity;
     this.postpones = 0;
     this.sendRetries = 0;
@@ -450,6 +489,7 @@ export class PracticeSession {
     this.audio = null;
     this.clearSilenceTimer();
     this.clearAutoStop();
+    this.withdrawSpentNotice(); // the session it described is over
     try {
       transport?.close();
     } catch (err) {
@@ -470,6 +510,7 @@ export class PracticeSession {
     this.paused = true;
     this.clearSilenceTimer(); // a paused learner is not a silent one
     this.clearAutoStop();
+    this.withdrawSpentNotice(); // after resume, a new silence may earn it again
     this.audio?.pauseMic(); // flushes playback, which is not a drain…
     if (this.awaitingDrain) {
       // …so a turn that had already completed must hand over here, or the cue

@@ -27,6 +27,7 @@ import { OPENING_CUE, sessionInstruction, silenceNudges, type ArcContext } from 
 import {
   AUTO_STOP_MS,
   defaultSessionDeps,
+  NUDGES_SPENT_NOTICE,
   PracticeSession,
   type CoachClip,
   type SessionListener,
@@ -202,7 +203,9 @@ export function Practice(props: {
     onCue: setTurn,
     onTranscript: (who, text) => pushDelta(who, text),
     onCoachClip: setCoachClip,
-    onNotice: setNotice,
+    // An empty notice is the session withdrawing its own NUDGES_SPENT_NOTICE (C3):
+    // clear it only if that is still what is on screen.
+    onNotice: (text) => (text ? setNotice(text) : setNotice((n) => (n === NUDGES_SPENT_NOTICE ? "" : n))),
     // C2 — same path as the Stop button; stopAndFinalize reads only refs and
     // props, so this listener's first-render closure is safe to call.
     onAutoStop: () => {
