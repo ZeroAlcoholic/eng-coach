@@ -9,6 +9,7 @@
 // This is browser-only glue (no DOM-less unit test); the math it relies on lives
 // in pcm.ts and is unit-tested. Real audio is verified in the Field car test.
 
+import { scheduleChime } from "./chime";
 import { float32ToPcm16, pcm16ToFloat32, resampleLinear } from "./pcm";
 import { PlaybackTracker } from "./playbackTracker";
 
@@ -128,6 +129,12 @@ export class AudioEngine {
     };
     this.source.connect(this.workletNode);
     // Worklet has no output we want audible; do not connect to destination.
+  }
+
+  /** C1 — the「換你說」tone. Silent (never throws) before start or while the
+   *  browser holds the context suspended. */
+  chime(): void {
+    scheduleChime(this.ctx);
   }
 
   /** E2 — turn the loudness callback on/off at runtime. The meter is opt-in and

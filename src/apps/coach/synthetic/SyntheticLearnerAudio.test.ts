@@ -173,3 +173,16 @@ describe("SyntheticLearnerAudio — idle silence, as a real microphone would str
     expect(chunks).toHaveLength(5 + 31 + 2);
   });
 });
+
+describe("SyntheticLearnerAudio — chime (C1)", () => {
+  it("exists and has no effect: no frame, no drain, no timer, no playback", async () => {
+    const h = harness();
+    await h.audio.start();
+    expect(typeof h.audio.chime).toBe("function");
+    expect(() => h.audio.chime()).not.toThrow();
+    expect(h.chunks).toHaveLength(0);
+    expect(h.drained()).toBe(0);
+    expect(h.pending()).toBe(0);
+    expect(h.audio.isPlaying()).toBe(false);
+  });
+});

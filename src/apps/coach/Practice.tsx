@@ -34,7 +34,8 @@ import {
 } from "./session";
 import { Shadowing } from "./Shadowing";
 import { dueQueue } from "./srs";
-import { TaskCard, livePrefs, taskCardExpanded, toggledTaskCardPref } from "./TaskCard";
+import { livePrefs, turnCueOn } from "./livePrefs";
+import { TaskCard, taskCardExpanded, toggledTaskCardPref } from "./TaskCard";
 import { pickVoice, voiceSeed } from "./voices";
 
 const RECYCLE_CAP = 5; // W7 — due items woven into a session: recycle, not drill
@@ -93,6 +94,7 @@ export function Practice(props: {
   const [coachClip, setCoachClip] = useState<CoachClip | null>(null); // D1 — 跟讀 model
   const [showLevel, setShowLevel] = useState(!!profile.prefs?.showLevelMeter); // E2 — opt-in
   const [taskOpen, setTaskOpen] = useState(profile.prefs?.taskCardOpen); // I3 — absent = folded live
+  const [turnCue, setTurnCue] = useState(turnCueOn(profile.prefs)); // C1 — tone + buzz on「換你說」
   // tapped-line translations, keyed by index but tagged with the source text so a
   // still-growing streamed line doesn't show a stale partial translation.
   const [tx, setTx] = useState<Record<number, { src: string; zh: string }>>({});
@@ -363,6 +365,7 @@ export function Practice(props: {
         openingCue: OPENING_CUE,
         silenceNudges: silenceNudges(scenario.targetLanguage),
       };
+      session().setTurnCue(turnCue);
       // Outcome arrives through the phase stream (live / start-failed / cancelled).
       await session().start(spec);
     } catch (err) {
@@ -414,7 +417,12 @@ export function Practice(props: {
   // stopAndFinalize captured when the session was first created, whose state
   // would be the pre-live values and would revert any toggle made since.
   const prefsRef = useRef(
-    livePrefs({ slowSpeech: slow, showLevelMeter: showLevel, taskCardOpen: profile.prefs?.taskCardOpen }),
+    livePrefs({
+      slowSpeech: slow,
+      showLevelMeter: showLevel,
+      taskCardOpen: profile.prefs?.taskCardOpen,
+      turnCue: profile.prefs?.turnCue,
+    }),
   );
   function savePrefs(next: NonNullable<LearnerProfile["prefs"]>) {
     prefsRef.current = { ...prefsRef.current, ...next };
@@ -437,6 +445,14 @@ export function Practice(props: {
     setShowLevel(next);
     session().setLevelReporting(next);
     savePrefs({ showLevelMeter: next });
+  }
+
+  // C1 — the learner can silence the tone (a quiet room, or they watch the screen).
+  function toggleTurnCue() {
+    const next = !turnCue;
+    setTurnCue(next);
+    session().setTurnCue(next);
+    savePrefs({ turnCue: next });
   }
 
   // I3 — only reachable live (before the session the card is always open), so
@@ -595,6 +611,9 @@ export function Practice(props: {
                       unless the learner asks to see whether the mic hears them. */}
                   <button className="btn btn--ghost btn--sm" onClick={toggleLevelMeter} aria-pressed={showLevel}>
                     📊 {showLevel ? "音量 ✓" : "音量"}
+                  </button>
+                  <button className="btn btn--ghost btn--sm" onClick={toggleTurnCue} aria-pressed={turnCue}>
+                    🔔 {turnCue ? "提示音 ✓" : "提示音"}
                   </button>
                 </div>
               )}

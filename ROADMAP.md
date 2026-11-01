@@ -343,3 +343,6 @@ build all green.
 - I5 預設改寫：23 筆內建情境（英 9、日 14；藍圖寫 19 筆，以檔案實數為準）的 contentContext 改為處境（地點、具名對方、要達成的事、一個阻力），
   刪掉「練習／不是／流暢度」；coachRole 以人名開頭且同名出現在情境中；日文前 4 筆原為日文描述，改為繁中（含 objectives，targetPhrases 仍為日文）；
   id 不變。已練過的預設用的是存檔，不受影響。Phase I 證據層級：替身（vitest＋Chrome 390×844 桌機）。
+- C1 換你說提示：cue 轉給學習者時，`AudioEngine.chime()`（80 ms、880 Hz 正弦、增益 0.15 淡出，`audio/chime.ts`）＋`vibrate(60)`；
+  暫停、重連、插話、session 結束後不響；GoAway 換手時欠下的一聲在恢復連線後補發（學習者先開口則取消）。`prefs.turnCue`（缺席＝開）由 🔔 切換。
+  已知取捨：turnComplete 後學習者搶在殘餘音訊播完前開口，提示音仍會響；開場靜默指示的換手不響（教練隨即接話）。真機喇叭可聽度＝blocked（參數為常數）。

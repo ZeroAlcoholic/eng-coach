@@ -136,6 +136,7 @@ const parseProfile: Parser<LearnerProfile> = (v, path) => {
           slowSpeech: field(prefs, "slowSpeech", optional(boolean), `${path}.prefs`),
           showLevelMeter: field(prefs, "showLevelMeter", optional(boolean), `${path}.prefs`),
           taskCardOpen: field(prefs, "taskCardOpen", optional(boolean), `${path}.prefs`),
+          turnCue: field(prefs, "turnCue", optional(boolean), `${path}.prefs`),
         })
       : undefined,
     errorLog: field(r, "errorLog", optional(byLanguage(errorLogForLanguage)), path),

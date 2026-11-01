@@ -23,6 +23,7 @@ const audio: SessionAudio = {
   resumeMic: () => Promise.resolve(),
   setPlaybackRate: () => {},
   setLevelReporting: () => {},
+  chime: () => {},
   beginCoachTurn: () => {},
   endCoachTurn: () => {},
   lastCoachTurn: () => null,

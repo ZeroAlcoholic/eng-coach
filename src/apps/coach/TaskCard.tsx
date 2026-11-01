@@ -15,17 +15,6 @@ export function taskCardExpanded(live: boolean, pref: boolean | undefined): bool
 /** The pref after one tap on the live card's toggle. */
 export const toggledTaskCardPref = (pref: boolean | undefined): boolean => !taskCardExpanded(true, pref);
 
-/** The prefs Practice starts from. Every write sends the whole set, because the
- *  `profile` prop is stale for the rest of the session; an untouched
- *  taskCardOpen stays absent so an old profile reads as before. */
-export function livePrefs(s: { slowSpeech: boolean; showLevelMeter: boolean; taskCardOpen: boolean | undefined }) {
-  return {
-    slowSpeech: s.slowSpeech,
-    showLevelMeter: s.showLevelMeter,
-    ...(s.taskCardOpen === undefined ? {} : { taskCardOpen: s.taskCardOpen }),
-  };
-}
-
 type CardScenario = Pick<Scenario, "title" | "coachRole" | "userRole" | "objectives" | "targetPhrases">;
 
 export function TaskCard(props: { scenario: CardScenario; expanded: boolean; onToggle?: () => void }) {

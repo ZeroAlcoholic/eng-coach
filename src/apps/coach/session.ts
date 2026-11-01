@@ -75,6 +75,7 @@ export interface SessionAudio {
   resumeMic(): Promise<void>;
   setPlaybackRate(rate: number): void;
   setLevelReporting(on: boolean): void;
+  chime(): void; // C1 — the「換你說」tone
   beginCoachTurn(): void;
   endCoachTurn(): void;
   lastCoachTurn(): CoachClip | null;
@@ -93,7 +94,11 @@ export interface SessionDeps {
   wakeLock?: Pick<WakeLock, "request">;
   // Silence before the first nudge, and between later ones (defaults below).
   silenceDelaysMs?: { first: number; next: number };
+  // C1 — a short buzz with the turn tone; absent where the API is (iOS, desktop).
+  vibrate?: (ms: number) => void;
 }
+
+const TURN_VIBRATE_MS = 60;
 
 // 10 s covers the planning pause the coach is told to leave (~5 s) plus the
 // time an unsure learner takes to start; a shorter wait would talk over them.
@@ -144,6 +149,11 @@ export class PracticeSession {
   private sendRetries = 0; // retries of a nudge the socket could not take
   private coachSpoke = false; // a coach turn has started in this session (opening watch)
   private levelListener: ((rms: number) => void) | null = null;
+  private turnCueOn = true; // C1 — prefs.turnCue; absent = on
+  // C1 — the turn passed to the learner while the tone was held back (a GoAway
+  // cut the coach off, or the drain landed mid-reconnect). Paid on resume
+  // unless the learner has spoken or the coach took the turn back first.
+  private turnSignalOwed = false;
 
   constructor(
     private readonly deps: SessionDeps,
@@ -163,14 +173,40 @@ export class PracticeSession {
     this.setPhase({ kind: "live", paused: this.paused, reconnecting: this.reconnecting });
   }
 
-  private setCue(turn: Turn): void {
+  private setCue(turn: Turn, opts: { bargeIn?: boolean } = {}): void {
     if (this.cue === turn) return;
     this.cue = turn;
     this.listener.onCue(turn);
+    // An onInterrupted is a barge-in OR a GoAway cutting the coach off; it
+    // cannot tell which, so the tone is owed and paid on resume (a real
+    // barge-in's transcript cancels it first).
+    this.turnSignalOwed = turn === "you" && (!!opts.bargeIn || this.reconnecting);
+    if (turn === "you" && !this.turnSignalOwed) this.signalTurn();
     // The learner's turn starts when the coach's audio has actually finished;
     // that is the moment silence starts to count.
     if (turn === "you") this.armSilenceTimer();
     else this.clearSilenceTimer();
+  }
+
+  /** C1 — tell a learner who is not looking that it is their turn. Not on a
+   *  barge-in (they are already talking), and never while paused or
+   *  reconnecting. A failing tone or buzz must not touch the session. */
+  private signalTurn(): void {
+    if (!this.turnCueOn || this.phase.kind !== "live" || this.paused || this.reconnecting) return;
+    try {
+      this.audio?.chime();
+    } catch {
+      /* the tone is a courtesy; the on-screen cue already changed */
+    }
+    try {
+      this.deps.vibrate?.(TURN_VIBRATE_MS);
+    } catch {
+      /* same */
+    }
+  }
+
+  setTurnCue(on: boolean): void {
+    this.turnCueOn = on;
   }
 
   // ── Silence nudges ──────────────────────────────────────────────────────
@@ -243,6 +279,7 @@ export class PracticeSession {
   /** The learner said something: the silence streak is over. */
   private learnerSpoke(): void {
     this.silenceStreak = 0;
+    this.turnSignalOwed = false; // they already know it is their turn
     this.restartSilenceClock();
   }
 
@@ -443,7 +480,7 @@ export class PracticeSession {
         if (!live()) return;
         this.audio?.flushPlayback();
         this.awaitingDrain = false;
-        this.setCue("you"); // barge-in (or a hand-over cut the coach off)
+        this.setCue("you", { bargeIn: true }); // barge-in (or a hand-over cut the coach off)
         this.restartSilenceClock();
       },
       onTurnState: (turn) => {
@@ -482,6 +519,10 @@ export class PracticeSession {
         if (!live() || this.phase.kind !== "live") return;
         this.reconnecting = false;
         this.setLivePhase();
+        if (this.cue === "you" && this.turnSignalOwed) {
+          this.turnSignalOwed = false;
+          this.signalTurn();
+        }
         if (this.cue === "you") this.armSilenceTimer();
         if (!resumed) this.listener.onNotice("連線已重建，但教練可能不記得前段對話。");
       },
@@ -526,5 +567,10 @@ export const defaultSessionDeps: SessionDeps = {
   wakeLock:
     typeof navigator !== "undefined" && navigator.wakeLock
       ? { request: (type) => navigator.wakeLock.request(type) }
+      : undefined,
+  // Wrapped for the same reason as wakeLock; feature-tested because Safari has none.
+  vibrate:
+    typeof navigator !== "undefined" && typeof navigator.vibrate === "function"
+      ? (ms) => void navigator.vibrate(ms)
       : undefined,
 };

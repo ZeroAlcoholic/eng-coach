@@ -290,6 +290,21 @@ usage. Two halves, one source each:
   zero samples → `unavailable`). Target-language fields are not checked, and in
   the judge, Han runs quoted verbatim from the learner's turns are exempt.
 
+### Into the scene (`persona.ts`, `voices.ts`, `TaskCard.tsx`, `prompt.ts`)
+- **Who the learner is.** Optional `LearnerProfile.persona` (name, job, organisation
+  type), normalised once in `kernel/persona.ts` (whitespace folded, ≤40 chars,
+  blank = absent) for the pack reader, the ⚙️ form and the prompt's
+  「── The learner ──」section. Absent = the prompt as before.
+- **One voice per story.** `pickVoice(language, seed)` hashes the arc id (else the
+  scenario id) with FNV-1a, so a recurring character keeps one voice.
+- **The task before the first word.** `TaskCard` shows your role, theirs, three
+  objectives and three phrases; open before the session, one line while live
+  (`prefs.taskCardOpen`). Practice holds its prefs in a ref, so the micro-session
+  cutoff's stale closure writes current values.
+- **A scene, not a lesson plan.** A standalone scene opens with one Taiwan-Mandarin
+  narrator sentence; arc episodes (their story) and micro follow-ups do not.
+  Built-in scenarios are written as situations with a named counterpart.
+
 ### Synthetic learner (`synthetic/`, tests only)
 `SyntheticLearnerAudio` implements `SessionAudio` at the owner's injection point:
 coach audio is accounted for by duration on a clock, `say()` streams a cached

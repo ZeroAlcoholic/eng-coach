@@ -5,6 +5,7 @@ import {
   PracticeSession,
   type AudioCallbacks,
   type SessionAudio,
+  type SessionDeps,
   type SessionListener,
   type SessionPhase,
   type SessionTransport,
@@ -99,6 +100,10 @@ class FakeAudio implements SessionAudio {
     this.rate = rate;
   }
   setLevelReporting(): void {}
+  chimes = 0;
+  chime(): void {
+    this.chimes++;
+  }
   beginCoachTurn(): void {
     this.turns.push("begin");
   }
@@ -110,7 +115,7 @@ class FakeAudio implements SessionAudio {
   }
 }
 
-function harness(silenceDelaysMs?: { first: number; next: number }) {
+function harness(silenceDelaysMs?: { first: number; next: number }, extra: Partial<SessionDeps> = {}) {
   const transports: FakeTransport[] = [];
   const audios: FakeAudio[] = [];
   const phases: SessionPhase[] = [];
@@ -137,6 +142,7 @@ function harness(silenceDelaysMs?: { first: number; next: number }) {
       },
       wakeLock,
       ...(silenceDelaysMs ? { silenceDelaysMs } : {}),
+      ...extra,
     },
     listener,
   );
@@ -680,5 +686,146 @@ describe("PracticeSession — silence nudges", () => {
     transport.handlers.onTurnState?.("you");
     await wait(delays.first + 10);
     expect(transport.texts).toEqual(["(n1)"]); // still the FIRST nudge: the failed ones never counted
+  });
+});
+
+describe("PracticeSession —「換你說」tone and buzz (C1)", () => {
+  const withBuzz = () => {
+    const vibrate = vi.fn();
+    return { h: harness(undefined, { vibrate }), vibrate };
+  };
+
+  it("turnComplete with nothing playing: one chime and one 60 ms buzz", async () => {
+    const { h, vibrate } = withBuzz();
+    const { transport, audio } = await goLive(h);
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onTurnState?.("you");
+    expect(audio.chimes).toBe(1);
+    expect(vibrate).toHaveBeenCalledTimes(1);
+    expect(vibrate).toHaveBeenCalledWith(60);
+  });
+
+  it("audio still playing: nothing until the drain, then exactly one", async () => {
+    const { h, vibrate } = withBuzz();
+    const { transport, audio } = await goLive(h);
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onAudio(new ArrayBuffer(4));
+    transport.handlers.onTurnState?.("you");
+    expect(audio.chimes).toBe(0); // coach still audible
+    audio.playing = false;
+    audio.callbacks.onDrained();
+    audio.callbacks.onDrained(); // a second drain is no second turn
+    expect(audio.chimes).toBe(1);
+    expect(vibrate).toHaveBeenCalledTimes(1);
+  });
+
+  it("never while the coach is talking, on a barge-in, while paused, or while reconnecting", async () => {
+    const { h, vibrate } = withBuzz();
+    const { transport, audio } = await goLive(h);
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onAudio(new ArrayBuffer(4));
+    expect(audio.chimes).toBe(0); // coach speaking
+    transport.handlers.onInterrupted?.(); // barge-in: the learner is already talking
+    expect(h.cues.at(-1)).toBe("you");
+    expect(audio.chimes).toBe(0);
+
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onAudio(new ArrayBuffer(4));
+    transport.handlers.onTurnState?.("you"); // awaiting drain
+    h.session.pause(); // pause hands the turn over itself
+    expect(h.cues.at(-1)).toBe("you");
+    expect(audio.chimes).toBe(0);
+    await h.session.resume();
+
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onReconnecting?.();
+    transport.handlers.onTurnState?.("you");
+    expect(audio.chimes).toBe(0);
+    expect(vibrate).not.toHaveBeenCalled();
+  });
+
+  it("GoAway cuts the coach off: no tone during the hand-over, one when the resumed socket is up", async () => {
+    const { h, vibrate } = withBuzz();
+    const { transport, audio } = await goLive(h);
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onAudio(new ArrayBuffer(4));
+    transport.handlers.onInterrupted?.(); // the transport's hand-over, same signal as a barge-in
+    transport.handlers.onReconnecting?.();
+    expect(audio.chimes).toBe(0);
+    transport.handlers.onResumed?.(true);
+    expect(audio.chimes).toBe(1);
+    expect(vibrate).toHaveBeenCalledTimes(1);
+  });
+
+  it("GoAway while the last audio drains: the drain mid-reconnect is held, paid on resume", async () => {
+    const { h } = withBuzz();
+    const { transport, audio } = await goLive(h);
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onAudio(new ArrayBuffer(4));
+    transport.handlers.onTurnState?.("you"); // awaiting drain
+    transport.handlers.onReconnecting?.();
+    audio.playing = false;
+    audio.callbacks.onDrained();
+    expect(audio.chimes).toBe(0);
+    transport.handlers.onResumed?.(true);
+    expect(audio.chimes).toBe(1);
+  });
+
+  it("a real barge-in owes nothing: the learner's words cancel it before any resume", async () => {
+    const { h } = withBuzz();
+    const { transport, audio } = await goLive(h);
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onInterrupted?.();
+    transport.handlers.onUserTranscript?.("Sorry, can I ask");
+    transport.handlers.onReconnecting?.();
+    transport.handlers.onResumed?.(true);
+    expect(audio.chimes).toBe(0);
+  });
+
+  it("after the session ended: nothing", async () => {
+    const { h } = withBuzz();
+    const { transport, audio } = await goLive(h);
+    transport.handlers.onTurnState?.("coach");
+    await h.session.stop();
+    transport.handlers.onTurnState?.("you");
+    expect(audio.chimes).toBe(0);
+  });
+
+  it("turned off (prefs.turnCue false): nothing; on again: back", async () => {
+    const { h, vibrate } = withBuzz();
+    h.session.setTurnCue(false);
+    const { transport, audio } = await goLive(h);
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onTurnState?.("you");
+    expect(audio.chimes).toBe(0);
+    expect(vibrate).not.toHaveBeenCalled();
+    h.session.setTurnCue(true);
+    transport.handlers.onTurnState?.("coach");
+    transport.handlers.onTurnState?.("you");
+    expect(audio.chimes).toBe(1);
+  });
+
+  it("no vibrate API: the chime still plays and nothing throws", async () => {
+    const h = harness(); // deps without vibrate
+    const { transport, audio } = await goLive(h);
+    transport.handlers.onTurnState?.("coach");
+    expect(() => transport.handlers.onTurnState?.("you")).not.toThrow();
+    expect(audio.chimes).toBe(1);
+  });
+
+  it("a throwing chime or buzz does not touch the session", async () => {
+    const h = harness(undefined, {
+      vibrate: () => {
+        throw new Error("blocked");
+      },
+    });
+    const { transport, audio } = await goLive(h);
+    audio.chime = () => {
+      throw new Error("context closed");
+    };
+    transport.handlers.onTurnState?.("coach");
+    expect(() => transport.handlers.onTurnState?.("you")).not.toThrow();
+    expect(h.cues.at(-1)).toBe("you");
+    expect(h.session.currentPhase().kind).toBe("live");
   });
 });

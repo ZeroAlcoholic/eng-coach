@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 
 import { parsePack } from "../../kernel/packSchema";
-import { TaskCard, livePrefs, taskCardExpanded, toggledTaskCardPref } from "./TaskCard";
+import { livePrefs } from "./livePrefs";
+import { TaskCard, taskCardExpanded, toggledTaskCardPref } from "./TaskCard";
 
 const full = {
   title: "預算會議",
@@ -78,12 +79,12 @@ describe("prefs.taskCardOpen — the live fold is remembered", () => {
   });
 
   it("the written prefs carry the choice; untouched, the key stays absent", () => {
-    expect(livePrefs({ slowSpeech: true, showLevelMeter: false, taskCardOpen: true })).toEqual({
+    expect(livePrefs({ slowSpeech: true, showLevelMeter: false, taskCardOpen: true, turnCue: undefined })).toEqual({
       slowSpeech: true,
       showLevelMeter: false,
       taskCardOpen: true,
     });
-    expect(livePrefs({ slowSpeech: false, showLevelMeter: false, taskCardOpen: undefined })).not.toHaveProperty("taskCardOpen");
+    expect(livePrefs({ slowSpeech: false, showLevelMeter: false, taskCardOpen: undefined, turnCue: undefined })).not.toHaveProperty("taskCardOpen");
   });
 
   it("Practice writes prefs from one ref that every toggle updates (the cutoff's stale closure reads it too)", () => {

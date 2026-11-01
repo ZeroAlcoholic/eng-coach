@@ -124,6 +124,10 @@ export class SyntheticLearnerAudio implements SessionAudio {
     this.rate = rate;
   }
 
+  chime(): void {
+    // A scripted learner hears nothing; the tone is for a person who is not looking.
+  }
+
   setLevelReporting(): void {
     // The level meter reads the microphone; a scripted learner has no loudness worth reporting.
   }
