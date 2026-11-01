@@ -335,3 +335,6 @@ build all green.
   pack 匯入、⚙️ 表單、prompt 共用。prompt「── The learner ──」段：有稱呼就叫名字；英文單場在職務合用時改寫學習者角色，故事線不改（前情與角色已固定）；
   日文只用稱呼。缺席＝prompt 與改動前相同；匯出入 round-trip 有測試。
 - I2 固定音色：`pickVoice(language, seed)` 以 FNV-1a 雜湊取模，seed＝`arc?.arcId ?? scenario.id`；同一條故事線每集同一個聲音，單場重練也同聲。重連沿用 transport 既有音色。
+- I3 任務卡：`TaskCard.tsx`（你扮演／對方／這場要做到前 3＋還有 N 項／可以用的句子前 3），排在標題下、情境描述上；開始前展開，live 收合為單行可展開，
+  選擇存 `prefs.taskCardOpen`（缺席＝live 收合）。Practice 的偏好改由一個 ref 持有，微 session 自動結束的舊 closure 也讀得到最新值
+  （此缺陷原本就影響 slowSpeech／showLevelMeter）。替身（Chrome 390×844，桌機已驗證）：開始前卡片 201–622px 完整可見；收合列文字高 1 行。

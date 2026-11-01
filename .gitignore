@@ -6,3 +6,4 @@ dist/
 .DS_Store
 .synthetic-cache/
 *.log
+.tmp/

@@ -193,7 +193,8 @@ export interface LearnerProfile {
   levelHistory?: Partial<Record<TargetLanguage, { at: string; cefr: string; overall: number }[]>>;
   // W4 — UX preferences. E2 adds the opt-in loudness indicator (default off, so
   // the live screen stays the clean orb it was designed to be).
-  prefs?: { slowSpeech?: boolean; showLevelMeter?: boolean };
+  // I3 adds taskCardOpen: keep the task card open while live (absent = folded).
+  prefs?: { slowSpeech?: boolean; showLevelMeter?: boolean; taskCardOpen?: boolean };
   // E1 — recurring error types per language, keyed by the closed ERROR_TYPES set.
   errorLog?: Partial<Record<TargetLanguage, Partial<Record<ErrorType, ErrorTally>>>>;
   // The sounds the coach named in the MOST RECENT session of each language, so

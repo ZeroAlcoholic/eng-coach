@@ -34,6 +34,7 @@ import {
 } from "./session";
 import { Shadowing } from "./Shadowing";
 import { dueQueue } from "./srs";
+import { TaskCard, livePrefs, taskCardExpanded, toggledTaskCardPref } from "./TaskCard";
 import { pickVoice, voiceSeed } from "./voices";
 
 const RECYCLE_CAP = 5; // W7 — due items woven into a session: recycle, not drill
@@ -91,6 +92,7 @@ export function Practice(props: {
   const [slow, setSlow] = useState(!!profile.prefs?.slowSpeech);
   const [coachClip, setCoachClip] = useState<CoachClip | null>(null); // D1 — 跟讀 model
   const [showLevel, setShowLevel] = useState(!!profile.prefs?.showLevelMeter); // E2 — opt-in
+  const [taskOpen, setTaskOpen] = useState(profile.prefs?.taskCardOpen); // I3 — absent = folded live
   // tapped-line translations, keyed by index but tagged with the source text so a
   // still-growing streamed line doesn't show a stale partial translation.
   const [tx, setTx] = useState<Record<number, { src: string; zh: string }>>({});
@@ -408,8 +410,15 @@ export function Practice(props: {
   // `profile` prop stays stale for the rest of the session (Practice has no reload)
   // and stopAndFinalize writes prefs back from it — a partial write here would be
   // silently reverted when the session ends.
-  function savePrefs(next: { slowSpeech: boolean; showLevelMeter: boolean }) {
-    putProfile({ ...profile, prefs: { ...profile.prefs, ...next } }).catch((e) =>
+  // A ref, not the state values: the micro-session cutoff calls a
+  // stopAndFinalize captured when the session was first created, whose state
+  // would be the pre-live values and would revert any toggle made since.
+  const prefsRef = useRef(
+    livePrefs({ slowSpeech: slow, showLevelMeter: showLevel, taskCardOpen: profile.prefs?.taskCardOpen }),
+  );
+  function savePrefs(next: NonNullable<LearnerProfile["prefs"]>) {
+    prefsRef.current = { ...prefsRef.current, ...next };
+    putProfile({ ...profile, prefs: { ...profile.prefs, ...prefsRef.current } }).catch((e) =>
       setNotice(`偏好設定沒能存起來：${describeError(e)}`),
     );
   }
@@ -418,7 +427,7 @@ export function Practice(props: {
     const next = !slow;
     setSlow(next);
     session().setPlaybackRate(next ? 0.85 : 1);
-    savePrefs({ slowSpeech: next, showLevelMeter: showLevel });
+    savePrefs({ slowSpeech: next });
   }
 
   // E2 — remember the choice, so someone who wants the meter isn't re-enabling it
@@ -427,7 +436,15 @@ export function Practice(props: {
     const next = !showLevel;
     setShowLevel(next);
     session().setLevelReporting(next);
-    savePrefs({ slowSpeech: slow, showLevelMeter: next });
+    savePrefs({ showLevelMeter: next });
+  }
+
+  // I3 — only reachable live (before the session the card is always open), so
+  // the remembered choice is "keep the task in view while I talk".
+  function toggleTaskCard() {
+    const next = toggledTaskCardPref(taskOpen);
+    setTaskOpen(next);
+    savePrefs({ taskCardOpen: next });
   }
 
   // Stable across renders — the meter uses it as an effect dependency, so a new
@@ -480,7 +497,7 @@ export function Practice(props: {
         scenario,
         // Carry BOTH live prefs, or finalize's profile write reverts whichever one
         // was toggled during the session.
-        profile: { ...profile, prefs: { ...profile.prefs, slowSpeech: slow, showLevelMeter: showLevel } },
+        profile: { ...profile, prefs: { ...profile.prefs, ...prefsRef.current } },
         sessionId: sessionIdRef.current,
         startedAt: startedAtRef.current,
         transcript: turnsRef.current,
@@ -540,6 +557,13 @@ export function Practice(props: {
         <span className="pill pill--neutral">{scenario.targetLanguage.toUpperCase()}</span>
         <span className="pill pill--neutral">CEFR {scenario.level}</span>
       </div>
+      {!["done", "saving", "dropped"].includes(status) && (
+        <TaskCard
+          scenario={scenario}
+          expanded={taskCardExpanded(status === "live", taskOpen)}
+          onToggle={status === "live" ? toggleTaskCard : undefined}
+        />
+      )}
       <p className="muted">{scenario.contentContext}</p>
       {notice && <p className="notice">{notice}</p>}
       {draftWarning && status === "live" && (
