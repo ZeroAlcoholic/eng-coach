@@ -45,6 +45,6 @@ export async function suggestReplies(
     `Given the recent turns, suggest 2–3 SHORT, natural things THEY (the learner) could say next, at ` +
     `CEFR ${opts.scenario.level}.` +
     (opts.scenario.targetLanguage === "ja" ? " For Japanese include kana + romaji in `say`." : "") +
-    ` Each item: say (in ${lang}) + gloss (Traditional Chinese meaning).\n\nRECENT:\n${tail}`;
+    ` Each item: say (in ${lang}) + gloss (its meaning in Chinese).\n\nRECENT:\n${tail}`;
   return generateJson(apiKey, prompt, SUGGEST_SCHEMA, parseSuggestions);
 }

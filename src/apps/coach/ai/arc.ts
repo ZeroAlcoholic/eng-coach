@@ -152,7 +152,7 @@ const EPISODE_RULES =
   `- coachRole / userRole: who each side plays (keep recurring characters consistent).\n` +
   `- objectives: 3-5 observable task outcomes for THIS episode.\n` +
   `- targetPhrases: 5-10 liftable expressions this episode naturally needs.\n` +
-  `- recap: AT MOST 3 short sentences of Traditional Chinese (Taiwan) 前情提要 that remind ` +
+  `- recap: AT MOST 3 short sentences of Chinese 前情提要 that remind ` +
   `the learner what happened before and what's at stake now. For a first episode, instead ` +
   `set the scene in at most 2 sentences. Never mention episode numbers.`;
 
@@ -168,8 +168,8 @@ export async function generateArcSeed(
     `Return:\n` +
     `- arcTitle (short).\n` +
     `- premise: 2-3 sentences describing the whole arc's situation and where it is heading.\n` +
-    `- canDos: the arc's SYLLABUS — 6 to 8 CEFR-style can-do statements written in Traditional ` +
-    `Chinese (Taiwan), each starting「能…」and naming an observable speaking ability at CEFR ` +
+    `- canDos: the arc's SYLLABUS — 6 to 8 CEFR-style can-do statements written in Chinese, ` +
+    `each starting「能…」and naming an observable speaking ability at CEFR ` +
     `${opts.level} that this story naturally trains (e.g.「能向櫃台說明狀況並要求具體補救」). ` +
     `They must be distinct from one another and cover the whole arc, not just episode 1.\n` +
     `- outline: exactly ${opts.episodes} short beats, one per episode, in order — the shape of ` +

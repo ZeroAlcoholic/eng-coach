@@ -87,7 +87,7 @@ export async function extractLearnedItems(
     `From this ${langName(opts.scenario.targetLanguage)} practice transcript, list up to 15 notable items the learner ` +
     `encountered or was corrected on: vocabulary (word), useful expressions (phrase), or ` +
     `grammar points (grammar). For each give: kind; text (the item); reading (kana/pinyin ` +
-    `if helpful, else ""); meaning in Traditional Chinese; a short example sentence; and for a ` +
+    `if helpful, else ""); meaning in Chinese; a short example sentence; and for a ` +
     `grammar item only, frame — the pattern with ___ for each open slot (e.g. "I'd rather ___ than ___"), ` +
     `whose fixed words all appear in the example. Give priority to words the learner replaced with ` +
     `Chinese mid-sentence: list the ${langName(opts.scenario.targetLanguage)} word as the item, and use the ` +

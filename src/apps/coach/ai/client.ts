@@ -21,6 +21,24 @@ export async function validateApiKey(apiKey: string): Promise<void> {
   await client(apiKey).models.list({ config: { pageSize: 1 } });
 }
 
+// The single source of the Chinese-language rule for every text-model call.
+// `generateJson` appends it, so a capability never states its own variant: a
+// per-file sentence drifts (one names the script, the next forgets Taiwan
+// usage) and a new capability would start with no rule at all.
+export const ZH_TW_RULE =
+  `CHINESE-LANGUAGE RULE (applies to every Chinese word you write yourself): ` +
+  `write Traditional Chinese as used in Taiwan — Taiwan vocabulary, Taiwan phrasing, a Taiwan ` +
+  `tone. Never use Simplified characters. Never use Mainland-China terms; use the Taiwan term ` +
+  `instead: 信息→資訊、軟件→軟體、視頻→影片、質量→品質（meaning quality）、默認→預設、屏幕→螢幕、` +
+  `鼠標→滑鼠、交互→互動（meaning interaction）、鏈接→連結、數據庫→資料庫. This rule governs ` +
+  `Chinese only: Japanese and English text stay as they are (Japanese kanji such as 会・学・国 ` +
+  `are correct Japanese), and text you are asked to copy VERBATIM stays exactly as written.`;
+
+/** The prompt exactly as the model receives it. */
+export const withZhTwRule = (prompt: string): string => `${prompt}
+
+${ZH_TW_RULE}`;
+
 export interface GenerateOptions {
   model?: string; // screening overrides the configured model per call
 }
@@ -36,7 +54,7 @@ export async function generateJson<T>(
 ): Promise<T> {
   const res = await client(apiKey).models.generateContent({
     model: opts.model ?? textModel(),
-    contents: prompt,
+    contents: withZhTwRule(prompt),
     config: { responseMimeType: "application/json", responseSchema: schema },
   });
   const text = res.text ?? "";

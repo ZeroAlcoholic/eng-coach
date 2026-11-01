@@ -319,3 +319,9 @@ build all green.
    only vitest-double evidence.
 5. **V-phone** (9 checks) needs the user's own phone for 15 minutes. Until it is
    done, **nothing may claim「手機端已驗證」— only「桌機已驗證」**.
+
+**Update 2026-11-02 — v5 體驗感（`docs/BLUEPRINT_2026-11-01.md`；進度帳本 `docs/PROGRESS_2026-11-01.md`）：**
+- T1 台灣語境單一正本：`ai/client.ts` 的 `ZH_TW_RULE` 由 `generateJson` 附加在每個文字模型 prompt 末尾；
+  各 capability 不再自寫中文變體句。規則只管中文，日文與逐字引文不受影響。判準：替身測試八個 capability
+  的 prompt 皆以規則結尾，且由資料夾掃描推導出應測的檔；`grep -rn "Traditional Chinese" src/apps/coach/ai`
+  只命中 `client.ts`。

@@ -207,7 +207,7 @@ export function judgePrompt(opts: {
     `pronunciation or accent. Return JSON: cefr (honest CEFR of this session, e.g. "B1"); ` +
     `subscores as integers 1–6 (1=A1 … 6=C2) for grammar, vocab, fluency (as visible in text: sentence ` +
     `length, connectors, self-corrections), interaction; reviewEn (ONE encouraging English sentence); ` +
-    `reviewZh (ONE Taiwan-colloquial Traditional Chinese sentence, same gist); wins (1–3 short things ` +
+    `reviewZh (ONE colloquial Chinese sentence, same gist); wins (1–3 short things ` +
     `they did well); fixes (1–3 short items to fix, each WITH the natural corrected version); ` +
     `progressNote (one or two concrete English sentences naming the specific grammar/phrase points to ` +
     `target next time so the next session can coach them directly); errors (up to 3 error PATTERNS in ` +

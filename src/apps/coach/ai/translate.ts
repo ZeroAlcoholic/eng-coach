@@ -1,4 +1,4 @@
-// Capability: one transcript line → Traditional Chinese (W4 tap-to-translate).
+// Capability: one transcript line → Chinese (W4 tap-to-translate).
 
 import { Type } from "@google/genai";
 
@@ -17,7 +17,7 @@ export async function translateLine(apiKey: string, text: string): Promise<strin
   if (!text.trim()) return "";
   return generateJson(
     apiKey,
-    `Translate this into natural Traditional Chinese (Taiwan). Return only the translation.\n\n${text}`,
+    `Translate this into natural Chinese. Return only the translation.\n\n${text}`,
     TRANSLATE_SCHEMA,
     parseTranslation,
   );
