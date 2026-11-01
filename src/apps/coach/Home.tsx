@@ -1,17 +1,13 @@
-// 首頁（介面繁中；教學內容為英 / 日）。資訊架構，行動優先：
-//   1.（首次）連結 Gemini 金鑰
-//   2. 你的情境 — 主內容；依「最上角語言切換」過濾，整頁跟著切避免搞錯
-//   3. 範例情境 — 沒自建也能直接代入開練
-//   4. 新增情境（語言由切換決定，這裡選程度）
-//   5. 設定與資料
+// 首頁（介面繁中；教學內容為英 / 日）。一眼一個主行動（U1）：
+//   讀數條 → 主按鈕（homePrimary.ts：金鑰 → 下一集 → 再練一次 → 換個新劇情）
+//   → 換個新劇情（主按鈕不是它時）→ 恢復卡（有草稿時）→「情境與新增」
+//   你的情境、範例、新增情境都在 ScenariosSheet；設定與資料在 ⚙️。
 
 import { useId, useState } from "react";
 
 import {
-  CEFR_LEVELS,
   TARGET_LANGUAGES,
   type Arc,
-  type CEFRLevel,
   type DraftSession,
   type LearnedItem,
   type LearnerProfile,
@@ -42,15 +38,13 @@ import { withPersona } from "../../kernel/persona";
 import { persistedState, type PersistState } from "../../kernel/storage";
 import { generateScenario, validateApiKey } from "./ai";
 import { DEFAULT_ARCS } from "./arcDefaults";
+import { ArcNextButton } from "./ArcNextButton";
 import {
   advanceArc,
-  episodeCanDos,
+  pendingEpisode,
   installDemoArc,
   isArcFinished,
   nextEpisodeGenerator,
-  nextEpisodeNumber,
-  pendingEpisode,
-  playedCount,
   seedGenerator,
   startArc,
   type DemoArc,
@@ -59,12 +53,15 @@ import { DEFAULT_SCENARIOS } from "./defaults";
 import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
 import { MAX_BRIEF_FILE_BYTES, briefProblem, briefPrompt, looksLikeText } from "./briefPrompt";
 import { copyText } from "./clipboard";
+import { FileButton } from "./formControls";
 import { HistorySheet } from "./HistorySheet";
+import { primaryAction } from "./homePrimary";
 import { PersonaFields } from "./PersonaFields";
 import { levelSummary } from "./progress";
 import { computeReadouts } from "./readouts";
 import { ReadoutStrip } from "./ReadoutStrip";
 import { ReviewSheet } from "./ReviewSheet";
+import { ScenariosSheet } from "./ScenariosSheet";
 import { randomSeedBrief } from "./seeds";
 import { Sheet } from "./Sheet";
 import { countDue } from "./srs";
@@ -111,15 +108,12 @@ export function Home(props: {
   const [showSamples, setShowSamples] = useState(false); // W5: samples collapsed once you have own
   const [serial, setSerial] = useState(false); // 新增: build a story arc, not a one-off
   const [advancing, setAdvancing] = useState<string | null>(null); // arc id being advanced
-  const [showOtherArcs, setShowOtherArcs] = useState(false); // progressive disclosure, not a list
   // Settings is a sheet like the others: a panel appended to the bottom of a
   // long page looked like a dead button when tapped at the top.
-  const [sheet, setSheet] = useState<"history" | "vocab" | "review" | "settings" | null>(null);
+  const [sheet, setSheet] = useState<"history" | "vocab" | "review" | "settings" | "scenarios" | null>(null);
   const [manualPrompt, setManualPrompt] = useState<string | null>(null); // clipboard unavailable
   // A readout tapped on the progress strip opens History filtered to its sources.
   const [historyFocus, setHistoryFocus] = useState<string[] | null>(null);
-  const levelId = useId();
-  const briefId = useId();
   const modelId = useId();
   const textModelId = useId();
 
@@ -133,6 +127,7 @@ export function Home(props: {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const [primaryArc, ...otherArcs] = liveArcs;
   const samples = DEFAULT_SCENARIOS[lang].filter((d) => !scenarios.some((s) => s.id === d.id));
+  const primary = primaryAction({ hasKey: !!apiKey, hasArc: !!primaryArc, hasLastPracticed: !!props.lastPracticed });
   // S4 — built-in demo arcs, minus any already installed (stable ids).
   const demoArcs = DEFAULT_ARCS[lang].filter((d) => !arcs.some((a) => a.id === d.id));
   const lvl = levelSummary(profile, lang); // W6
@@ -205,7 +200,7 @@ export function Home(props: {
         );
         if (opts.fromBriefBox) setBrief((b) => (b === submitted ? "" : b));
         props.onChanged();
-        setBusy(`✓ 已建立連續劇「${arc.title}」，在頁面上方的故事線卡片按「▶」開始第 1 集。`);
+        setBusy(`✓ 已建立連續劇「${arc.title}」，在「情境與新增」或首頁的故事線卡片按「▶」開始第 1 集。`);
         return;
       }
       const sc = await generateScenario(apiKey, {
@@ -219,7 +214,7 @@ export function Home(props: {
       if (opts.fromBriefBox) setBrief((b) => (b === submitted ? "" : b));
       props.onChanged();
       if (opts.fromBriefBox) {
-        setBusy(`✓ 已建立「${sc.title}」，在頁面上方「你的情境」可以開始練習。`);
+        setBusy(`✓ 已建立「${sc.title}」，在「情境與新增」的「你的情境」可以開始練習。`);
       } else {
         setBusy("");
         props.onPractice(sc);
@@ -351,6 +346,21 @@ export function Home(props: {
   function exportCsv() {
     downloadFile("learned-items.csv", itemsToCsv(items), "text/csv");
   }
+  async function saveEdit() {
+    if (!editing) return;
+    const clean = (xs: string[]) => xs.map((x) => x.trim()).filter(Boolean);
+    await putScenario({ ...editing, objectives: clean(editing.objectives), targetPhrases: clean(editing.targetPhrases) });
+    setEditing(null);
+    props.onChanged();
+  }
+
+  function removeScenario(sc: Scenario) {
+    return withBusy("", async () => {
+      await deleteScenario(sc.id);
+      props.onChanged();
+    });
+  }
+
   async function exportScenario(sc: Scenario) {
     const pack = await buildScenarioPack(sc);
     downloadFile(`${slug(sc.title)}.json`, JSON.stringify(pack, null, 2), "application/json");
@@ -533,66 +543,9 @@ export function Home(props: {
         </div>
       )}
 
-      {/* S2 — the story line: ONE button that says what happens next. Deliberately
-          above 繼續上次 and without any episode list — the pull is「下一集」, and a
-          dashboard of episodes would kill it. */}
-      {primaryArc && (
-        <ArcNextButton
-          arc={primaryArc}
-          busy={advancing === primaryArc.id}
-          onPlay={() => playNextEpisode(primaryArc)}
-        />
-      )}
-      {otherArcs.length > 0 &&
-        (showOtherArcs ? (
-          otherArcs.map((a) => (
-            <ArcNextButton key={a.id} arc={a} busy={advancing === a.id} onPlay={() => playNextEpisode(a)} />
-          ))
-        ) : (
-          <button
-            className="btn btn--ghost btn--sm"
-            style={{ marginTop: 8 }}
-            onClick={() => setShowOtherArcs(true)}
-          >
-            其他故事線（{otherArcs.length}）
-          </button>
-        ))}
-
-      {/* One-tap replay — the most recently practiced scenario in this language.
-          「再練一次」, not「繼續上次」: the coach runs a fresh variation of the
-          same scenario (prompt.ts priorPlays), it does not resume a conversation
-          it cannot see. */}
-      {props.lastPracticed && (
-        <button
-          className="btn btn--primary btn--block"
-          style={{ marginTop: 16 }}
-          onClick={() => props.onPractice(props.lastPracticed!)}
-        >
-          ▶ 再練一次 · {props.lastPracticed.title}
-        </button>
-      )}
-
-      {/* 換個新劇情 — a new story is one tap, as cheap as continuing the old one.
-          Without this the only new-story paths were typing a brief or digging
-          the samples out from behind「顯示範例」, so practice drifted into
-          replaying the same scenario. */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="scenario-title">🎲 換個新劇情</div>
-        <p className="muted" style={{ margin: "6px 0 10px" }}>
-          不用想題目：隨機抽一個{LANG_LABEL[lang]}情境，教練會帶著你聊。
-        </p>
-        <div className="row">
-          <button className="btn btn--primary grow" onClick={() => void surprise(false)} disabled={building}>
-            {building ? "準備中…" : "單場情境"}
-          </button>
-          <button className="btn btn--ghost grow" onClick={() => void surprise(true)} disabled={building}>
-            連續劇（約 6 集）
-          </button>
-        </div>
-      </div>
-
-      {/* 1. 首次：金鑰 */}
-      {!apiKey && (
+      {/* U1 — ONE main action (homePrimary.ts). Everything else is behind
+          「情境與新增」or ⚙️; the readouts above stay a glance, not a menu. */}
+      {primary === "key" && (
         <div className="card" style={{ marginTop: 16 }}>
           <label className="label" htmlFor="key">
             連結你的 Gemini API 金鑰 — 只存在這台裝置
@@ -620,138 +573,55 @@ export function Home(props: {
           </div>
         </div>
       )}
-
-      {/* 2. 你的情境（依語言過濾） */}
-      <div className="section-title">
-        你的情境 · {LANG_LABEL[lang]}（{mine.length}）
-      </div>
-      {mine.length === 0 && (
-        <div className="card">
-          <span className="muted">還沒有{LANG_LABEL[lang]}情境 — 直接試下方範例，或在最下方建立。</span>
-        </div>
-      )}
-      {mine.map((sc) =>
-        editing?.id === sc.id ? (
-          <ScenarioEditor
-            key={sc.id}
-            value={editing}
-            onChange={setEditing}
-            onCancel={() => setEditing(null)}
-            onSave={async () => {
-              const clean = (xs: string[]) => xs.map((x) => x.trim()).filter(Boolean);
-              await putScenario({ ...editing, objectives: clean(editing.objectives), targetPhrases: clean(editing.targetPhrases) });
-              setEditing(null);
-              props.onChanged();
-            }}
-          />
-        ) : (
-          <ScenarioCard
-            key={sc.id}
-            sc={sc}
-            onPractice={() => props.onPractice(sc)}
-            onEdit={() => setEditing(sc)}
-            onExport={() => exportScenario(sc)}
-            onDelete={() =>
-              withBusy("", async () => {
-                await deleteScenario(sc.id);
-                props.onChanged();
-              })
-            }
-          />
-        ),
-      )}
-
-      {/* 3. 範例情境 — 自動展開（沒有自建時）；有自建則收合成一顆按鈕（W5 減法） */}
-      {(samples.length > 0 || demoArcs.length > 0) &&
-        (mine.length === 0 || showSamples ? (
-          <>
-            {/* S4 — demo arcs sit above the one-off samples: a story line is the
-                better first experience, and there is at most one per language. */}
-            {demoArcs.map((demo) => (
-              <div key={demo.id} className="card" style={{ marginTop: 8 }}>
-                <div className="scenario-title">📖 {demo.title}</div>
-                <div className="row" style={{ marginBottom: 8 }}>
-                  <span className="pill pill--neutral">CEFR {demo.level}</span>
-                  <span className="pill pill--neutral">約 {demo.plannedEpisodes} 集</span>
-                  <span className="pill pill--neutral">示範</span>
-                </div>
-                <p className="scenario-ctx">{demo.premise}</p>
-                <button
-                  className="btn btn--primary btn--block"
-                  onClick={() => startDemoArc(demo)}
-                  disabled={advancing === demo.id}
-                >
-                  {advancing === demo.id ? "準備第 1 集…" : "▶ 從第 1 集開始"}
-                </button>
-              </div>
-            ))}
-            <div className="section-title">範例情境 · 直接開練</div>
-            {samples.map((sc) => (
-              <div key={sc.id} className="card">
-                <div className="scenario-title">{sc.title}</div>
-                <div className="row" style={{ marginBottom: 8 }}>
-                  <span className="pill pill--neutral">CEFR {sc.level}</span>
-                  <span className="pill pill--neutral">範例</span>
-                </div>
-                <p className="scenario-ctx">{sc.contentContext}</p>
-                <button className="btn btn--primary btn--block" onClick={() => props.onPractice(sc)}>
-                  ▶ 開始練習
-                </button>
-              </div>
-            ))}
-          </>
-        ) : (
-          <button className="btn btn--ghost btn--sm" style={{ marginTop: 8 }} onClick={() => setShowSamples(true)}>
-            顯示範例（{samples.length + demoArcs.length}）
-          </button>
-        ))}
-
-      {/* 4. 新增情境（語言＝目前模式） */}
-      <div className="section-title">新增{LANG_LABEL[lang]}情境</div>
-      <div className="card">
-        <div className="row" style={{ marginBottom: 10 }}>
-          <div style={{ width: 110 }}>
-            <label className="label" htmlFor={levelId}>
-              程度
-            </label>
-            <LevelSelect id={levelId} value={profile.level} onChange={(level) => props.onProfile({ ...profile, level })} />
-          </div>
-        </div>
-        <label className="label" htmlFor={briefId}>
-          練習簡報
-        </label>
-        <textarea
-          id={briefId}
-          className="textarea"
-          value={brief}
-          onChange={(e) => setBrief(e.target.value)}
-          placeholder={
-            lang === "ja"
-              ? "例：京都の旅館にチェックイン。予約あり、夕食の時間を相談したい。"
-              : "例：和美國團隊的季度預算檢討，要為 10% 增幅辯護。"
-          }
+      {primary === "arc" && primaryArc && (
+        <ArcNextButton
+          arc={primaryArc}
+          busy={advancing === primaryArc.id}
+          onPlay={() => playNextEpisode(primaryArc)}
         />
-        {/* The hand-off to another assistant is one tap: copy a prompt that asks
-            for exactly the brief shape the generator extracts best from. */}
-        <div className="row" style={{ margin: "8px 0", alignItems: "center" }}>
-          <span className="muted grow">有簡報、報告或會議通知？先請 ChatGPT／Gemini 整理成練習簡報再貼回來。</span>
-          <button className="btn btn--ghost btn--sm" onClick={() => void copyPrompt()}>
-            複製提示詞
+      )}
+      {/* 「再練一次」, not「繼續上次」: the coach runs a fresh variation of the
+          same scenario (prompt.ts priorPlays), it does not resume a conversation
+          it cannot see. */}
+      {primary === "replay" && props.lastPracticed && (
+        <button
+          className="btn btn--primary btn--block"
+          style={{ marginTop: 16 }}
+          onClick={() => props.onPractice(props.lastPracticed!)}
+        >
+          ▶ 再練一次 · {props.lastPracticed.title}
+        </button>
+      )}
+      {/* 換個新劇情 — a new story is one tap, as cheap as continuing the old one.
+          The main action when there is nothing to continue; otherwise the one
+          secondary choice. The story-line variant lives in the sheet. */}
+      {primary !== "key" && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <div className="scenario-title">🎲 換個新劇情</div>
+          <p className="muted" style={{ margin: "6px 0 10px" }}>
+            不用想題目：隨機抽一個{LANG_LABEL[lang]}情境，教練會帶著你聊。
+          </p>
+          <button
+            className={`btn btn--block ${primary === "new" ? "btn--primary" : "btn--ghost"}`}
+            onClick={() => void surprise(false)}
+            disabled={building}
+          >
+            {building ? "準備中…" : "🎲 換個新劇情"}
           </button>
         </div>
-        {/* S2 — one control, not a second screen: the same brief either makes a
-            one-off scenario or a multi-episode story line. */}
-        <label className="row" style={{ marginBottom: 10, gap: 8, alignItems: "center" }}>
-          <input type="checkbox" checked={serial} onChange={(e) => setSerial(e.target.checked)} />
-          <span className="muted">連續劇 — 一條約 6 集、會接續下去的故事線</span>
-        </label>
-        <div className="row">
-          <button className="btn btn--primary grow" onClick={build} disabled={building}>
-            {building ? (serial ? "編寫中…" : "建立中…") : serial ? "建立連續劇" : "建立情境"}
-          </button>
-          <FileButton accept=".md,.txt,text/markdown,text/plain" label="匯入 .md" onFile={importBriefFile} />
-        </div>
-      </div>
+      )}
+
+      <button
+        className="btn btn--ghost btn--block"
+        style={{ marginTop: 16 }}
+        aria-haspopup="dialog"
+        onClick={() => {
+          setBusy(""); // a notice from the page behind must not read as the sheet's
+          setSheet("scenarios");
+        }}
+      >
+        情境與新增（{mine.length + samples.length + demoArcs.length + otherArcs.length}）
+      </button>
 
       {/* Always mounted so screen readers announce each new message. */}
       <div className="toast-slot" role="status" aria-live="polite">
@@ -889,6 +759,40 @@ export function Home(props: {
           }}
         />
       )}
+      {sheet === "scenarios" && (
+        <ScenariosSheet
+          lang={lang}
+          langLabel={LANG_LABEL[lang]}
+          onClose={() => setSheet(null)}
+          busy={busy}
+          otherArcs={otherArcs}
+          advancing={advancing}
+          onPlayArc={(a) => void playNextEpisode(a)}
+          mine={mine}
+          editing={editing}
+          onEditChange={setEditing}
+          onSaveEdit={() => void saveEdit()}
+          onPractice={props.onPractice}
+          onExport={(sc) => void exportScenario(sc)}
+          onDelete={(sc) => void removeScenario(sc)}
+          samples={samples}
+          demoArcs={demoArcs}
+          showSamples={showSamples}
+          onShowSamples={() => setShowSamples(true)}
+          onStartDemo={(d) => void startDemoArc(d)}
+          level={profile.level}
+          onLevel={(level) => props.onProfile({ ...profile, level })}
+          brief={brief}
+          onBrief={setBrief}
+          serial={serial}
+          onSerial={setSerial}
+          building={building}
+          onBuild={() => void build()}
+          onCopyPrompt={() => void copyPrompt()}
+          onImportBrief={(f) => void importBriefFile(f)}
+          onSurpriseSerial={() => void surprise(true)}
+        />
+      )}
       {sheet === "vocab" && (
         <VocabSheet lang={lang} items={items} onChanged={props.onChanged} onClose={() => setSheet(null)} />
       )}
@@ -906,210 +810,6 @@ export function Home(props: {
 }
 
 // --- building blocks ---
-
-/**
- * S2 — a story line as ONE tap. Progress is shown as episode count, never a
- * percentage or a score (no-gamification red line), and the recap deliberately
- * lives in the coach's spoken opening rather than on this card.
- */
-function ArcNextButton(props: { arc: Arc; busy: boolean; onPlay: () => void }) {
-  const { arc } = props;
-  const n = nextEpisodeNumber(arc);
-  const played = playedCount(arc);
-  // S3 — what this episode trains, in the learner's words. Only shown for an
-  // episode that already exists; never a count, a percentage or a score.
-  const canDos = episodeCanDos(arc, pendingEpisode(arc));
-  return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <div className="scenario-title">📖 {arc.title}</div>
-      <p className="muted" style={{ margin: "6px 0 10px" }}>
-        第 {n} 集 · 全劇約 {arc.plannedEpisodes} 集{played > 0 && `（已練 ${played} 集）`}
-      </p>
-      {canDos.map((c) => (
-        <p key={c.id} className="muted" style={{ margin: "0 0 6px" }}>
-          ◦ 這集練：{c.text}
-        </p>
-      ))}
-      <button className="btn btn--primary btn--block" onClick={props.onPlay} disabled={props.busy}>
-        {props.busy ? "準備下一集…" : `▶ 下一集 · 第 ${n} 集`}
-      </button>
-    </div>
-  );
-}
-
-function ScenarioCard(props: {
-  sc: Scenario;
-  onPractice: () => void;
-  onEdit: () => void;
-  onExport: () => void;
-  onDelete: () => void;
-}) {
-  const { sc } = props;
-  return (
-    <div className="card">
-      <div className="scenario-title">{sc.title}</div>
-      <div className="row" style={{ marginBottom: 8 }}>
-        <span className="pill pill--neutral">CEFR {sc.level}</span>
-      </div>
-      <p className="scenario-ctx">{sc.contentContext}</p>
-      {sc.progressNote && (
-        <p className="muted" style={{ margin: "0 0 10px" }}>
-          ↪ {sc.progressNote}
-        </p>
-      )}
-      <button className="btn btn--primary btn--block" onClick={props.onPractice}>
-        ▶ 開始練習
-      </button>
-      <div className="row" style={{ marginTop: 8 }}>
-        <button className="btn btn--ghost btn--sm" onClick={props.onEdit}>
-          編輯
-        </button>
-        <button className="btn btn--ghost btn--sm" onClick={props.onExport}>
-          匯出
-        </button>
-        <span className="grow" />
-        <button
-          className="btn btn--ghost btn--sm"
-          style={{ color: "var(--danger)", borderColor: "var(--danger)" }}
-          onClick={props.onDelete}
-        >
-          刪除
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function LangSelect(props: { value: TargetLanguage; onChange: (v: TargetLanguage) => void; id?: string }) {
-  return (
-    <select id={props.id} className="select" value={props.value} onChange={(e) => props.onChange(e.target.value as TargetLanguage)}>
-      {TARGET_LANGUAGES.map((l) => (
-        <option key={l.id} value={l.id}>
-          {l.label}（{l.hint}）
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function LevelSelect(props: { value: CEFRLevel; onChange: (v: CEFRLevel) => void; id?: string }) {
-  return (
-    <select id={props.id} className="select" value={props.value} onChange={(e) => props.onChange(e.target.value as CEFRLevel)}>
-      {CEFR_LEVELS.map((l) => (
-        <option key={l} value={l}>
-          {l}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function FileButton(props: { accept: string; label: string; onFile: (f: File) => void; small?: boolean }) {
-  return (
-    <label className={`btn btn--ghost ${props.small ? "btn--sm" : ""}`}>
-      {props.label}
-      <input
-        type="file"
-        accept={props.accept}
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) props.onFile(f);
-          e.target.value = "";
-        }}
-      />
-    </label>
-  );
-}
-
-function ScenarioEditor(props: {
-  value: Scenario;
-  onChange: (s: Scenario) => void;
-  onSave: () => void;
-  onCancel: () => void;
-}) {
-  const s = props.value;
-  const set = (patch: Partial<Scenario>) => props.onChange({ ...s, ...patch });
-  const lines = (v: string[]) => v.join("\n");
-  const toLines = (t: string) => t.split("\n");
-  const f = useId();
-
-  return (
-    <div className="card" style={{ borderColor: "var(--primary)" }}>
-      <label className="label" htmlFor={`${f}-title`}>
-        標題
-      </label>
-      <input id={`${f}-title`} className="input" value={s.title} onChange={(e) => set({ title: e.target.value })} />
-      <div className="row" style={{ margin: "10px 0" }}>
-        <div className="grow">
-          <label className="label" htmlFor={`${f}-lang`}>
-            語言
-          </label>
-          <LangSelect id={`${f}-lang`} value={s.targetLanguage} onChange={(targetLanguage) => set({ targetLanguage })} />
-        </div>
-        <div style={{ width: 96 }}>
-          <label className="label" htmlFor={`${f}-level`}>
-            程度
-          </label>
-          <LevelSelect id={`${f}-level`} value={s.level} onChange={(level) => set({ level })} />
-        </div>
-      </div>
-      <label className="label" htmlFor={`${f}-base`}>
-        第一層 — 教練框架
-      </label>
-      <textarea id={`${f}-base`} className="textarea" value={s.baseContext} onChange={(e) => set({ baseContext: e.target.value })} />
-      <label className="label" htmlFor={`${f}-content`} style={{ marginTop: 10 }}>
-        第二層 — 本次情境內容
-      </label>
-      <textarea
-        id={`${f}-content`}
-        className="textarea"
-        value={s.contentContext}
-        onChange={(e) => set({ contentContext: e.target.value })}
-      />
-      <div className="row" style={{ margin: "10px 0" }}>
-        <div className="grow">
-          <label className="label" htmlFor={`${f}-coach`}>
-            教練扮演
-          </label>
-          <input id={`${f}-coach`} className="input" value={s.coachRole} onChange={(e) => set({ coachRole: e.target.value })} />
-        </div>
-        <div className="grow">
-          <label className="label" htmlFor={`${f}-user`}>
-            你扮演
-          </label>
-          <input id={`${f}-user`} className="input" value={s.userRole} onChange={(e) => set({ userRole: e.target.value })} />
-        </div>
-      </div>
-      <label className="label" htmlFor={`${f}-obj`}>
-        練習目標（每行一個）
-      </label>
-      <textarea
-        id={`${f}-obj`}
-        className="textarea"
-        value={lines(s.objectives)}
-        onChange={(e) => set({ objectives: toLines(e.target.value) })}
-      />
-      <label className="label" htmlFor={`${f}-phrases`} style={{ marginTop: 10 }}>
-        目標語句（每行一個）
-      </label>
-      <textarea
-        id={`${f}-phrases`}
-        className="textarea"
-        value={lines(s.targetPhrases)}
-        onChange={(e) => set({ targetPhrases: toLines(e.target.value) })}
-      />
-      <div className="row" style={{ marginTop: 12 }}>
-        <button className="btn btn--primary grow" onClick={props.onSave}>
-          儲存
-        </button>
-        <button className="btn btn--ghost" onClick={props.onCancel}>
-          取消
-        </button>
-      </div>
-    </div>
-  );
-}
 
 /** One sentence for a finalize outcome — numbers only when a review exists. */
 function describeOutcome(out: FinalizeOutcome, lead: string): string {

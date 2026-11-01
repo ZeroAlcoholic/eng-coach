@@ -82,6 +82,8 @@ stateDiagram-v2
   awaiting_mic --> ended_start_failed
   live --> ended_connection: socket lost (not paused, not GoAway)
   live --> live: socket lost while paused → ▶ 接續 reconnects via handle
+  live --> live: coach says CLOSING_LINE → closing (no nudges, no turn tone)
+  live --> stopping: closing + 15 s quiet after the closing turn → onAutoStop
   awaiting_mic --> ended_start_failed: server closes before live (setup rejected)
 ```
 
@@ -117,6 +119,16 @@ stateDiagram-v2
   prompt changes. The ⚙️ override can name any live model, including the legacy
   `gemini-3.1-flash-live-preview`; whether that legacy model accepts these flags
   has not been verified — if setup is rejected, the flags are the first suspect.
+- **Turn, nudges, closing (Phase C).** When the cue passes to the learner the
+  owner plays `AudioEngine.chime()` and calls `vibrate(60)` — not on a barge-in,
+  while paused or reconnecting, or after closing (`prefs.turnCue` turns it off);
+  a tone held back by a GoAway hand-over is paid on resume. The owner
+  accumulates the coach's current turn and, on `CLOSING_LINE`, enters
+  `closing`: nudges stop for good, and once the closing turn has played, 15 s
+  without a learner word (bounded postponement while the mic hears voice) calls
+  `onAutoStop`, which Practice handles exactly like Stop. After the third nudge,
+  one more silence of the same length shows a single notice; speaking, pause and
+  stop withdraw it.
 - **Lost connection ≠ lost words.** A drop leaves the transcript on screen in
   the「連線中斷」state with「儲存這段」(runs the normal finalize) and「重新開始」.
 
