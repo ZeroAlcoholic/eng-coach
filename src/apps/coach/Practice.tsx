@@ -34,7 +34,7 @@ import {
 } from "./session";
 import { Shadowing } from "./Shadowing";
 import { dueQueue } from "./srs";
-import { pickVoice } from "./voices";
+import { pickVoice, voiceSeed } from "./voices";
 
 const RECYCLE_CAP = 5; // W7 — due items woven into a session: recycle, not drill
 
@@ -357,7 +357,7 @@ export function Practice(props: {
           priorPlays,
           ...(micro ? { micro: microInstruction(micro) } : {}),
         }),
-        voiceName: pickVoice(scenario.targetLanguage),
+        voiceName: pickVoice(scenario.targetLanguage, voiceSeed(scenario)),
         openingCue: OPENING_CUE,
         silenceNudges: silenceNudges(scenario.targetLanguage),
       };

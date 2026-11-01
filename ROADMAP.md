@@ -334,3 +334,4 @@ build all green.
 - I1 學習者身分：`LearnerProfile.persona`（稱呼／職務／公司型態，選填）。`kernel/persona.ts` 一處正規化（空白收成一格、trim、≤40 字、全空＝不存在），
   pack 匯入、⚙️ 表單、prompt 共用。prompt「── The learner ──」段：有稱呼就叫名字；英文單場在職務合用時改寫學習者角色，故事線不改（前情與角色已固定）；
   日文只用稱呼。缺席＝prompt 與改動前相同；匯出入 round-trip 有測試。
+- I2 固定音色：`pickVoice(language, seed)` 以 FNV-1a 雜湊取模，seed＝`arc?.arcId ?? scenario.id`；同一條故事線每集同一個聲音，單場重練也同聲。重連沿用 transport 既有音色。
