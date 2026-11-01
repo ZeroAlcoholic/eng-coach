@@ -361,3 +361,5 @@ build all green.
 - U2 自動開始：Practice 掛載時 `permissions.query({name:"microphone"})`，只有 granted 且 `autoStart`（CoachApp 傳入）才 `start()` 一次；prompt／denied／拋錯／無 API／
   Apple 觸控裝置（WebKit 可能讓非點擊建立的 AudioContext 停在 suspended）一律維持按鈕。任務卡在教練開場期間保持展開，學習者第一次輪到才收合。
   真機（Android Chrome 的權限查詢與自動播放）＝blocked，解鎖：使用者手機開一場。
+- U3 回顧減法：`Recap.tsx`（自 Practice 搬出）預設只顯示 can-do 自評、第一個 win、第一個 fix（焦點卡在其後）；「看完整回顧」展開 CEFR、四項分級、中英評語、
+  其餘 wins／fixes、錯誤型態、下次重點。資料與儲存不變；練習頁頂端標籤改為「目標 CEFR」以免與本次評量混淆。

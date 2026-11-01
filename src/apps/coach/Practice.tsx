@@ -11,10 +11,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getArc, listItems, listSessionsFor, putDraft, putProfile } from "../../kernel/db";
 import { describeError } from "../../kernel/errors";
 import { liveModel } from "../../kernel/overrides";
-import { ERROR_TYPE_LABEL } from "../../kernel/types";
-import type { DraftSession, LearnerProfile, Scenario, SessionReview, TranscriptTurn } from "../../kernel/types";
+import type { DraftSession, LearnerProfile, Scenario, TranscriptTurn } from "../../kernel/types";
 import { suggestReplies, translateLine, type ReplySuggestion } from "./ai";
-import { CanDoSelfCheck } from "./CanDoSelfCheck";
 import { LevelMeter, type LevelSubscribe } from "./LevelMeter";
 import { finalizeSession, PersistError, ResultsPersistError, type FinalizeOutcome } from "./finalize";
 import { describeFocus, microInstruction, type Focus } from "./focus";
@@ -22,7 +20,6 @@ import { aidedIndexAt } from "./annotate";
 import { normaliseStoryState } from "./arcs";
 import { armMicroCutoff } from "./microCutoff";
 import { weakObjectives } from "./objectives";
-import { band } from "./progress";
 import { OPENING_CUE, sessionInstruction, silenceNudges, type ArcContext } from "./prompt";
 import {
   AUTO_STOP_MS,
@@ -38,6 +35,7 @@ import { Shadowing } from "./Shadowing";
 import { dueQueue } from "./srs";
 import { livePrefs, turnCueOn } from "./livePrefs";
 import { appleTouchDevice, runAutoStart, stillIdle } from "./autoStart";
+import { Recap } from "./Recap";
 import { TaskCard, taskCardExpanded, toggledTaskCardPref } from "./TaskCard";
 import { pickVoice, voiceSeed } from "./voices";
 
@@ -619,7 +617,8 @@ export function Practice(props: {
       <h1 style={{ marginTop: 16 }}>{scenario.title}</h1>
       <div className="row" style={{ margin: "8px 0" }}>
         <span className="pill pill--neutral">{scenario.targetLanguage.toUpperCase()}</span>
-        <span className="pill pill--neutral">CEFR {scenario.level}</span>
+        {/* The scene's target level — the session's own result is in the recap. */}
+        <span className="pill pill--neutral">目標 CEFR {scenario.level}</span>
       </div>
       {!["done", "saving", "dropped"].includes(status) && (
         <TaskCard
@@ -776,76 +775,6 @@ export function Practice(props: {
   );
 }
 
-function Recap(props: { outcome: FinalizeOutcome; scenarioId: string }) {
-  const { outcome } = props;
-  switch (outcome.kind) {
-    case "micro":
-      return <b>已儲存這段加練</b>;
-    case "not-saved":
-      return (
-        <>
-          <b>這場沒有儲存</b>
-          <p className="muted" style={{ marginTop: 8 }}>
-            逐字稿還在草稿裡，回首頁可再「分析並儲存」。原因：{outcome.reason}
-          </p>
-        </>
-      );
-    case "already":
-      return (
-        <>
-          <b>這場已經分析並儲存過了</b>
-          {outcome.review && <ReviewBody review={outcome.review} scenarioId={props.scenarioId} />}
-        </>
-      );
-    case "in-progress":
-      return (
-        <>
-          <b>逐字稿已儲存</b>
-          <p className="muted" style={{ marginTop: 8 }}>
-            這場正由另一個分頁分析中，或上次分析中斷（{new Date(outcome.claimedAt).toLocaleTimeString("zh-TW")}）。
-            十分鐘後可在首頁「練習紀錄」重試評量。
-          </p>
-        </>
-      );
-    case "done":
-      return (
-        <>
-          {outcome.judge.kind === "review" ? (
-            <>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <b>已儲存本次練習</b>
-                <span className="pill pill--neutral">CEFR {outcome.judge.review.cefr}</span>
-              </div>
-              <ReviewBody review={outcome.judge.review} scenarioId={props.scenarioId} />
-            </>
-          ) : (
-            <>
-              <b>已儲存逐字稿</b>
-              <p className="muted" style={{ marginTop: 8 }}>
-                {outcome.judge.retryable
-                  ? `評量未完成：${describeError(outcome.judge.reason)}。等級與下次重點沒有更新；可在首頁「練習紀錄」重試評量。`
-                  : `這場沒有評量：${outcome.judge.reason} 等級與下次重點沒有更新——下次試著用自己的話多說幾句。`}
-              </p>
-            </>
-          )}
-          <p className="muted" style={{ marginTop: 8 }}>
-            {outcome.itemsFailed
-              ? "這次沒能抽出單字／語句（下次在練習紀錄重試評量時會一起補）。"
-              : `已新增 ${outcome.items} 個單字／語句到你的詞庫。`}
-          </p>
-          {outcome.story && !outcome.story.played && (
-            <p className="notice">故事線進度沒能記錄 — 「下一集」可能會重播這一集。</p>
-          )}
-          {outcome.story?.played && !outcome.story.advanced && (
-            <p className="muted">下一集還沒寫好；回首頁點「下一集」會再試一次。</p>
-          )}
-        </>
-      );
-    default:
-      return assertNever(outcome);
-  }
-}
-
 /** One focus and one optional next move. Skipping is the「完成」button below it;
  *  there is no nag and no second focus. The focus is the one finalize stored,
  *  so the card and the record can never disagree. */
@@ -863,43 +792,6 @@ function FocusCard(props: { outcome: FinalizeOutcome; onDrill: (f: Focus) => voi
         🎯 再練 90 秒（只練這一點）
       </button>
     </div>
-  );
-}
-
-function ReviewBody(props: { review: SessionReview; scenarioId: string }) {
-  const { review } = props;
-  return (
-    <>
-      {review.subscores && (
-        <p className="muted" style={{ marginTop: 8 }}>
-          文法 {band(review.subscores.grammar)}・詞彙 {band(review.subscores.vocab)}・流暢{" "}
-          {band(review.subscores.fluency)}・互動 {band(review.subscores.interaction)}
-        </p>
-      )}
-      {review.reviewZh && <p className="muted">{review.reviewZh}</p>}
-      {review.reviewEn && <p className="muted">{review.reviewEn}</p>}
-      {review.objectivesMet && review.objectivesMet.length > 0 && (
-        <CanDoSelfCheck scenarioId={props.scenarioId} objectives={review.objectivesMet} />
-      )}
-      {review.wins?.map((w, i) => (
-        <div key={`w${i}`} className="muted">
-          👍 {w}
-        </div>
-      ))}
-      {review.fixes?.map((f, i) => (
-        <div key={`f${i}`} className="muted">
-          🔧 {f}
-        </div>
-      ))}
-      {/* E1 — one line naming the error TYPES confirmed this session. One line,
-          not a dashboard: the value is that these accumulate and steer the coach. */}
-      {review.errors && review.errors.length > 0 && (
-        <p className="muted" style={{ marginTop: 8 }}>
-          📌 這次的錯誤型態：{review.errors.map((e) => ERROR_TYPE_LABEL[e.type]).join("・")}
-        </p>
-      )}
-      {review.progressNote && <p className="muted">↪ 下次重點：{review.progressNote}</p>}
-    </>
   );
 }
 
