@@ -119,6 +119,7 @@ export function CoachApp() {
         apiKey={apiKey}
         scenario={practicing}
         profile={profile}
+        autoStart
         onExit={() => {
           setPracticing(null);
           void reload();

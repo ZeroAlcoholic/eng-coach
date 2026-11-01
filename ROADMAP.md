@@ -358,3 +358,6 @@ build all green.
   `Home.tsx` 1143→842 行。替身（Chrome 390×844，桌機已驗證）：無金鑰 2、有故事線 3、全新 2 個 button，主按鈕不捲動可見。
   **待裁決**：有練習紀錄時讀數條（練習／詞庫／複習 chip＋最多 3 個讀數）本身是 button，會讓「不含 topbar 的 button ≤3」字面不成立；判準前提與「保留讀數條」衝突。
   Phase C 收尾：ARCHITECTURE 生命週期段同步。
+- U2 自動開始：Practice 掛載時 `permissions.query({name:"microphone"})`，只有 granted 且 `autoStart`（CoachApp 傳入）才 `start()` 一次；prompt／denied／拋錯／無 API／
+  Apple 觸控裝置（WebKit 可能讓非點擊建立的 AudioContext 停在 suspended）一律維持按鈕。任務卡在教練開場期間保持展開，學習者第一次輪到才收合。
+  真機（Android Chrome 的權限查詢與自動播放）＝blocked，解鎖：使用者手機開一場。

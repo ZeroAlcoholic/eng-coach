@@ -37,6 +37,7 @@ import {
 import { Shadowing } from "./Shadowing";
 import { dueQueue } from "./srs";
 import { livePrefs, turnCueOn } from "./livePrefs";
+import { appleTouchDevice, runAutoStart, stillIdle } from "./autoStart";
 import { TaskCard, taskCardExpanded, toggledTaskCardPref } from "./TaskCard";
 import { pickVoice, voiceSeed } from "./voices";
 
@@ -81,6 +82,9 @@ export function Practice(props: {
   scenario: Scenario;
   profile: LearnerProfile;
   onExit: () => void;
+  // U2 — start without the extra tap when the mic is already granted
+  // (autoStart.ts decides; absent = the button, as before).
+  autoStart?: boolean;
 }) {
   const { apiKey, scenario, profile } = props;
   const [status, setStatus] = useState<Status>("ready");
@@ -88,6 +92,10 @@ export function Practice(props: {
   const [notice, setNotice] = useState("");
   const [summary, setSummary] = useState<FinalizeOutcome | null>(null);
   const [turn, setTurn] = useState<Turn>("coach"); // whose turn (voice UX), drain-gated
+  // I3/U2 — the task card stays open through the coach's opening (recap, scene,
+  // plan) and folds at the learner's first turn: with auto-start there is no
+  // pre-start pause to read it in.
+  const [learnerTurnSeen, setLearnerTurnSeen] = useState(false);
   const [paused, setPaused] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [closing, setClosing] = useState(false); // C2 — the coach has said its closing line
@@ -200,7 +208,10 @@ export function Practice(props: {
           return assertNever(p);
       }
     },
-    onCue: setTurn,
+    onCue: (t) => {
+      setTurn(t);
+      if (t === "you") setLearnerTurnSeen(true);
+    },
     onTranscript: (who, text) => pushDelta(who, text),
     onCoachClip: setCoachClip,
     // An empty notice is the session withdrawing its own NUDGES_SPENT_NOTICE (C3):
@@ -305,6 +316,7 @@ export function Practice(props: {
     setStatus("connecting");
     setNotice("");
     setTranscript([]);
+    setLearnerTurnSeen(false);
     turnsRef.current = [];
     finalizingRef.current = false;
     setPaused(false);
@@ -392,6 +404,25 @@ export function Practice(props: {
       startingRef.current = false;
     }
   }
+
+  // U2 — one tap fewer per session. `alive` is per effect run, so StrictMode's
+  // mount → unmount → mount cannot start twice, and a learner who tapped 開始
+  // while the permission query was pending is not started a second time.
+  useEffect(() => {
+    let alive = true;
+    const nav = typeof navigator === "undefined" ? undefined : navigator;
+    void runAutoStart(
+      nav?.permissions,
+      !!props.autoStart && !!nav && !appleTouchDevice(nav),
+      () => stillIdle({ alive, starting: startingRef.current, phase: session().currentPhase().kind }),
+      () => void start(),
+    );
+    return () => {
+      alive = false;
+    };
+    // Mount only: the decision is about entering this screen, not about later renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** Back out while connecting / waiting for the mic. */
   function cancelStart() {
@@ -593,8 +624,8 @@ export function Practice(props: {
       {!["done", "saving", "dropped"].includes(status) && (
         <TaskCard
           scenario={scenario}
-          expanded={taskCardExpanded(status === "live", taskOpen)}
-          onToggle={status === "live" ? toggleTaskCard : undefined}
+          expanded={taskCardExpanded(status === "live" && learnerTurnSeen, taskOpen)}
+          onToggle={status === "live" && learnerTurnSeen ? toggleTaskCard : undefined}
         />
       )}
       <p className="muted">{scenario.contentContext}</p>

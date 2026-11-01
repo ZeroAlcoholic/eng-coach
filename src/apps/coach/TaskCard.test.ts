@@ -110,3 +110,13 @@ describe("prefs.taskCardOpen — the live fold is remembered", () => {
     expect(() => parsePack(pack({ taskCardOpen: "yes" }))).toThrow("taskCardOpen");
   });
 });
+
+describe("the task card through the coach's opening (I3 with U2)", () => {
+  it("Practice folds it only after the learner's first turn, and offers the toggle only then", () => {
+    const src = readFileSync(new URL("./Practice.tsx", import.meta.url), "utf8");
+    expect(src).toContain('expanded={taskCardExpanded(status === "live" && learnerTurnSeen, taskOpen)}');
+    expect(src).toContain('onToggle={status === "live" && learnerTurnSeen ? toggleTaskCard : undefined}');
+    expect(src).toMatch(/if \(t === "you"\) setLearnerTurnSeen\(true\)/);
+    expect(src).toContain("setLearnerTurnSeen(false);");
+  });
+});
