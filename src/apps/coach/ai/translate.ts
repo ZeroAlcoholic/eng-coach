@@ -3,6 +3,7 @@
 import { Type } from "@google/genai";
 
 import { field, record, string, type Parser } from "../../../kernel/validate";
+import { zhTw } from "../../../kernel/zhTw";
 import { generateJson } from "./client";
 
 const TRANSLATE_SCHEMA = {
@@ -11,7 +12,7 @@ const TRANSLATE_SCHEMA = {
   required: ["zh"],
 };
 
-export const parseTranslation: Parser<string> = (v, path) => field(record(v, path), "zh", string, path).trim();
+export const parseTranslation: Parser<string> = (v, path) => field(record(v, path), "zh", zhTw(string), path).trim();
 
 export async function translateLine(apiKey: string, text: string): Promise<string> {
   if (!text.trim()) return "";

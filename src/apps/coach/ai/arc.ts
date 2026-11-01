@@ -18,6 +18,7 @@ import {
   string,
   type Parser,
 } from "../../../kernel/validate";
+import { zhTw } from "../../../kernel/zhTw";
 import { BRIEF_RULES, generateJson, langName, transcriptText } from "./client";
 
 const STORY_STATE_SCHEMA = {
@@ -83,23 +84,30 @@ const parseStoryState: Parser<StoryState> = (v, path) => {
     const cr = record(c, p);
     return { name: field(cr, "name", nonEmptyString, p), note: field(cr, "note", string, p) };
   };
+  const characters = field(r, "characters", arrayKeeping(character), path);
+  // Checked after the keep-the-rest pass: a malformed entry still drops, but a
+  // well-formed one in Mainland usage refuses the state, not just that entry.
+  zhTw(arrayOf(nonEmptyString))(
+    characters.flatMap((c) => [c.name, c.note].filter(Boolean)),
+    `${path}.characters`,
+  );
   return {
-    characters: field(r, "characters", arrayKeeping(character), path),
-    events: field(r, "events", arrayKeeping(nonEmptyString), path),
-    openThreads: field(r, "openThreads", arrayKeeping(nonEmptyString), path),
+    characters,
+    events: field(r, "events", zhTw(arrayKeeping(nonEmptyString)), path),
+    openThreads: field(r, "openThreads", zhTw(arrayKeeping(nonEmptyString)), path),
   };
 };
 
 const parseEpisodeDraft: Parser<EpisodeDraft> = (v, path) => {
   const r = record(v, path);
   return {
-    title: field(r, "title", nonEmptyString, path),
-    contentContext: field(r, "contentContext", nonEmptyString, path),
-    coachRole: field(r, "coachRole", nonEmptyString, path),
-    userRole: field(r, "userRole", nonEmptyString, path),
-    objectives: field(r, "objectives", arrayKeeping(nonEmptyString), path),
+    title: field(r, "title", zhTw(nonEmptyString), path),
+    contentContext: field(r, "contentContext", zhTw(nonEmptyString), path),
+    coachRole: field(r, "coachRole", zhTw(nonEmptyString), path),
+    userRole: field(r, "userRole", zhTw(nonEmptyString), path),
+    objectives: field(r, "objectives", zhTw(arrayKeeping(nonEmptyString)), path),
     targetPhrases: field(r, "targetPhrases", arrayKeeping(nonEmptyString), path),
-    recap: field(r, "recap", optional(string), path) ?? "",
+    recap: field(r, "recap", optional(zhTw(string)), path) ?? "",
     canDoIndexes: field(r, "canDoIndexes", optional(arrayKeeping(number)), path) ?? [],
   };
 };
@@ -116,10 +124,10 @@ export const parseArcSeed: Parser<ArcSeed> = (v, path) => {
   const r = record(v, path);
   return {
     ...parseEpisodeGeneration(v, path),
-    arcTitle: field(r, "arcTitle", nonEmptyString, path),
-    premise: field(r, "premise", nonEmptyString, path),
-    canDos: field(r, "canDos", arrayOf(nonEmptyString), path),
-    outline: field(r, "outline", arrayKeeping(nonEmptyString), path),
+    arcTitle: field(r, "arcTitle", zhTw(nonEmptyString), path),
+    premise: field(r, "premise", zhTw(nonEmptyString), path),
+    canDos: field(r, "canDos", zhTw(arrayOf(nonEmptyString)), path),
+    outline: field(r, "outline", zhTw(arrayKeeping(nonEmptyString)), path),
   };
 };
 

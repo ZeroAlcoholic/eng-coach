@@ -4,6 +4,7 @@ import { Type } from "@google/genai";
 
 import type { CEFRLevel, Scenario, TargetLanguage } from "../../../kernel/types";
 import { arrayKeeping, field, nonEmptyString, record, type Parser } from "../../../kernel/validate";
+import { zhTw } from "../../../kernel/zhTw";
 import { FRAME_PRESETS } from "../frames";
 import { BRIEF_RULES, generateJson } from "./client";
 
@@ -28,11 +29,11 @@ export type ScenarioDraft = Pick<
 export const parseScenarioDraft: Parser<ScenarioDraft> = (v, path) => {
   const r = record(v, path);
   return {
-    title: field(r, "title", nonEmptyString, path),
-    contentContext: field(r, "contentContext", nonEmptyString, path),
-    coachRole: field(r, "coachRole", nonEmptyString, path),
-    userRole: field(r, "userRole", nonEmptyString, path),
-    objectives: field(r, "objectives", arrayKeeping(nonEmptyString), path),
+    title: field(r, "title", zhTw(nonEmptyString), path),
+    contentContext: field(r, "contentContext", zhTw(nonEmptyString), path),
+    coachRole: field(r, "coachRole", zhTw(nonEmptyString), path),
+    userRole: field(r, "userRole", zhTw(nonEmptyString), path),
+    objectives: field(r, "objectives", zhTw(arrayKeeping(nonEmptyString)), path),
     targetPhrases: field(r, "targetPhrases", arrayKeeping(nonEmptyString), path),
   };
 };

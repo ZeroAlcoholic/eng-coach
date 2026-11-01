@@ -36,6 +36,7 @@ import {
 } from "../../../kernel/validate";
 import { normaliseForMatch } from "../annotate";
 import { medianReview, numToCefr } from "../progress";
+import { quotedFrom, zhTw } from "../../../kernel/zhTw";
 import { generateJson, type GenerateOptions } from "./client";
 
 export const REVIEW_SCHEMA = {
@@ -140,6 +141,7 @@ export function reviewParser(learnerTurns: string[], coachTurns: string[] = []):
     const r = record(v, path);
     return { objective: field(r, "objective", nonEmptyString, path), met: field(r, "met", boolean, path) };
   };
+  const learnerQuote = quotedFrom(learnerTurns);
   const score = integerIn(1, 6);
   return (v, path) => {
     const r = record(v, path);
@@ -154,7 +156,7 @@ export function reviewParser(learnerTurns: string[], coachTurns: string[] = []):
     // fluency (pace, hesitation) is mostly inaudible in text. The model's own
     // `cefr` label is not used, so a "B1+" or "A2/B1" must not void the sample.
     const cefr = numToCefr((subscores.grammar + subscores.vocab + subscores.interaction) / 3);
-    const list = (key: string) => field(r, key, optional(arrayKeeping(nonEmptyString)), path);
+    const list = (key: string) => field(r, key, optional(zhTw(arrayKeeping(nonEmptyString), learnerQuote)), path);
     const errors = field(r, "errors", optional(arrayKeeping(parseError)), path);
     const l1Fallbacks = field(r, "l1Fallbacks", optional(arrayKeeping(parseFallback)), path)?.slice(0, MAX_L1_FALLBACKS);
     const pronunciationNotes = field(r, "pronunciationNotes", optional(arrayKeeping(parseNote)), path)?.slice(
@@ -165,7 +167,7 @@ export function reviewParser(learnerTurns: string[], coachTurns: string[] = []):
       cefr,
       subscores,
       reviewEn: field(r, "reviewEn", string, path).trim(),
-      reviewZh: field(r, "reviewZh", string, path).trim(),
+      reviewZh: field(r, "reviewZh", zhTw(string, learnerQuote), path).trim(),
       progressNote: field(r, "progressNote", string, path).trim(),
       wins: list("wins"),
       fixes: list("fixes"),

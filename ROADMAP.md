@@ -325,3 +325,6 @@ build all green.
   各 capability 不再自寫中文變體句。規則只管中文，日文與逐字引文不受影響。判準：替身測試八個 capability
   的 prompt 皆以規則結尾，且由資料夾掃描推導出應測的檔；`grep -rn "Traditional Chinese" src/apps/coach/ai`
   只命中 `client.ts`。
+- T2 驗證器：`kernel/zhTw.ts` 的 `zhTwProblem` 以閉集比對（57 個簡體字，全部避開日文常用漢字；中國用語以繁體寫法列出，
+  質量／交互只列中國用法的搭配）。模型寫的每個中文欄位（情境、劇集、前情提要、故事狀態、can-do、詞義、提示、評語、翻譯）
+  經 `zhTw(parser)` 檢查，命中即拒絕該樣本並指出命中字詞；評審引用學習者原話的漢字片段不檢查。

@@ -4,6 +4,7 @@ import { Type } from "@google/genai";
 
 import type { Scenario, TranscriptTurn } from "../../../kernel/types";
 import { arrayKeeping, field, nonEmptyString, record, type Parser } from "../../../kernel/validate";
+import { zhTw } from "../../../kernel/zhTw";
 import { generateJson, langName, transcriptText } from "./client";
 
 const SUGGEST_SCHEMA = {
@@ -28,7 +29,7 @@ export interface ReplySuggestion {
 
 const parseSuggestion: Parser<ReplySuggestion> = (v, path) => {
   const r = record(v, path);
-  return { say: field(r, "say", nonEmptyString, path), gloss: field(r, "gloss", nonEmptyString, path) };
+  return { say: field(r, "say", nonEmptyString, path), gloss: field(r, "gloss", zhTw(nonEmptyString), path) };
 };
 
 export const parseSuggestions: Parser<ReplySuggestion[]> = (v, path) =>

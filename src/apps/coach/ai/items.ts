@@ -20,6 +20,7 @@ import {
   string,
   type Parser,
 } from "../../../kernel/validate";
+import { zhTw } from "../../../kernel/zhTw";
 import { frameAnchors } from "../uses";
 import { generateJson, langName, transcriptText } from "./client";
 
@@ -67,7 +68,7 @@ const parseRawItem: Parser<RawItem> = (v, path) => {
   return {
     kind,
     text: field(r, "text", nonEmptyString, path),
-    meaning: field(r, "meaning", nonEmptyString, path),
+    meaning: field(r, "meaning", zhTw(nonEmptyString), path),
     ...(reading ? { reading } : {}),
     ...(example ? { example } : {}),
     ...(frame ? { frame } : {}),
