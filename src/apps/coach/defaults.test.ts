@@ -40,6 +40,8 @@ const SHIPPED_IDS = [
   "def-en-ica-press-interview",
   "def-en-ica-llm-qa-advice",
   "def-en-ica-session-chair",
+  "def-en-ica-ask-speaker",
+  "def-en-ica-gala-dinner",
   "def-ja-ica-meishi",
 ];
 

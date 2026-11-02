@@ -10,8 +10,9 @@ import globals from "globals";
 
 export default tseslint.config(
   // Lint the product source. Skip build output, the vanilla AudioWorklet asset
-  // (runs in worklet scope, not browser), and the throwaway spike diagnostic page.
-  { ignores: ["dist/**", "node_modules/**", "public/**", "src/spike/**"] },
+  // (runs in worklet scope, not browser), the throwaway spike diagnostic page,
+  // and .tmp/ (gitignored scratch that CI never sees).
+  { ignores: ["dist/**", "node_modules/**", "public/**", "src/spike/**", ".tmp/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   jsxA11y.flatConfigs.recommended,

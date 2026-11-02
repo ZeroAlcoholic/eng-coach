@@ -46,6 +46,10 @@ export interface Scenario {
   // report parsing, no retained eval documents.
   progressNote?: string;
   source?: string; // the original brief/markdown this scenario was built from
+  // Set on a scene that is a peer discussion (a chat at a congress) rather than a
+  // meeting to win: the coach shares views and asks the learner's, instead of
+  // digging, pushing back and checking facts. Absent = the meeting default.
+  mode?: "discussion";
   // S1 — set when this scenario IS one episode of a story arc. Absent on every
   // standalone scenario (and on every pack written before S1), so the whole arc
   // feature is additive: nothing reads this unless the scenario opted in.

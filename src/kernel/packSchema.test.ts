@@ -64,6 +64,12 @@ describe("parsePack — one invalid record refuses the whole pack", () => {
     expect(() => parsePack({ ...valid, scenarios: [{ ...scenario, targetLanguage: "fr" }] })).toThrow(/scenarios\[0\]\.targetLanguage/);
   });
 
+  it("keeps a scenario's discussion mode and refuses an unknown mode", () => {
+    expect(parsePack({ ...valid, scenarios: [{ ...scenario, mode: "discussion" }] }).scenarios[0].mode).toBe("discussion");
+    expect(parsePack(valid).scenarios[0]).not.toHaveProperty("mode");
+    expect(() => parsePack({ ...valid, scenarios: [{ ...scenario, mode: "debate" }] })).toThrow(/scenarios\[0\]\.mode/);
+  });
+
   it("refuses a scenario missing objectives", () => {
     const noObjectives: Record<string, unknown> = { ...scenario };
     delete noObjectives.objectives;

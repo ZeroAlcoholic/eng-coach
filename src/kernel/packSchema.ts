@@ -169,6 +169,7 @@ const parseScenario: Parser<Scenario> = (v, path) => {
     targetPhrases: field(r, "targetPhrases", optStrings, path) ?? [],
     progressNote: field(r, "progressNote", optStr, path),
     source: field(r, "source", optStr, path),
+    mode: field(r, "mode", optional(enumOf(["discussion"] as const)), path),
     arc: arc
       ? {
           arcId: field(arc, "arcId", nonEmptyString, `${path}.arc`),

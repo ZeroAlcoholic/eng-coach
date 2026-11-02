@@ -180,19 +180,31 @@ const SCAFFOLD: Record<TargetLanguage, Record<CEFRLevel, string>> = {
 const JA_TEACH_LINE =
   "say it slowly once, then once more chunked mora by mora (o-ne-ga-i-shi-ma-su), give the 繁中 meaning, then have them say it";
 
+const DIG_DEEPER =
+  "- When they answer, DIG DEEPER before moving on: ask why, ask for an example, ask what they would do if…, push back gently on their view. A short answer is an invitation to follow up, not to change topic.";
+// A discussion scene is a chat between peers about material the learner did not
+// write word by word: digging and pushing back turn it into a cross-examination,
+// and asking for the material's facts turns it into a recall test.
+const DISCUSSION_FOLLOW_UP =
+  "- When they answer, react to what they said with your own view or experience, then ask about THEIR opinion or experience. Never ask them to recall facts, figures or details from the situation: if they hesitate on one, supply it yourself and move on, and accept rough answers. Disagree at most once in the whole conversation, gently, to invite their view.";
+
 /**
  * The coach owns the agenda. English (work, B1+): a real discussion — new
- * material every turn, follow-ups that dig. Japanese (travel, a learner who
+ * material every turn, follow-ups that dig — or, in a discussion-mode scene,
+ * follow-ups that trade views and never quiz. Japanese (travel, a learner who
  * understands but can barely produce): the SAME ownership, but every beat is
  * a short exchange that is TAUGHT before it is elicited, follow-ups are
  * simple choices rather than "why", and each new bit of Japanese is glossed in
  * Traditional Chinese — a why-question or a counter-argument would only stall
  * them, which is the opposite of what the block is for.
  */
-function carryTheConversation(lang: TargetLanguage, level: CEFRLevel): string[] {
+function carryTheConversation(lang: TargetLanguage, level: CEFRLevel, discussion: boolean): string[] {
+  const beats = discussion
+    ? "concrete things to share, compare or ask each other's view on"
+    : "concrete things to ask about, decide, object to or resolve";
   const head = [
     "── You carry the conversation — the learner NEVER has to invent the topic ──",
-    "The situation above is yours to run. Before you start, lay out for yourself 4–6 BEATS this conversation should move through (concrete things to ask about, decide, object to or resolve — drawn from the situation and the objectives below). Then drive through them in character, one at a time.",
+    `The situation above is yours to run. Before you start, lay out for yourself 4–6 BEATS this conversation should move through (${beats} — drawn from the situation and the objectives below). Then drive through them in character, one at a time.`,
   ];
   const tail = [
     "- When a beat is done — or stalls after one hint — MOVE to the next beat yourself. Never ask what they want to talk about, and never leave a silence for them to fill with a topic.",
@@ -211,7 +223,7 @@ function carryTheConversation(lang: TargetLanguage, level: CEFRLevel): string[] 
   return [
     ...head,
     "- EVERY turn adds something NEW from your side (a piece of information, an opinion, a request, a small complication, a choice to make) AND ends with ONE specific OPEN question about it (never yes/no). A question alone is not a turn.",
-    "- When they answer, DIG DEEPER before moving on: ask why, ask for an example, ask what they would do if…, push back gently on their view. A short answer is an invitation to follow up, not to change topic.",
+    discussion ? DISCUSSION_FOLLOW_UP : DIG_DEEPER,
     cefrToNum(level) <= cefrToNum("B1")
       ? "- When they answer in fragments or keywords, GATHER their words into ONE complete natural English sentence and have them say that full version back once — then continue."
       : "- When they answer in fragments, fold the complete natural sentence into your own reply and move on; ask for a repeat ONLY when the fragment carried a meaning error. At this level forced repetition breaks the discussion.",
@@ -253,7 +265,7 @@ export function composeSystemInstruction(
     `── Difficulty — calibrate to CEFR ${s.level}${jlpt} ──`,
     LEVEL_GUIDE[s.level],
     "",
-    ...carryTheConversation(s.targetLanguage, s.level),
+    ...carryTheConversation(s.targetLanguage, s.level, s.mode === "discussion"),
     "",
     "── Each turn — YOUR #1 JOB is to get the LEARNER talking ──",
     "Maximise their speaking time and minimise yours; every turn must leave them with something to say.",

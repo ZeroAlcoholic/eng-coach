@@ -544,3 +544,31 @@ describe("closing — one line, said last, in every session kind (C2)", () => {
     expect(micro).toContain(`say exactly「${CLOSING_LINE}」as your final words`);
   });
 });
+
+describe("composeSystemInstruction — discussion mode swaps how the coach follows up", () => {
+  const meeting = composeSystemInstruction(scenario, DEFAULT_PROFILE);
+  const discussion = composeSystemInstruction({ ...scenario, mode: "discussion" }, DEFAULT_PROFILE);
+
+  it("a meeting digs and pushes back; a discussion shares views and never quizzes", () => {
+    expect(meeting).toContain("DIG DEEPER");
+    expect(meeting).toContain("object to or resolve");
+    expect(meeting).not.toContain("Never ask them to recall");
+    expect(discussion).not.toContain("DIG DEEPER");
+    expect(discussion).not.toContain("object to or resolve");
+    expect(discussion).toContain("Never ask them to recall facts, figures or details");
+    expect(discussion).toContain("supply it yourself");
+  });
+
+  it("the Japanese track keeps its own easy follow-ups either way", () => {
+    const ja = { ...scenario, targetLanguage: "ja" as const, level: "A2" as const };
+    const a = composeSystemInstruction(ja, DEFAULT_PROFILE);
+    const b = composeSystemInstruction({ ...ja, mode: "discussion" }, DEFAULT_PROFILE);
+    for (const out of [a, b]) {
+      expect(out).toContain("Follow up with EASY moves");
+      expect(out).not.toContain("DIG DEEPER");
+    }
+    expect(a).toContain("object to or resolve");
+    expect(b).toContain("share, compare or ask each other's view on");
+    expect(b).not.toContain("object to or resolve");
+  });
+});
