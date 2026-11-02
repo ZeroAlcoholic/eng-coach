@@ -43,6 +43,7 @@ const SHIPPED_IDS = [
   "def-en-ica-ask-speaker",
   "def-en-ica-gala-dinner",
   "def-ja-ica-meishi",
+  "def-ja-ica-iaj-chat",
 ];
 
 // A named person leads the role — English track "First Last，…", Japanese

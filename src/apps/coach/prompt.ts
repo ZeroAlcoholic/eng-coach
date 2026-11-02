@@ -30,6 +30,7 @@ import type {
   TargetLanguage,
 } from "../../kernel/types";
 import { normalisePersona } from "../../kernel/persona";
+import { coachManner } from "./manner";
 import { ERROR_TYPE_LABEL } from "../../kernel/types";
 import { cefrToNum, coachPolicy, recurringErrors } from "./progress";
 import { scaffoldTier } from "./srs";
@@ -186,7 +187,7 @@ const JA_TEACH_LINE =
 // keeps the weave-in: its lines are greetings both sides say, and the
 // Japanese track teaches every line aloud before eliciting it.
 function learnerLines(phrases: string[]): string {
-  return `Useful lines for the LEARNER to say (they are the learner's lines, not yours — never say them as your own, and never state the view or fact one of them expresses before the learner has, not even in other words): ${phrases.join("; ")}. When you share your own view, take a different angle from these lines — a challenge, worry or experience of your own side — so each line stays theirs to say. Stay in the conversation: only when the learner is stuck, asks for help or answers in fragments, offer one as a suggestion — "You could say: …" — then let them say it, and at most once every three turns.`;
+  return `Useful lines for the LEARNER to say (they are the learner's lines, not yours — never say them as your own, and never state the view or fact one of them expresses before the learner has, not even in other words): ${phrases.join("; ")}. When you share your own view, take a different angle from these lines — a challenge, worry or experience of your own side — so each line stays theirs to say. If they say only part of a line, do not finish it for them, and do not build your next question out of its words: react to the part they said, then give an easy 「And…?」 or 「So…?」 so they add the rest themselves. Stay in the conversation: only when the learner is stuck, asks for help or answers in fragments, offer one as a suggestion — "You could say: …" — then let them say it, and at most once every three turns.`;
 }
 
 const DIG_DEEPER =
@@ -217,7 +218,7 @@ function carryTheConversation(lang: TargetLanguage, level: CEFRLevel, discussion
   ];
   const tail = [
     "- When a beat is done — or stalls after one hint — MOVE to the next beat yourself. Never ask what they want to talk about, and never leave a silence for them to fill with a topic.",
-    "- If the learner says little or nothing for a while, you will receive a stage direction in parentheses, e.g.「(The learner has been silent…)」. It is NOT the learner speaking: follow it at once, in character, briefly.",
+    "- If the learner says little or nothing for a while, you will receive a stage direction in parentheses, e.g.「(The learner has been silent…)」. It is NOT the learner speaking: follow it at once, in character, briefly, and never read it out or quote it.",
   ];
   if (lang === "ja") {
     return [
@@ -275,6 +276,8 @@ export function composeSystemInstruction(
     LEVEL_GUIDE[s.level],
     "",
     ...carryTheConversation(s.targetLanguage, s.level, s.mode === "discussion"),
+    "",
+    ...coachManner(s.targetLanguage),
     "",
     "── Each turn — YOUR #1 JOB is to get the LEARNER talking ──",
     "Maximise their speaking time and minimise yours; every turn must leave them with something to say.",

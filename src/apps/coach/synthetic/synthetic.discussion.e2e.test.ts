@@ -98,7 +98,25 @@ const SCRIPTS: Script[] = [
       "I'm afraid I have to go. My colleagues are waiting for the shuttle.",
     ],
   },
+  {
+    id: "def-ja-ica-iaj-chat",
+    aboutTalk: false,
+    lines: [
+      "はじめまして。リンです。台湾から来ました。",
+      "よろしくお願いします。",
+      "東京は楽しいです。",
+      "すみません、日本語は少しだけです。",
+      "英語で話してもいいですか。",
+      "ありがとうございます。",
+    ],
+  },
 ];
+
+// Stock praise, counted for the report only: the manner block asks for praise
+// of the specific thing the learner did, so a falling count is the reading.
+const STOCK_PRAISE = /\b(?:great job|good job|well done|fantastic|perfect|excellent|wonderful|amazing|brilliant)\b/gi;
+
+const sceneOf = (id: string): Scenario | undefined => [...ICA2026_SCENARIOS.en, ...ICA2026_SCENARIOS.ja].find((s) => s.id === id);
 
 // A coach question that needs the talk's facts: asks for a count, a share, a
 // figure, or what the learner remembers.
@@ -107,7 +125,7 @@ const RECALL =
 // A coach question that asks for the learner's own view or experience,
 // including how their side does things.
 const OPINION =
-  /\b(what do you think|what's your (?:view|take|opinion)|your (?:\w+ )?(?:views?|opinion|experience|thoughts|concerns?|take)|what are your|how do you feel|in your experience|do you think|how about (?:you|in taiwan)|what about you|how (?:does|do) your (?:company|team|side|clients|customers|colleagues)|how do you (?:handle|approach|see|manage|ensure)|do you (?:have|use) [^?]*\byour|what do you (?:usually|like to) do|do you (?:usually|like|enjoy|prefer)|what kind of [^?]*\byou\b|would you say)\b|你覺得|你認為|你的看法|看法嗎/i;
+  /\b(what do you think|what's your (?:view|take|opinion)|your (?:\w+ )?(?:views?|opinion|experience|thoughts|concerns?|take|perspective)|what are your|how do you feel|in your experience|do you think|how about (?:you|in taiwan)|what about you|how (?:does|do) your (?:company|team|side|clients|customers|colleagues)|how do you (?:actually |usually )?(?:handle|approach|see|manage|ensure|decide)|do you (?:have|use) [^?]*\byour|do you have a favou?rite|what do you (?:usually|like to) do|do you (?:also |ever |really )?(?:usually|like|enjoy|prefer)|do you (?:\w+ )?(?:face|encounter|run into)|what kind of [^?]*\byou\b|would you say)\b|你覺得|你認為|你的看法|看法嗎/i;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function waitFor(pred: () => boolean, ms: number): Promise<boolean> {
@@ -142,13 +160,24 @@ describe("discussion-mode matchers", () => {
     expect(OPINION.test("Is your talk tomorrow?")).toBe(false);
     expect(OPINION.test("Could you explain how the model was trained?")).toBe(false);
     expect(OPINION.test("Do you have any questions?")).toBe(false);
+    // Questions about the learner's own habits, likes and side's experience.
+    expect(OPINION.test("Do you also enjoy exploring local food spots on your weekends?")).toBe(true);
+    expect(OPINION.test("Do you have a favorite trail you always visit?")).toBe(true);
+    expect(OPINION.test("When you do find high-risk tools, do you encounter any pushback from the business teams?")).toBe(true);
+    expect(OPINION.test("Do you face similar oversight challenges in Taiwan?")).toBe(true);
+    expect(OPINION.test("How do you actually decide the risk level for each AI tool?")).toBe(true);
+    expect(OPINION.test("Do you also have the slides?")).toBe(false);
+    expect(OPINION.test("Can you repeat that?")).toBe(false);
+    expect(OPINION.test("How do you spell that?")).toBe(false);
+    expect(OPINION.test("From your perspective, how does this shift the agent's role?")).toBe(true);
+    expect(OPINION.test("Could you put that in perspective for our readers?")).toBe(false);
     expect(OPINION.test("How many tools were high risk?")).toBe(false);
     expect(RECALL.test("How do you ensure the high risk ones are properly monitored?")).toBe(false);
   });
 
   it("every script names a shipped discussion scene and fits the line cap", () => {
     for (const s of SCRIPTS) {
-      expect(ICA2026_SCENARIOS.en.find((x) => x.id === s.id)?.mode, s.id).toBe("discussion");
+      expect(sceneOf(s.id)?.mode, s.id).toBe("discussion");
       expect(s.lines.length, s.id).toBeLessThanOrEqual(MAX_LINES);
     }
   });
@@ -183,7 +212,7 @@ async function runScene(scenario: Scenario, script: Script, lines: Map<string, A
     systemInstruction: sessionInstruction({ scenario, profile: DEFAULT_PROFILE, dueItems: [], weakObjectives: [] }),
     voiceName: "Puck",
     openingCue: OPENING_CUE,
-    silenceNudges: silenceNudges("en"),
+    silenceNudges: silenceNudges(scenario.targetLanguage),
   });
   const live = () => session.currentPhase().kind === "live";
   let elapsedMs = 0;
@@ -220,35 +249,40 @@ describe.skipIf(!enabled)("synthetic E2E — congress scenes stay discussions (p
 
   for (const script of SCRIPTS) {
     it(
-      `${script.id}: asks the learner's view, keeps to its own lines and Taiwan usage${script.aboutTalk ? ", never quizzes on the talk" : ""}`,
+      `${script.id}: ${sceneOf(script.id)?.targetLanguage === "ja" ? "keeps to Taiwan usage" : "asks the learner's view, keeps to its own lines and Taiwan usage"}${script.aboutTalk ? ", never quizzes on the talk" : ""}`,
       async () => {
-        const scenario = ICA2026_SCENARIOS.en.find((s) => s.id === script.id)!;
+        const scenario = sceneOf(script.id)!;
+        // The Japanese coach teaches each line before it asks for it, and a
+        // greeting has no view to ask about: neither check means anything there.
+        const english = scenario.targetLanguage === "en";
         const { transcript, sent, elapsedMs } = await runScene(scenario, script, lines);
 
         const coach = transcript.filter((t) => t.who === "coach");
         const coachQs = coach.flatMap((t) => questions(t.text));
         const recall = script.aboutTalk ? coachQs.filter((q) => RECALL.test(q)) : [];
-        const opinion = coachQs.filter((q) => OPINION.test(q));
+        const opinion = english ? coachQs.filter((q) => OPINION.test(q)) : [];
         // The first coach turn is the out-of-role scene-setter, which may preview lines.
         const firstCoach = transcript.findIndex((t) => t.who === "coach");
         const echoes = transcript.flatMap((t, i) => {
-          if (t.who !== "coach" || i === firstCoach) return [];
+          if (!english || t.who !== "coach" || i === firstCoach) return [];
           const previousUser = transcript.slice(0, i).reverse().find((u) => u.who === "user")?.text ?? "";
           return parroted(t.text, scenario.targetPhrases, previousUser);
         });
         const zh = coach.map((t) => zhTwProblem(t.text)).filter((p): p is string => p !== null);
         const stray = coach.flatMap((t) => strayScript(t.text));
+        const praise = coach.flatMap((t) => t.text.match(STOCK_PRAISE) ?? []);
         const report = [
           `# 討論模式合成讀數（${new Date().toISOString()}）`,
           `- 情境：${scenario.id}；模型：Live ${DEFAULT_LIVE_MODEL}`,
           `- 學習者句數：${sent}／上限 ${MAX_LINES}；socket 時間：${Math.round(elapsedMs / 1000)} 秒／上限 ${MAX_SESSION_MS / 1000} 秒`,
-          `- 教練問句：${coachQs.length}；要求回想事實／數字：${script.aboutTalk ? recall.length : "（非報告情境，不判）"}；詢問學習者看法：${opinion.length}`,
+          `- 教練問句：${coachQs.length}；要求回想事實／數字：${script.aboutTalk ? recall.length : "（非報告情境，不判）"}；詢問學習者看法：${english ? opinion.length : "（日語寒暄，不判）"}`,
           ...recall.map((q) => `  - 回想題：${q.trim()}`),
           ...opinion.map((q) => `  - 看法題：${q.trim()}`),
-          `- 教練把學習者目標句當自己台詞：${echoes.length}`,
+          `- 教練把學習者目標句當自己台詞：${english ? echoes.length : "（日語逐句教，不判）"}`,
           ...echoes.map((e) => `  - ${e}`),
           `- 教練中文的台灣用語問題：${zh.length}`,
           ...zh.map((p) => `  - ${p}`),
+          `- 教練套話式稱讚（只記錄）：${praise.length}／教練發言 ${coach.length} 次`,
           `- 教練輸出夾雜他國文字：${stray.length}`,
           ...stray.map((w) => `  - ${w}`),
           "",
@@ -262,7 +296,7 @@ describe.skipIf(!enabled)("synthetic E2E — congress scenes stay discussions (p
         expect(elapsedMs).toBeLessThanOrEqual(MAX_SESSION_MS);
         expect(sent).toBeGreaterThanOrEqual(4);
         expect(recall).toEqual([]);
-        expect(opinion.length).toBeGreaterThanOrEqual(1);
+        if (english) expect(opinion.length).toBeGreaterThanOrEqual(1);
         expect(echoes).toEqual([]);
         expect(zh).toEqual([]);
         expect(stray).toEqual([]);
