@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_SCENARIOS } from "./defaults";
 import { ICA2026_SCENARIOS } from "./defaultsIca2026";
-import { EN_CONGRESS_FRAME, EN_ENDING, FRAME_PRESETS, JA_CONGRESS_FRAME, JA_ENDING } from "./frames";
+import { EN_CLOSING_CHECK, EN_CONGRESS_FRAME, FRAME_PRESETS, JA_CLOSING_CHECK, JA_CONGRESS_FRAME } from "./frames";
 
 // A phrase that carries a figure ("a 55.8% win rate") asks the learner to
 // recall the talk's numbers; the congress set is a discussion, so phrases
@@ -27,10 +27,16 @@ describe("ICA 2026 scenarios are discussions, not recall tests", () => {
     for (const s of ICA2026_SCENARIOS.ja) expect(s.baseContext, s.id).toBe(JA_CONGRESS_FRAME);
   });
 
-  it("the congress frames close on the presets' own closing rule", () => {
-    expect("Run a conversation. Keep it warm.".endsWith(EN_ENDING)).toBe(false); // the check bites
-    for (const f of [FRAME_PRESETS.en, EN_CONGRESS_FRAME]) expect(f.endsWith(EN_ENDING)).toBe(true);
-    for (const f of [FRAME_PRESETS.ja, JA_CONGRESS_FRAME]) expect(f.endsWith(JA_ENDING)).toBe(true);
+  it("the congress frames drop the presets' 'say the phrases in your own turns' and keep the closing check", () => {
+    const recycleEn = "phrases naturally in your own turns";
+    const recycleJa = "自分のセリフにも自然に織り込んで";
+    expect(FRAME_PRESETS.en).toContain(recycleEn); // the check bites on the preset
+    expect(FRAME_PRESETS.ja).toContain(recycleJa);
+    expect(EN_CONGRESS_FRAME).not.toContain(recycleEn);
+    expect(JA_CONGRESS_FRAME).not.toContain(recycleJa);
+    for (const f of [FRAME_PRESETS.en, EN_CONGRESS_FRAME]) expect(f.endsWith(EN_CLOSING_CHECK)).toBe(true);
+    for (const f of [FRAME_PRESETS.ja, JA_CONGRESS_FRAME]) expect(f.endsWith(JA_CLOSING_CHECK)).toBe(true);
+    expect("Keep it warm.".endsWith(EN_CLOSING_CHECK)).toBe(false); // the check bites
   });
 
   it("target phrases carry no figures", () => {

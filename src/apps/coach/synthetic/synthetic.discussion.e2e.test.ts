@@ -3,8 +3,8 @@
 // only the gist and says so. Paid and opt-in:
 //   SYNTH=1 npx vitest run src/apps/coach/synthetic/synthetic.discussion.e2e.test.ts
 // What it can prove is「合成已驗證」: that, in this run, the live coach asked
-// for the learner's view and asked no question that needs the talk's facts or
-// figures. Recall questions are matched by wording, so the transcript is also
+// for the learner's view, asked no question that needs the talk's facts or
+// figures, and never spoke the learner's target lines as its own. Recall questions are matched by wording, so the transcript is also
 // written out for a reader to check.
 //
 // Cost is bounded in code: ≤ MAX_LINES learner lines, ≤ MAX_SESSION_MS on the
@@ -53,6 +53,25 @@ const RECALL =
 const OPINION =
   /\b(what do you think|what's your (?:view|take|opinion)|your (?:view|opinion|experience|thoughts)|how do you feel|in your experience|do you think|how about (?:you|in taiwan)|what about you|how (?:does|do) your (?:company|team|side)|how do you (?:handle|approach|see|manage|ensure)|do you (?:have|use) [^?]*\byour)\b/i;
 
+// The coach saying one of the learner's target STATEMENTS as its own: the turn
+// contains it but does not hand it over as a suggestion. Question phrases are
+// left out — "How does your company handle this?" fits either side's mouth;
+// a statement about the learner's own work or gaps fits only theirs.
+const SUGGESTS = /\b(?:you (?:could|can|might)(?: \w+)? (?:say|try)|try saying|could you try)\b/i;
+// Live transcripts use curly apostrophes and dashes; compare letters only.
+const norm = (t: string) =>
+  t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim();
+// Judged per sentence, so one suggestion does not excuse a line parroted
+// elsewhere in the same turn.
+function parroted(turn: string, phrases: string[]): string[] {
+  const said = turn
+    .split(/(?<=[.!?。！？])\s+/)
+    .filter((sentence) => !SUGGESTS.test(sentence))
+    .map(norm)
+    .join(" | ");
+  return phrases.filter((p) => !/[?？]\s*$/.test(p) && norm(p).length > 0 && said.includes(norm(p)));
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function waitFor(pred: () => boolean, ms: number): Promise<boolean> {
   const until = Date.now() + ms;
@@ -81,6 +100,18 @@ describe("discussion-mode matchers", () => {
     expect(OPINION.test("Do you have any questions?")).toBe(false);
     expect(OPINION.test("How many tools were high risk?")).toBe(false);
     expect(RECALL.test("How do you ensure the high risk ones are properly monitored?")).toBe(false);
+  });
+
+  it("parroted catches the counterpart saying a learner line and passes a suggestion", () => {
+    const p = ["I don't remember the exact details, but I can check and get back to you."];
+    expect(parroted("Sure. I don't remember the exact details, but I can check and get back to you.", p)).toEqual(p);
+    expect(parroted("Sure. I don’t remember the exact details — but I can check and get back to you!", p)).toEqual(p);
+    expect(parroted(`You could say: "I don't remember the exact details, but I can check and get back to you."`, p)).toEqual([]);
+    expect(parroted("We review every tool once a year.", p)).toEqual([]);
+    expect(parroted("You could charmingly say: I don't remember the exact details, but I can check and get back to you.", p)).toEqual([]);
+    const two = ["Most of our tools are low risk.", "I don't remember the exact details."];
+    expect(parroted("You could say: Most of our tools are low risk. And honestly, I don't remember the exact details.", two)).toEqual([two[1]]);
+    expect(parroted("Interesting. How does your company handle this?", ["How does your company handle this?"])).toEqual([]);
   });
 });
 
@@ -149,6 +180,9 @@ describe.skipIf(!enabled)("synthetic E2E — a congress scene stays a discussion
 
       const coachQs = transcript.filter((t) => t.who === "coach").flatMap((t) => questions(t.text));
       const recall = coachQs.filter((q) => RECALL.test(q));
+      // The first coach turn is the out-of-role scene-setter, which may preview lines.
+      const inRole = transcript.filter((t) => t.who === "coach").slice(1);
+      const echoes = inRole.flatMap((t) => parroted(t.text, SCENARIO.targetPhrases));
       const opinion = coachQs.filter((q) => OPINION.test(q));
       const report = [
         `# 討論模式合成讀數（${new Date().toISOString()}）`,
@@ -157,6 +191,8 @@ describe.skipIf(!enabled)("synthetic E2E — a congress scene stays a discussion
         `- 教練問句：${coachQs.length}；要求回想事實／數字：${recall.length}；詢問學習者看法：${opinion.length}`,
         ...recall.map((q) => `  - 回想題：${q.trim()}`),
         ...opinion.map((q) => `  - 看法題：${q.trim()}`),
+        `- 教練把學習者目標句當自己台詞：${echoes.length}`,
+        ...echoes.map((e) => `  - ${e}`),
         "",
         "## 逐字稿",
         ...transcript.map((t) => `- ${t.who}: ${t.text}`),
@@ -169,6 +205,7 @@ describe.skipIf(!enabled)("synthetic E2E — a congress scene stays a discussion
       expect(sent).toBeGreaterThanOrEqual(4);
       expect(recall).toEqual([]);
       expect(opinion.length).toBeGreaterThanOrEqual(1);
+      expect(echoes).toEqual([]);
     },
     MAX_SESSION_MS + 120_000,
   );

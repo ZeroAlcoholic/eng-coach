@@ -180,13 +180,22 @@ const SCAFFOLD: Record<TargetLanguage, Record<CEFRLevel, string>> = {
 const JA_TEACH_LINE =
   "say it slowly once, then once more chunked mora by mora (o-ne-ga-i-shi-ma-su), give the 繁中 meaning, then have them say it";
 
+// In an English discussion the target phrases are what the LEARNER would say
+// (their project, their gaps); spoken by the counterpart they turn the scene
+// inside out, so the coach hands them over as suggestions instead. Japanese
+// keeps the weave-in: its lines are greetings both sides say, and the
+// Japanese track teaches every line aloud before eliciting it.
+function learnerLines(phrases: string[]): string {
+  return `Useful lines for the LEARNER to say (they are the learner's lines, not yours — never say them as your own): ${phrases.join("; ")}. When the learner needs one, offer it as a suggestion — "You could say: …" — then let them say it.`;
+}
+
 const DIG_DEEPER =
   "- When they answer, DIG DEEPER before moving on: ask why, ask for an example, ask what they would do if…, push back gently on their view. A short answer is an invitation to follow up, not to change topic.";
 // A discussion scene is a chat between peers about material the learner did not
 // write word by word: digging and pushing back turn it into a cross-examination,
 // and asking for the material's facts turns it into a recall test.
 const DISCUSSION_FOLLOW_UP =
-  "- When they answer, react to what they said with your own view or experience, then ask about THEIR opinion or experience. Never ask them to recall facts, figures or details from the situation: if they hesitate on one, supply it yourself and move on, and accept rough answers. Disagree at most once in the whole conversation, gently, to invite their view.";
+  "- When they answer, react to what they said with your own view or experience, then ask about THEIR opinion or experience. Never ask them to recall facts, figures or details from the situation, and never ask for a figure about the talk or the learner's work (how many, what percentage): if they hesitate on a detail, supply it yourself and move on, and accept rough answers. Disagree at most once in the whole conversation, gently, to invite their view.";
 
 /**
  * The coach owns the agenda. English (work, B1+): a real discussion — new
@@ -365,7 +374,7 @@ export function composeSystemInstruction(
     );
   }
   if (s.targetPhrases.length) {
-    lines.push("", `Weave in these expressions when they fit: ${s.targetPhrases.join("; ")}.`);
+    lines.push("", s.mode === "discussion" && s.targetLanguage === "en" ? learnerLines(s.targetPhrases) : `Weave in these expressions when they fit: ${s.targetPhrases.join("; ")}.`);
   }
   // Item text is LLM-extracted, not user-reviewed prose — flatten whitespace
   // and cap length so a stray newline/oversized entry can't break the
@@ -407,7 +416,7 @@ export function composeSystemInstruction(
     lines.push(
       "",
       `── This scenario has already been practised ${priorPlays} time${priorPlays > 1 ? "s" : ""} — run a FRESH variation ──`,
-      "Do NOT resume, recap or refer back to any previous conversation (you cannot see it). Keep the same frame, roles and objectives, but change ONE concrete thing so there is new material to talk about: a new complication, a different request from your side, a changed number or deadline, a new person joining, or a different outcome you want. Say in your planning sentence what is different this time, then run it as if it were the first time.",
+      `Do NOT resume, recap or refer back to any previous conversation (you cannot see it). Keep the same frame, roles and objectives, but change ONE concrete thing so there is new material to talk about: ${s.mode === "discussion" ? "a new angle on the topic, a different experience from your side, a new person joining, or a different question you are curious about" : "a new complication, a different request from your side, a changed number or deadline, a new person joining, or a different outcome you want"}. Say in your planning sentence what is different this time, then run it as if it were the first time.`,
     );
   }
   // E2 — the sounds the coach itself named last time. Continuity only: listen

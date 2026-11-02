@@ -557,6 +557,30 @@ describe("composeSystemInstruction — discussion mode swaps how the coach follo
     expect(discussion).not.toContain("object to or resolve");
     expect(discussion).toContain("Never ask them to recall facts, figures or details");
     expect(discussion).toContain("supply it yourself");
+    expect(discussion).toContain("never ask for a figure about the talk or the learner's work");
+    expect(meeting).not.toContain("never ask for a figure about the talk");
+  });
+
+  it("a meeting weaves the target phrases in; a discussion hands them over as the learner's lines", () => {
+    const withPhrases = { ...scenario, targetPhrases: ["I don't remember the exact details."] };
+    const m = composeSystemInstruction(withPhrases, DEFAULT_PROFILE);
+    const d = composeSystemInstruction({ ...withPhrases, mode: "discussion" }, DEFAULT_PROFILE);
+    expect(m).toContain("Weave in these expressions when they fit: I don't remember the exact details.");
+    expect(m).not.toContain("never say them as your own");
+    expect(d).not.toContain("Weave in these expressions");
+    expect(d).toContain("they are the learner's lines, not yours — never say them as your own): I don't remember the exact details.");
+    expect(d).toContain("You could say:");
+    const ja = { ...withPhrases, targetLanguage: "ja" as const, level: "A2" as const, targetPhrases: ["はじめまして。"], mode: "discussion" as const };
+    const j = composeSystemInstruction(ja, DEFAULT_PROFILE);
+    expect(j).toContain("Weave in these expressions when they fit: はじめまして。");
+    expect(j).not.toContain("never say them as your own");
+  });
+
+  it("a replayed discussion varies the angle, never a number; a replayed meeting may change one", () => {
+    const replay = (mode?: "discussion") => composeSystemInstruction({ ...scenario, mode }, DEFAULT_PROFILE, [], [], undefined, 2);
+    expect(replay()).toContain("a changed number or deadline");
+    expect(replay("discussion")).not.toContain("a changed number");
+    expect(replay("discussion")).toContain("a new angle on the topic");
   });
 
   it("the Japanese track keeps its own easy follow-ups either way", () => {
