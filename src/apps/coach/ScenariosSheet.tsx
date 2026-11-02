@@ -15,6 +15,7 @@ import type {
 import { ArcNextButton } from "./ArcNextButton";
 import type { DemoArc } from "./arcs";
 import { FileButton, LangSelect, LevelSelect } from "./formControls";
+import { isDiscussion, withDiscussion } from "./scenarioMode";
 import { Sheet } from "./Sheet";
 
 export interface ScenariosSheetProps {
@@ -263,6 +264,7 @@ function ScenarioCard(props: {
       <div className="scenario-title">{sc.title}</div>
       <div className="row" style={{ marginBottom: 8 }}>
         <span className="pill pill--neutral">CEFR {sc.level}</span>
+        {isDiscussion(sc) && <span className="pill pill--neutral">討論</span>}
       </div>
       <p className="scenario-ctx">{sc.contentContext}</p>
       {sc.progressNote && (
@@ -355,6 +357,18 @@ function ScenarioEditor(props: {
           />
         </div>
       </div>
+      {/* Discussion mode changes the English coach's follow-ups; the Japanese
+      track already follows up with easy choices only, so it offers no toggle. */}
+      {s.targetLanguage === "en" && (
+        <label className="row" style={{ marginBottom: 10, gap: 8, alignItems: "center" }}>
+          <input
+            type="checkbox"
+            checked={isDiscussion(s)}
+            onChange={(e) => props.onChange(withDiscussion(s, e.target.checked))}
+          />
+          <span className="muted">討論模式 — 對方分享看法、不追問細節，也不考你記得的內容</span>
+        </label>
+      )}
       <label className="label" htmlFor={`${f}-base`}>
         第一層 — 教練框架
       </label>

@@ -38,7 +38,9 @@ export const EN_CONGRESS_FRAME =
   "Run a relaxed, realistic conversation at an international actuarial congress. " +
   "Play the other person in the situation, as a peer: share your own views and " +
   "experience, and let the conversation follow what the learner says within the " +
-  "situation. Keep the register professional but warm. Also, " +
+  "situation. Stay in your own role: never speak as the learner's character, and " +
+  "never answer your own question for them unless they ask for help. Keep the " +
+  "register professional but warm. Also, " +
   EN_CLOSING_CHECK;
 
 // A congress reception is not travel, so a Japanese scene set there gets its

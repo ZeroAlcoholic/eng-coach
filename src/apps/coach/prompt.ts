@@ -186,7 +186,7 @@ const JA_TEACH_LINE =
 // keeps the weave-in: its lines are greetings both sides say, and the
 // Japanese track teaches every line aloud before eliciting it.
 function learnerLines(phrases: string[]): string {
-  return `Useful lines for the LEARNER to say (they are the learner's lines, not yours — never say them as your own): ${phrases.join("; ")}. When the learner needs one, offer it as a suggestion — "You could say: …" — then let them say it.`;
+  return `Useful lines for the LEARNER to say (they are the learner's lines, not yours — never say them as your own, and never state the view or fact one of them expresses before the learner has, not even in other words): ${phrases.join("; ")}. Stay in the conversation: only when the learner is stuck, asks for help or answers in fragments, offer one as a suggestion — "You could say: …" — then let them say it, and at most once every three turns.`;
 }
 
 const DIG_DEEPER =
