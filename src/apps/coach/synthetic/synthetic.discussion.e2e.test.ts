@@ -23,6 +23,7 @@ import { ICA2026_SCENARIOS } from "../defaultsIca2026";
 import { OPENING_CUE, sessionInstruction, silenceNudges } from "../prompt";
 import { defaultSessionDeps, PracticeSession } from "../session";
 import { describeEstimate, diskStore, ensureLines, geminiTts, keyOf } from "./synthLines";
+import { parroted } from "./echo";
 import { strayScript } from "./strayScript";
 import { SyntheticLearnerAudio } from "./SyntheticLearnerAudio";
 
@@ -108,36 +109,6 @@ const RECALL =
 const OPINION =
   /\b(what do you think|what's your (?:view|take|opinion)|your (?:\w+ )?(?:views?|opinion|experience|thoughts|concerns?|take)|what are your|how do you feel|in your experience|do you think|how about (?:you|in taiwan)|what about you|how (?:does|do) your (?:company|team|side|clients|customers|colleagues)|how do you (?:handle|approach|see|manage|ensure)|do you (?:have|use) [^?]*\byour|what do you (?:usually|like to) do|do you (?:usually|like|enjoy|prefer)|what kind of [^?]*\byou\b|would you say)\b|你覺得|你認為|你的看法|看法嗎/i;
 
-// The coach saying one of the learner's target STATEMENTS as its own: the turn
-// contains it but neither hands it over (a suggestion, a repeat request, the
-// closing review) nor recasts what the learner has just said — a recast is the
-// B1 correction the prompt asks for. Question phrases are left out — "How does
-// your company handle this?" fits either side's mouth; a statement about the
-// learner's own work or gaps fits only theirs.
-const SUGGESTS =
-  /\b(?:you (?:could|can|might)(?: \w+)? (?:say|try)|try saying|could you try|repeat|say (?:it|that) (?:again|back)|quick check|review that line)\b/i;
-// The learner just said (most of) this phrase: the coach echoing it is a recast.
-function justSaid(phrase: string, previousUser: string): boolean {
-  const want = norm(phrase).split(" ");
-  const heard = new Set(norm(previousUser).split(" "));
-  return want.filter((w) => heard.has(w)).length / want.length >= 0.6;
-}
-// Live transcripts use curly apostrophes and dashes; compare letters only.
-const norm = (t: string) =>
-  t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim();
-// Judged per sentence, so one suggestion does not excuse a line parroted
-// elsewhere in the same turn.
-function parroted(turn: string, phrases: string[], previousUser = ""): string[] {
-  const said = turn
-    .split(/(?<=[.!?。！？])\s+/)
-    .filter((sentence) => !SUGGESTS.test(sentence))
-    .map(norm)
-    .join(" | ");
-  return phrases.filter(
-    (p) => !/[?？]\s*$/.test(p) && norm(p).length > 0 && said.includes(norm(p)) && !justSaid(p, previousUser),
-  );
-}
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function waitFor(pred: () => boolean, ms: number): Promise<boolean> {
   const until = Date.now() + ms;
@@ -173,24 +144,6 @@ describe("discussion-mode matchers", () => {
     expect(OPINION.test("Do you have any questions?")).toBe(false);
     expect(OPINION.test("How many tools were high risk?")).toBe(false);
     expect(RECALL.test("How do you ensure the high risk ones are properly monitored?")).toBe(false);
-  });
-
-  it("parroted catches the counterpart saying a learner line and passes a suggestion", () => {
-    const p = ["I don't remember the exact details, but I can check and get back to you."];
-    expect(parroted("Sure. I don't remember the exact details, but I can check and get back to you.", p)).toEqual(p);
-    expect(parroted("Sure. I don’t remember the exact details — but I can check and get back to you!", p)).toEqual(p);
-    expect(parroted(`You could say: "I don't remember the exact details, but I can check and get back to you."`, p)).toEqual([]);
-    expect(parroted("We review every tool once a year.", p)).toEqual([]);
-    expect(parroted("You could charmingly say: I don't remember the exact details, but I can check and get back to you.", p)).toEqual([]);
-    const two = ["Most of our tools are low risk.", "I don't remember the exact details."];
-    expect(parroted("You could say: Most of our tools are low risk. And honestly, I don't remember the exact details.", two)).toEqual([two[1]]);
-    expect(parroted("Interesting. How does your company handle this?", ["How does your company handle this?"])).toEqual([]);
-    // A recast of what the learner has just said passes; the same line before they said it does not.
-    const line = ["Before, agents spent a lot of time looking for materials."];
-    const learner = "Before agents spent a lot of time looking for materials.";
-    expect(parroted("Right, before, agents spent a lot of time looking for materials. And now?", line, learner)).toEqual([]);
-    expect(parroted("Right, before, agents spent a lot of time looking for materials. And now?", line, "Sure, happy to.")).toEqual(line);
-    expect(parroted(`Let's have you repeat that one line: "${line[0]}"`, line)).toEqual([]);
   });
 
   it("every script names a shipped discussion scene and fits the line cap", () => {

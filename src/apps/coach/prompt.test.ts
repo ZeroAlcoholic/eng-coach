@@ -569,6 +569,8 @@ describe("composeSystemInstruction — discussion mode swaps how the coach follo
     expect(m).not.toContain("never say them as your own");
     expect(d).not.toContain("Weave in these expressions");
     expect(d).toContain("never state the view or fact one of them expresses before the learner has, not even in other words): I don't remember the exact details.");
+    expect(d).toContain("take a different angle from these lines");
+    expect(m).not.toContain("take a different angle from these lines");
     expect(d).toContain("You could say:");
     expect(d).toContain("at most once every three turns");
     const ja = { ...withPhrases, targetLanguage: "ja" as const, level: "A2" as const, targetPhrases: ["はじめまして。"], mode: "discussion" as const };
