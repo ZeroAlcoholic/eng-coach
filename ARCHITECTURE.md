@@ -259,8 +259,10 @@ settles. Home's「下一集」joins the same in-flight generation. A recovery re
 sees the episode's `completedAt` and does not record the can-dos twice.
 
 ### Home and the recap (Phase U)
-Home shows one main action (`homePrimary.ts`: key → next episode → replay →
-new random scene) under the readout strip; own scenarios, samples, other story
+Home shows one main action (`homePrimary.ts`: key → recover the unsaved
+session → next episode → replay → new random scene). The stat chips and the
+readout strip ride in the sticky header, like ⚙️; without a key a draft waits,
+stored. Own scenarios, samples, other story
 lines and the new-scenario form live in `ScenariosSheet`, with form state kept
 in Home. Practice starts by itself only on a granted microphone outside Apple
 touch devices (`autoStart.ts`). The recap (`Recap.tsx`) shows the self-check,
