@@ -7,3 +7,5 @@ dist/
 .synthetic-cache/
 *.log
 .tmp/
+# the owner's working papers dropped into the tree; never committed
+docs/task/
