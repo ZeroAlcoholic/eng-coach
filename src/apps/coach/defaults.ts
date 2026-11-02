@@ -5,6 +5,7 @@
 // "範例情境" list (no duplicate).
 
 import { FRAME_PRESETS } from "./frames";
+import { ICA2026_SCENARIOS } from "./defaultsIca2026";
 import type { Scenario, TargetLanguage } from "../../kernel/types";
 
 export const DEFAULT_SCENARIOS: Record<TargetLanguage, Scenario[]> = {
@@ -271,6 +272,7 @@ export const DEFAULT_SCENARIOS: Record<TargetLanguage, Scenario[]> = {
         "It's been a great evening — see you at the office at nine?",
       ],
     },
+    ...ICA2026_SCENARIOS.en,
   ],
   ja: [
     {
@@ -649,5 +651,6 @@ export const DEFAULT_SCENARIOS: Record<TargetLanguage, Scenario[]> = {
         "ありがとうございます。",
       ],
     },
+    ...ICA2026_SCENARIOS.ja,
   ],
 };

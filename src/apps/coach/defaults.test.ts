@@ -31,6 +31,16 @@ const SHIPPED_IDS = [
   "def-ja-lost-item",
   "def-ja-clinic",
   "def-ja-shinkansen",
+  "def-en-ica-governance-qa",
+  "def-en-ica-iaj-docai",
+  "def-en-ica-iaj-education",
+  "def-en-ica-ssr-backtest",
+  "def-en-ica-fraud-ethics",
+  "def-en-ica-policyqa-regulator",
+  "def-en-ica-press-interview",
+  "def-en-ica-llm-qa-advice",
+  "def-en-ica-session-chair",
+  "def-ja-ica-meishi",
 ];
 
 // A named person leads the role — English track "First Last，…", Japanese

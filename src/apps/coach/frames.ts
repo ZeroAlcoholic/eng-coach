@@ -4,6 +4,10 @@
 
 import type { TargetLanguage } from "../../kernel/types";
 
+const JA_ENDING =
+  "シナリオの目標フレーズを自分のセリフにも自然に織り込んで聞かせ、" +
+  "最後に学習者がそのタスクを一人でできるかを軽く確認してください。";
+
 export const FRAME_PRESETS: Record<TargetLanguage, string> = {
   en:
     "Run a realistic English workplace/meeting role-play. Play the other party " +
@@ -16,6 +20,13 @@ export const FRAME_PRESETS: Record<TargetLanguage, string> = {
     "旅行で役立つ日本語会話の練習相手になってください。旅行者が出会う現地の人" +
     "（店員・駅員・宿のスタッフ・道で尋ねる相手など）を演じ、実際の旅行で起こる" +
     "やりとりを自然に練習させてください。丁寧で分かりやすい話し方を心がけます。" +
-    "シナリオの目標フレーズを自分のセリフにも自然に織り込んで聞かせ、" +
-    "最後に学習者がそのタスクを一人でできるかを軽く確認してください。",
+    JA_ENDING,
 };
+
+// A congress reception is not travel, so the one Japanese scene set there gets
+// its own opening; the ending is shared so both frames keep one closing rule.
+export const JA_CONGRESS_FRAME =
+  "国際会議の懇親会で、日本人の参加者を演じてください。相手は日本語を勉強中の" +
+  "海外からの参加者です。丁寧語（です・ます）で、ゆっくり分かりやすく話し、" +
+  "名刺交換や簡単な自己紹介などのやりとりを自然に練習させてください。" +
+  JA_ENDING;
