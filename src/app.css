@@ -137,6 +137,17 @@ body {
   background: linear-gradient(180deg, var(--bg) 60%, #08120d00);
   border-bottom: 1px solid var(--border);
 }
+/* Full-width lines under the header row (Home's readouts). Solid background:
+   the gradient's clear lower part would let scrolled cards show through them. */
+.topbar--wrap {
+  flex-wrap: wrap;
+  background: var(--bg);
+}
+/* .topbar scope: .statbar's own margin is declared later and would win. */
+.topbar .topbar-row {
+  flex-basis: 100%;
+  margin: 0 2px;
+}
 .row {
   display: flex;
   flex-wrap: wrap;

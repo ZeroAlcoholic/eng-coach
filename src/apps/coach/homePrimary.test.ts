@@ -9,18 +9,22 @@ import { primaryAction } from "./homePrimary";
 import { ScenariosSheet, type ScenariosSheetProps } from "./ScenariosSheet";
 
 describe("primaryAction — Home's one main button (U1)", () => {
+  const all = { hasKey: true, hasDraft: true, hasArc: true, hasLastPracticed: true };
   it("no key → the key card, whatever else exists", () => {
-    expect(primaryAction({ hasKey: false, hasArc: true, hasLastPracticed: true })).toBe("key");
-    expect(primaryAction({ hasKey: false, hasArc: false, hasLastPracticed: false })).toBe("key");
+    expect(primaryAction({ ...all, hasKey: false })).toBe("key");
+    expect(primaryAction({ hasKey: false, hasDraft: false, hasArc: false, hasLastPracticed: false })).toBe("key");
+  });
+  it("an unsaved session → recover it, ahead of a story line", () => {
+    expect(primaryAction(all)).toBe("draft");
   });
   it("an unfinished story line → next episode, ahead of a replay", () => {
-    expect(primaryAction({ hasKey: true, hasArc: true, hasLastPracticed: true })).toBe("arc");
+    expect(primaryAction({ ...all, hasDraft: false })).toBe("arc");
   });
   it("no story line, something practised → 再練一次", () => {
-    expect(primaryAction({ hasKey: true, hasArc: false, hasLastPracticed: true })).toBe("replay");
+    expect(primaryAction({ ...all, hasDraft: false, hasArc: false })).toBe("replay");
   });
   it("nothing yet → 換個新劇情", () => {
-    expect(primaryAction({ hasKey: true, hasArc: false, hasLastPracticed: false })).toBe("new");
+    expect(primaryAction({ hasKey: true, hasDraft: false, hasArc: false, hasLastPracticed: false })).toBe("new");
   });
 });
 

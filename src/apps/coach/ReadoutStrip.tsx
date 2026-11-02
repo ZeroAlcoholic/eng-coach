@@ -29,7 +29,7 @@ export function ReadoutStrip(props: { readouts: Readouts; onOpen: (ids: string[]
   if (r.unaidedCanDo.value === null && r.chunkUse.value === null && r.focusResolution.value === null) return null;
   const f = r.focusResolution;
   return (
-    <div className="statbar" style={{ marginTop: 8 }}>
+    <div className="statbar topbar-row">
       <ReadoutLine label="無提示做到" readout={r.unaidedCanDo} onOpen={props.onOpen} />
       <ReadoutLine label="教過的用出來" readout={r.chunkUse} onOpen={props.onOpen} />
       <ReadoutLine label="焦點沒再犯" readout={f} onOpen={props.onOpen} />

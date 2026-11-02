@@ -1,6 +1,6 @@
 // 首頁（介面繁中；教學內容為英 / 日）。一眼一個主行動（U1）：
-//   讀數條 → 主按鈕（homePrimary.ts：金鑰 → 下一集 → 再練一次 → 換個新劇情）
-//   → 換個新劇情（主按鈕不是它時）→ 恢復卡（有草稿時）→「情境與新增」
+//   頂列（語言、⚙️、讀數條）→ 主按鈕（homePrimary.ts：金鑰 → 恢復草稿 → 下一集
+//   → 再練一次 → 換個新劇情）→ 換個新劇情（主按鈕是下一集或再練一次時）→「情境與新增」
 //   你的情境、範例、新增情境都在 ScenariosSheet；設定與資料在 ⚙️。
 
 import { useId, useState } from "react";
@@ -127,7 +127,7 @@ export function Home(props: {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const [primaryArc, ...otherArcs] = liveArcs;
   const samples = DEFAULT_SCENARIOS[lang].filter((d) => !scenarios.some((s) => s.id === d.id));
-  const primary = primaryAction({ hasKey: !!apiKey, hasArc: !!primaryArc, hasLastPracticed: !!props.lastPracticed });
+  const primary = primaryAction({ hasKey: !!apiKey, hasDraft: !!draft, hasArc: !!primaryArc, hasLastPracticed: !!props.lastPracticed });
   // S4 — built-in demo arcs, minus any already installed (stable ids).
   const demoArcs = DEFAULT_ARCS[lang].filter((d) => !arcs.some((a) => a.id === d.id));
   const lvl = levelSummary(profile, lang); // W6
@@ -381,7 +381,8 @@ export function Home(props: {
 
   // Crash recovery — a draft means a live session never reached「停止並儲存」
   // (the tab was killed or the page reloaded). Same finalize pipeline as a
-  // normal stop; without a key or scenario we still keep the raw transcript.
+  // normal stop. The scenario was deleted → keep the raw transcript. No key →
+  // Home shows the key card instead of this one, so the draft waits, stored.
   async function recoverDraft() {
     if (!draft || recovering) return;
     setRecovering(true);
@@ -457,7 +458,7 @@ export function Home(props: {
 
   return (
     <main className="app">
-      <div className="topbar">
+      <div className="topbar topbar--wrap">
         <h1 style={{ fontSize: 18 }}>🎙️ 口說教練</h1>
         <span className="grow" />
         <div className="seg" role="group" aria-label="教學語言">
@@ -484,48 +485,52 @@ export function Home(props: {
         >
           ⚙️
         </button>
+
+        {/* W6 — glanceable progress strip (only once there's something to show).
+            U1: it is navigation to records, like ⚙️, so it rides in the header
+            and never competes with the one main button below.
+            Band + practice count are per-language; the vocab library is shared.
+            The chips are tappable: 練習 → past recaps, 詞庫 → browse, 複習 → W7. */}
+        {(lvl || sessionCount > 0) && (
+          <div className="statbar topbar-row">
+            {lvl && (
+              <span>
+                {LANG_LABEL[lang]} <b>{lvl.band}</b> {TREND[lvl.trend]}
+              </span>
+            )}
+            <button type="button" className="statbtn" onClick={() => setSheet("history")}>
+              練習 {lvl ? lvl.sessions : sessionCount} 次
+            </button>
+            <button type="button" className="statbtn" onClick={() => setSheet("vocab")}>
+              詞庫 {items.length}
+            </button>
+            {due > 0 && (
+              <button type="button" className="statbtn statbtn--due" onClick={() => setSheet("review")}>
+                複習 {due > 20 ? "20+" : due}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Progress readouts — three ratios with a trend mark, each tappable to the
+            sessions it came from. Zero API; null when there is nothing to count. */}
+        <ReadoutStrip
+          readouts={readouts}
+          onOpen={(ids) => {
+            setHistoryFocus(ids);
+            setSheet("history");
+          }}
+        />
       </div>
 
       {props.loadFailed && (
         <p className="notice">⚠ 資料載入失敗 — 下方顯示的可能不是你的完整資料，請重新整理。</p>
       )}
 
-      {/* W6 — glanceable progress strip (only once there's something to show).
-          Band + practice count are per-language; the vocab library is shared.
-          The chips are tappable: 練習 → past recaps, 詞庫 → browse, 複習 → W7. */}
-      {(lvl || sessionCount > 0) && (
-        <div className="statbar">
-          {lvl && (
-            <span>
-              {LANG_LABEL[lang]} <b>{lvl.band}</b> {TREND[lvl.trend]}
-            </span>
-          )}
-          <button type="button" className="statbtn" onClick={() => setSheet("history")}>
-            練習 {lvl ? lvl.sessions : sessionCount} 次
-          </button>
-          <button type="button" className="statbtn" onClick={() => setSheet("vocab")}>
-            詞庫 {items.length}
-          </button>
-          {due > 0 && (
-            <button type="button" className="statbtn statbtn--due" onClick={() => setSheet("review")}>
-              複習 {due > 20 ? "20+" : due}
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Progress readouts — three ratios with a trend mark, each tappable to the
-          sessions it came from. Zero API; null when there is nothing to count. */}
-      <ReadoutStrip
-        readouts={readouts}
-        onOpen={(ids) => {
-          setHistoryFocus(ids);
-          setSheet("history");
-        }}
-      />
-
-      {/* Crash recovery — a session that never reached「停止並儲存」 */}
-      {draft && (
+      {/* Crash recovery — a session that never reached「停止並儲存」. It is the
+          main action while it exists (homePrimary.ts); without a key it waits,
+          stored, so its review can still be written once the key is in. */}
+      {primary === "draft" && draft && (
         <div className="card" style={{ marginTop: 16, borderColor: "var(--warn)" }}>
           <b>上次練習未儲存</b>
           <p className="muted" style={{ margin: "6px 0 10px" }}>
@@ -595,7 +600,7 @@ export function Home(props: {
       {/* 換個新劇情 — a new story is one tap, as cheap as continuing the old one.
           The main action when there is nothing to continue; otherwise the one
           secondary choice. The story-line variant lives in the sheet. */}
-      {primary !== "key" && (
+      {primary !== "key" && primary !== "draft" && (
         <div className="card" style={{ marginTop: 16 }}>
           <div className="scenario-title">🎲 換個新劇情</div>
           <p className="muted" style={{ margin: "6px 0 10px" }}>
